@@ -11,7 +11,7 @@ import type { TripComposition } from "./renderTypes";
 import { displayTitle } from "./titleCase";
 
 export const PAGE_WIDTH_PT = 540;
-export const PAGE_HEIGHT_PT = 960;
+export const PAGE_HEIGHT_PT = 675;
 
 /** Group label used for trips that no group lists (never dropped from the book). */
 export const UNGROUPED_LABEL = "Бусад аялал";
@@ -236,8 +236,8 @@ export type GuideEntry = {
 const GUIDE_ROW_MIN_PT = 72;
 const GUIDE_ROW_MAX_PT = 104;
 const GUIDE_ROW_MULTI_PT = 84;
-const GUIDE_FIRST_BUDGET_PT = 690;
-const GUIDE_NEXT_BUDGET_PT = 800;
+const GUIDE_FIRST_BUDGET_PT = 405;
+const GUIDE_NEXT_BUDGET_PT = 515;
 
 /** How many chapter blocks go on each guide page and how tall a block is: one page whenever it can be. */
 export function planGuide(chapterCount: number): { perPage: number[]; rowHeightPt: number } {
@@ -291,8 +291,8 @@ const SCHED_LINE_PT = 12.5;
 const SCHED_LINE_CHARS = 36;
 const SCHED_HEAD_CHARS = 26;
 const SCHED_HEAD_LINE_PT = 13.5;
-const SCHED_FIRST_BUDGET_PT = 700;
-const SCHED_NEXT_BUDGET_PT = 770;
+const SCHED_FIRST_BUDGET_PT = 415;
+const SCHED_NEXT_BUDGET_PT = 485;
 
 /** Rough printed height of one schedule block (header + month lines + gap), used only for pagination. */
 export function scheduleBlockHeightPt(title: string, lines: MonthLine[]): number {
@@ -349,8 +349,8 @@ function paginateSchedule(blocks: SchedBlock[]): SchedPage[] {
 const INDEX_ROW_PT = 21;
 const INDEX_EXTRA_LINE_PT = 14;
 const INDEX_TITLE_CHARS = 44;
-const INDEX_FIRST_BUDGET_PT = 650;
-const INDEX_NEXT_BUDGET_PT = 790;
+const INDEX_FIRST_BUDGET_PT = 345;
+const INDEX_NEXT_BUDGET_PT = 470;
 
 export function indexRowHeightPt(card: CatalogueTripCard): number {
   return INDEX_ROW_PT + (estimateLines(displayTitle(cardTitle(card)), INDEX_TITLE_CHARS) - 1) * INDEX_EXTRA_LINE_PT;

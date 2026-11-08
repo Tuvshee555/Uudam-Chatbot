@@ -44,7 +44,7 @@ export function fontFaceCss(fonts: RenderFontFace[]): string {
 
 export function buildCss(fonts: RenderFontFace[]): string {
   return `${fontFaceCss(fonts)}
-@page{size:540pt 960pt;margin:0}
+@page{size:540pt 675pt;margin:0}
 :root{--paper:${COLORS.paper};--paper-deep:${COLORS.paperDeep};--sand:${COLORS.sand};--ink:${COLORS.ink};--ink-deep:${COLORS.inkDeep};--ink-2:${COLORS.ink2};--ink-3:${COLORS.ink3};--teal:${COLORS.teal};--gold:${COLORS.gold};--rule:${COLORS.rule};--on:${COLORS.onDark};--on-2:${COLORS.onDark2};--on-3:${COLORS.onDark3};--m:40pt}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--paper);color:var(--ink);-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -55,7 +55,7 @@ h1,h2,h3{font-family:'${SERIF}','Noto Serif',Georgia,serif;font-weight:300;font-
 ul{list-style:none}
 ${transportCss()}
 
-.page{position:relative;width:540pt;height:960pt;overflow:hidden;background:var(--paper);break-after:page;page-break-after:always}
+.page{position:relative;width:540pt;height:675pt;overflow:hidden;background:var(--paper);break-after:page;page-break-after:always}
 .page:last-of-type{break-after:auto;page-break-after:auto}
 .page > img.bg,.page .bg{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover}
 .dark{background:var(--ink);color:var(--on)}
@@ -68,7 +68,7 @@ ${transportCss()}
 .logo{position:absolute;left:0;top:0;z-index:3}
 .logo img{display:block;width:100%;height:100%}
 .logo.cover{width:112pt;height:112pt}
-.logo.closing{width:100pt;height:100pt}
+.logo.closing{width:80pt;height:80pt}
 .logo.guide{width:64pt;height:64pt}
 .foot{position:absolute;left:var(--m);right:var(--m);bottom:26pt;min-height:14pt;display:flex;align-items:flex-end;justify-content:space-between;gap:16pt;font-size:8.5pt;line-height:1.2;letter-spacing:0.1em;color:var(--ink-3)}
 .foot a.back{font-weight:500;text-transform:uppercase;letter-spacing:0.16em;color:var(--teal)}
@@ -81,7 +81,7 @@ ${transportCss()}
 
 /* cover -------------------------------------------------------------------------------------- */
 .coverplate .panelbg{position:absolute;left:0;right:0;bottom:0;background:var(--ink)}
-.cover .photo{position:absolute;left:0;top:0;width:100%;height:700pt;overflow:hidden}
+.cover .photo{position:absolute;left:0;top:0;width:100%;height:400pt;overflow:hidden}
 .cover .photo img{width:100%;height:100%;object-fit:cover}
 .cover .block{position:absolute;left:var(--m);right:var(--m);bottom:58pt;color:var(--on)}
 .cover .eyebrow{font-weight:500;font-size:10.5pt;letter-spacing:0.2em;text-transform:uppercase;color:var(--on-2)}
@@ -210,9 +210,10 @@ ${transportCss()}
    A near-square photo at the top; the dark panel rises over its lower edge in a soft fade, so the
    headline sits on the picture like a cinema page without making the photo a tall strip. */
 .plate{display:flex;flex-direction:column}
-.plate .photo{position:relative;flex:0 1 500pt;min-height:340pt;background:var(--sand)}
+.plate.dark{background:var(--panel,var(--ink))}
+.plate .photo{position:relative;flex:0 1 360pt;min-height:170pt;background:var(--sand)}
 .plate .photo img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover}
-.plate .text{position:relative;z-index:2;flex:1 0 auto;margin-top:-96pt;padding:96pt var(--m) 62pt;display:flex;flex-direction:column;background:linear-gradient(to bottom,color-mix(in srgb,var(--ink) 0%,transparent) 0,color-mix(in srgb,var(--ink) 78%,transparent) 44pt,var(--ink) 96pt)}
+.plate .text{position:relative;z-index:2;flex:1 0 auto;margin-top:-70pt;padding:70pt var(--m) 54pt;display:flex;flex-direction:column;background:linear-gradient(to bottom,color-mix(in srgb,var(--panel,var(--ink)) 0%,transparent) 0,color-mix(in srgb,var(--panel,var(--ink)) 70%,transparent) 30pt,var(--panel,var(--ink)) 70pt)}
 .plate h2.headline{margin-top:10pt}
 .plate .meta{margin-top:11pt}
 .plate .lede{margin-top:13pt}
@@ -261,34 +262,34 @@ ${transportCss()}
 .type .notes{margin-top:8pt;max-width:440pt}
 
 /* closing ------------------------------------------------------------------------------------ */
-.closing .band{position:absolute;left:0;top:0;width:100%;height:230pt;overflow:hidden;background:var(--ink)}
+.closing .band{position:absolute;left:0;top:0;width:100%;height:80pt;overflow:hidden;background:var(--ink)}
 .closing .band img{width:100%;height:100%;object-fit:cover}
 .closing .band.plain{background:var(--ink)}
-.closing .band.plain .bk{position:absolute;left:124pt;top:40pt;font-weight:500;font-size:10.5pt;letter-spacing:0.2em;text-transform:uppercase;color:var(--on-2)}
+.closing .band.plain .bk{position:absolute;left:124pt;top:32pt;font-weight:500;font-size:10.5pt;letter-spacing:0.2em;text-transform:uppercase;color:var(--on-2)}
 .closing .band.plain::after{content:"";position:absolute;left:var(--m);right:var(--m);bottom:0;border-top:1pt solid var(--gold)}
-.closing .body{position:absolute;left:var(--m);right:var(--m);top:270pt;bottom:62pt;display:flex;flex-direction:column}
-.closing.compact .band{height:176pt}
-.closing.compact .body{top:212pt}
+.closing .body{position:absolute;left:var(--m);right:var(--m);top:100pt;bottom:50pt;display:flex;flex-direction:column}
+.closing.compact .band{height:80pt}
+.closing.compact .body{top:100pt}
 .closing.compact .step{padding:6pt 0}
 .closing.compact .reply{margin-top:14pt}
-.closing .corp{margin-top:16pt;padding-top:12pt;border-top:0.6pt solid var(--rule)}
+.closing .corp{margin-top:12pt;padding-top:9pt;border-top:0.6pt solid var(--rule)}
 .closing .corp li{position:relative;padding-left:14pt;margin-top:5pt;font-size:12.5pt;line-height:1.45;color:var(--ink-2);text-wrap:pretty}
 .closing .corp li::before{content:"";position:absolute;left:0;top:0.62em;width:7pt;border-top:1pt solid var(--teal)}
-.closing h2{margin-top:10pt;font-size:40pt;line-height:1.08;color:var(--ink)}
-.closing .intro{margin-top:12pt;font-size:13.5pt;line-height:1.55;color:var(--ink-2);max-width:440pt;text-wrap:pretty}
-.closing .steps{margin-top:18pt;border-top:0.6pt solid var(--rule)}
-.closing .step{display:flex;align-items:baseline;gap:18pt;padding:8pt 0;border-bottom:0.6pt solid var(--rule)}
-.closing .step .n{flex:none;width:34pt;font-family:'${SERIF}',serif;font-weight:300;font-size:26pt;line-height:1;color:var(--teal)}
+.closing h2{margin-top:6pt;font-size:32pt;line-height:1.08;color:var(--ink)}
+.closing .intro{margin-top:8pt;font-size:12.5pt;line-height:1.45;color:var(--ink-2);max-width:440pt;text-wrap:pretty}
+.closing .steps{margin-top:12pt;display:grid;grid-template-columns:repeat(3,1fr);column-gap:16pt;border-top:0.6pt solid var(--rule);padding-top:10pt}
+.closing .step{display:block;padding:0;border:0}
+.closing .step .n{display:block;width:auto;margin-bottom:3pt;font-family:'${SERIF}',serif;font-weight:300;font-size:22pt;line-height:1;color:var(--teal)}
 .closing .step .t{font-size:14.5pt;line-height:1.35;color:var(--ink);font-weight:500}
 .closing .step .t span{display:block;margin-top:1pt;font-weight:400;font-size:12pt;color:var(--ink-3)}
-.closing .reply{margin-top:20pt;display:flex;align-items:baseline;gap:14pt}
+.closing .reply{margin-top:12pt;display:flex;align-items:baseline;gap:14pt}
 .closing .reply .rl{font-size:11.5pt;color:var(--ink-3)}
 .closing .reply .sample{font-family:'${SERIF}',serif;font-style:italic;font-weight:300;font-size:23pt;line-height:1.2;color:var(--teal)}
-.closing .contact{margin-top:auto;padding-top:20pt;display:flex;justify-content:space-between;align-items:flex-end;gap:20pt}
+.closing .contact{margin-top:auto;padding-top:12pt;display:flex;justify-content:space-between;align-items:flex-end;gap:20pt}
 .closing .phones{display:flex;flex-wrap:wrap;gap:0 26pt;margin-top:6pt}
-.closing .phones span{font-family:'${SERIF}',serif;font-weight:400;font-size:21pt;line-height:1.25;color:var(--ink);letter-spacing:0.01em;font-variant-numeric:lining-nums}
+.closing .phones span{font-family:'${SERIF}',serif;font-weight:400;font-size:19pt;line-height:1.25;color:var(--ink);letter-spacing:0.01em;font-variant-numeric:lining-nums}
 .closing .site{font-weight:500;font-size:13pt;color:var(--teal);text-align:right;padding-bottom:3pt}
-.closing .fine{margin-top:14pt;padding-top:11pt;border-top:0.6pt solid var(--rule);font-size:12pt;line-height:1.5;color:var(--ink-2);text-wrap:pretty}
+.closing .fine{margin-top:10pt;padding-top:8pt;border-top:0.6pt solid var(--rule);font-size:11pt;line-height:1.5;color:var(--ink-2);text-wrap:pretty}
 .closing .fine p + p{margin-top:4pt}
 .closing .fine .stamp{margin-top:7pt;font-size:8.5pt;line-height:1.4;color:var(--ink-3);letter-spacing:0.04em}
 `;

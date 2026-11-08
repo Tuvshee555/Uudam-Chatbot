@@ -1,5 +1,5 @@
 /**
- * Catalogue renderer: CatalogueSnapshot -> vector PDF (540 x 960 pt, one page per screen) and
+ * Catalogue renderer: CatalogueSnapshot -> vector PDF (540 x 675 pt, 4:5, one page per screen) and
  * optional per-page JPEGs. No model calls, no network except the guarded photo fetch.
  */
 import type { CatalogueSnapshot, CatalogueWarning, RenderedCatalogue } from "../types";

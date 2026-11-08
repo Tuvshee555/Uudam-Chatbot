@@ -769,18 +769,18 @@ describe("browser render", () => {
     assert.equal(available, true);
   });
 
-  test("one portrait PDF, every page 540 x 960 pt, page count matches the plan", async t => {
+  test("one portrait PDF, every page 540 x 675 pt (4:5), page count matches the plan", async t => {
     const r = need(t);
     if (!r) return;
     assert.equal(r.pdf.subarray(0, 5).toString("latin1"), "%PDF-");
     const plan = planPages(snapshot);
     assert.equal(r.pageCount, plan.totalPages);
-    assert.deepEqual(r.pageSize, { width: 540, height: 960 });
+    assert.ok(r.pageSize.width === 540 && Math.abs(r.pageSize.height - 675) < 0.5, JSON.stringify(r.pageSize));
     const pdf = await PDFDocument.load(r.pdf);
     assert.equal(pdf.getPageCount(), plan.totalPages);
     for (const page of pdf.getPages()) {
       const { width, height } = page.getSize();
-      assert.ok(Math.abs(width - 540) < 0.5 && Math.abs(height - 960) < 0.5, `${width}x${height}`);
+      assert.ok(Math.abs(width - 540) < 0.5 && Math.abs(height - 675) < 0.5, `${width}x${height}`);
     }
   });
 
@@ -825,7 +825,7 @@ describe("browser render", () => {
         smallest = Math.min(smallest, size);
         assert.ok(x >= 30, `p${i + 1} "${it.str.slice(0, 24)}" starts at x=${x.toFixed(1)}`);
         assert.ok(x + it.width <= 540 - 30, `p${i + 1} "${it.str.slice(0, 24)}" ends at x=${(x + it.width).toFixed(1)}`);
-        assert.ok(y >= 12 && y + size <= 960 - 12, `p${i + 1} "${it.str.slice(0, 24)}" y=${y.toFixed(1)}`);
+        assert.ok(y >= 12 && y + size <= 675 - 12, `p${i + 1} "${it.str.slice(0, 24)}" y=${y.toFixed(1)}`);
       }
     });
     assert.ok(smallest >= 8, `smallest glyph run ${smallest.toFixed(1)}pt`);
@@ -978,7 +978,7 @@ describe("browser render", () => {
       assert.deepEqual([img[0], img[1]], [0xff, 0xd8]);
       const meta = await sharp(img).metadata();
       assert.equal(meta.width, 810);
-      assert.equal(meta.height, 1440);
+      assert.ok(Math.abs((meta.height ?? 0) - 1012.5) <= 1, `page image height ${meta.height}`);
     }
   });
 });

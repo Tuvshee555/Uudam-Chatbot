@@ -186,7 +186,7 @@ export function renderHtml(html: string, opts: { pageImages: boolean }): Promise
   return serialised(async () => {
     const browser = await launch();
     try {
-      const context = await browser.newContext({ viewport: { width: 720, height: 1280 }, deviceScaleFactor: 1.125 });
+      const context = await browser.newContext({ viewport: { width: 720, height: 900 }, deviceScaleFactor: 1.125 });
       const page = await context.newPage();
       await preparePage(page, html);
       const audit = (await page.evaluate(FIT_AND_AUDIT)) as PageAudit;

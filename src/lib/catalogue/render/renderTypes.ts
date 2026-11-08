@@ -19,6 +19,8 @@ export type RenderImage = {
   /** Pixel width of the crop taken from the source (before any resampling), for the low-resolution check. */
   sourceCropWidth: number;
   bytes: number;
+  /** Dark tone taken from the photo's own lower edge (hex), for the page panel that continues the picture. */
+  tone?: string;
 };
 
 /**
@@ -42,6 +44,8 @@ export type TripArt = {
   second: RenderImage | null;
   /** Square crop for the contents list. null = monogram tile. */
   thumb: RenderImage | null;
+  /** The photo's own dark edge tone (hex): the panel under the photo continues it instead of a fixed navy. */
+  tone?: string;
 };
 
 export type PhotoStats = {

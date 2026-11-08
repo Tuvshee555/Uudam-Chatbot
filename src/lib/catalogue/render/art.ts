@@ -23,10 +23,10 @@ import type { CatalogueImageFetcher, RenderAssets, RenderImage, TripArt } from "
 /** Photo box shapes, height / width. The CSS in theme.ts uses the same boxes (in pt). */
 export const ASPECT = {
   /** Whole page. */
-  page: 960 / 540,
+  page: 675 / 540,
   /** Cover when the photo cannot carry a whole page: a tall photo that fades into the deep panel. */
-  coverPlate: 700 / 540,
-  plate: 500 / 540,
+  coverPlate: 400 / 540,
+  plate: 360 / 540,
   panorama: 400 / 540,
   diptych: 500 / 540,
   inset: 270 / 200,
@@ -179,6 +179,30 @@ export type CropSpec = {
   progressive?: boolean;
 };
 
+/**
+ * The photo's own colour, for the panel that continues it: the average of the lower edge, kept in
+ * its hue, with saturation tamed and lightness pulled down so light type always reads on it.
+ */
+export async function edgeTone(jpeg: Buffer, width: number, height: number): Promise<string | undefined> {
+  try {
+    const stripH = Math.max(1, Math.round(height * 0.1));
+    const px = await sharp(jpeg).extract({ left: 0, top: Math.max(0, height - stripH), width, height: stripH }).resize(1, 1).raw().toBuffer();
+    const [r, g, b] = [px[0]! / 255, px[1]! / 255, px[2]! / 255];
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = 0;
+    if (d > 0) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+    const sat = Math.min(0.42, max === 0 ? 0 : d / max);
+    const light = 0.12;
+    const c = (1 - Math.abs(2 * light - 1)) * sat, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = light - c / 2;
+    const [r1, g1, b1] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    const hex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, "0");
+    return `#${hex(r1)}${hex(g1)}${hex(b1)}`;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Crop `work` to the composition's box, resample, bake the optional scrim, encode. */
 export async function cropImage(work: Work, spec: CropSpec): Promise<RenderImage | null> {
   try {
@@ -207,6 +231,7 @@ export async function cropImage(work: Work, spec: CropSpec): Promise<RenderImage
       height: outH,
       sourceCropWidth: Math.round(rect.width),
       bytes: out.length,
+      tone: await edgeTone(out, outW, outH),
     };
   } catch {
     return null;
@@ -470,7 +495,7 @@ export async function prepareArt(
     }
     uses.push({ url: p.url, role: `trip-${card.code}` });
     if (second && g) claim(g.photo.url, `inset-${card.code}`);
-    trips[card.tripId] = { composition: composition === "diptych" && !second ? "plate" : composition, hero: heroImage, second, thumb } satisfies TripArt;
+    trips[card.tripId] = { composition: composition === "diptych" && !second ? "plate" : composition, hero: heroImage, second, thumb, tone: heroImage.tone } satisfies TripArt;
   });
 
   // 5. closing band: a calm wide crop of a gallery photograph no page has used. No such photograph
