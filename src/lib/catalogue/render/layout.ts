@@ -236,8 +236,8 @@ export type GuideEntry = {
 const GUIDE_ROW_MIN_PT = 72;
 const GUIDE_ROW_MAX_PT = 104;
 const GUIDE_ROW_MULTI_PT = 84;
-const GUIDE_FIRST_BUDGET_PT = 405;
-const GUIDE_NEXT_BUDGET_PT = 515;
+const GUIDE_FIRST_BUDGET_PT = 345;
+const GUIDE_NEXT_BUDGET_PT = 500;
 
 /** How many chapter blocks go on each guide page and how tall a block is: one page whenever it can be. */
 export function planGuide(chapterCount: number): { perPage: number[]; rowHeightPt: number } {
@@ -291,7 +291,7 @@ const SCHED_LINE_PT = 12.5;
 const SCHED_LINE_CHARS = 36;
 const SCHED_HEAD_CHARS = 26;
 const SCHED_HEAD_LINE_PT = 13.5;
-const SCHED_FIRST_BUDGET_PT = 415;
+const SCHED_FIRST_BUDGET_PT = 385;
 const SCHED_NEXT_BUDGET_PT = 485;
 
 /** Rough printed height of one schedule block (header + month lines + gap), used only for pagination. */

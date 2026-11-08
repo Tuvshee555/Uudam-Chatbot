@@ -241,7 +241,8 @@ test("trip page prints the window by month, the starting price labelled as such,
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   const sectionOf = (code: string) => html.slice(html.indexOf(`id="trip-${code}"`), html.indexOf("</section>", html.indexOf(`id="trip-${code}"`)));
   const lines = sectionOf("A07"); // four departures inside 90 days across two years
-  assert.ok(lines.includes("<span class=\"mn\">11-р сар:</span>") && lines.includes("14 · 28") && lines.includes("2027 оны 1-р сар:"), lines.slice(0, 100));
+  // dates are boxed chips everywhere (owner, launch week 2), one chip per day
+  assert.ok(lines.includes("<span class=\"mn\">11-р сар:</span>") && lines.includes('<span class="chip">14</span>') && lines.includes('<span class="chip">28</span>') && lines.includes("2027 оны 1-р сар:"), lines.slice(0, 100));
   assert.ok(lines.includes(`href="#${scheduleBlockId("A07")}"`) && lines.includes(`${plan.schedulePageByCode["A07"]}-р хуудас`), "link to the schedule block");
   assert.ok(lines.includes("Эхлэх үнэ / нэг том хүн") && !lines.includes("Үнэ огнооноос хамаарна"), "one fare: no 'varies' note");
   const grid = sectionOf("A12"); // many dates -> grid
@@ -552,7 +553,7 @@ test("coverModeFor: portrait with pixels carries the whole page, landscape gets 
   assert.equal(coverModeFor({ width: 1920, height: 1440 }), "plate", "4:3 is not portrait");
   assert.equal(coverModeFor({ width: 2400, height: 1600 }), "plate");
   assert.equal(coverModeFor({ width: 500, height: 400 }), null);
-  assert.equal(coverModeFor({ width: 1500, height: 2400 }, { zoom: 1.7 }), "plate", "a zoom leaves too few pixels for the full page but enough for the plate");
+  assert.equal(coverModeFor({ width: 1500, height: 2400 }, { zoom: 1.9 }), "plate", "a zoom leaves too few pixels for the full page but enough for the plate (page is 4:5 now, so the margin is narrower)");
   assert.equal(coverModeFor({ width: 1500, height: 2400 }, { zoom: 3 }), null, "a deep zoom leaves too few pixels for any cover");
 });
 
@@ -895,7 +896,7 @@ describe("browser render", () => {
     const guidePages = new Set(plan.guidePages.map((_, i) => plan.firstGuidePage + i));
     const indexPages = new Set(plan.indexPages.map((_, i) => plan.firstIndexPage! + i));
     const schedPages = new Set(plan.schedulePages.map((_, i) => plan.firstSchedulePage! + i));
-    assert.ok(plan.guidePages.length === 1 && plan.indexPages.length >= 1 && plan.schedulePages.length >= 1);
+    assert.ok(plan.guidePages.length >= 1 && plan.guidePages.length <= 2 && plan.indexPages.length >= 1 && plan.schedulePages.length >= 1);
     const showsCode = (page: number, code: string) => squash(pageText[page - 1] ?? "").includes(code);
     for (const trip of plan.trips) {
       const code = trip.card.code;
@@ -1048,23 +1049,26 @@ function bookOf(count: number, opts: { groups?: number; long?: boolean } = {}): 
   return snapshotOf(trips, groups);
 }
 
-test("guide: one page for a normal book, two at most for a long one; blocks never overflow their budget", () => {
-  for (const chapters of [1, 3, 5, 8, 9]) {
+test("guide: one page for a short book, two for a longer one; blocks never overflow their budget", () => {
+  // The page is 4:5 now (675pt), so a page carries fewer chapter blocks than the old 9:16 strip did.
+  for (const chapters of [1, 3, 4]) {
     const g = planGuide(chapters);
     assert.equal(g.perPage.length, 1, `${chapters} chapters fit one page`);
     assert.equal(g.perPage[0], chapters);
     assert.ok(g.rowHeightPt >= 72 && g.rowHeightPt <= 104);
   }
-  for (const chapters of [10, 14, 17]) {
+  // Chapters are the trip groups (at most six exist), so two pages always suffice.
+  for (const chapters of [5, 6, 8]) {
     const g = planGuide(chapters);
     assert.equal(g.perPage.length, 2, `${chapters} chapters take two pages`);
     assert.equal(g.perPage.reduce((a, b) => a + b, 0), chapters);
-    assert.ok(Math.min(...g.perPage) >= 3, "no orphan page");
+    assert.ok(Math.min(...g.perPage) >= 2, "no orphan page");
   }
   assert.equal(planGuide(0).perPage.length, 1);
-  assert.equal(planPages(bookOf(30, { groups: 6 })).guidePages.length, 1);
-  assert.equal(planPages(bookOf(60, { groups: 12 })).guidePages.length, 2);
+  assert.equal(planPages(bookOf(30, { groups: 4 })).guidePages.length, 1);
+  assert.equal(planPages(bookOf(60, { groups: 6 })).guidePages.length, 2);
 });
+
 
 test("guide: one photo per chapter taken from that chapter's own trips (strongest hero), a monogram when none; links to the chapter and to destination names", () => {
   const snap = bookOf(6, { groups: 3 });
