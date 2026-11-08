@@ -26,7 +26,7 @@ export const ASPECT = {
   page: 960 / 540,
   /** Cover when the photo cannot carry a whole page: a tall photo that fades into the deep panel. */
   coverPlate: 700 / 540,
-  plate: 1,
+  plate: 500 / 540,
   panorama: 400 / 540,
   diptych: 500 / 540,
   inset: 270 / 200,
@@ -252,7 +252,10 @@ export function compositionFit(card: CatalogueTripCard, hero: Work | null, secon
   const cinemaOk = cinemaPx >= CINEMA_MIN_CROP_PX && (hasFocal || srcAspect <= 1.05 || hero.height >= 1600);
   const panoramaOk = srcAspect >= 1.2 && cropPixels(hero, ASPECT.panorama, zoom) >= PANORAMA_MIN_CROP_PX;
   const diptychOk = !!second && cropPixels(second, ASPECT.inset) >= INSET_MIN_CROP_PX && cropPixels(hero, ASPECT.diptych, zoom) >= 700;
-  return { hasHero: true, cinema: cinemaOk && !opts.avoidCinema, plate: true, panorama: panoramaOk, diptych: diptychOk };
+  // Owner (launch week 2): ONE consistent trip page - a near-square photo over the dark panel - so the other
+  // compositions are retired (their code stays for the cover/closing helpers and old tests).
+  void cinemaOk; void panoramaOk; void diptychOk;
+  return { hasHero: true, cinema: false, plate: true, panorama: false, diptych: false };
 }
 
 // --- the whole book's art ------------------------------------------------------------------------

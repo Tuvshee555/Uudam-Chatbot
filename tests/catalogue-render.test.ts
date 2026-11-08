@@ -440,23 +440,23 @@ function cmapCodepoints(b: Buffer): Set<number> {
 }
 
 test("crop windows follow the focal point and zoom, stay inside the source, and never change the aspect", () => {
-  const centre = cropWindow(2000, 1000, ASPECT.plate);
+  const centre = cropWindow(2000, 1000, ASPECT.thumb);
   assert.equal(centre.width, 1000);
   assert.equal(centre.height, 1000);
   assert.equal(centre.left, 500);
-  const left = cropWindow(2000, 1000, ASPECT.plate, { x: 0.1, y: 0.5 });
+  const left = cropWindow(2000, 1000, ASPECT.thumb, { x: 0.1, y: 0.5 });
   assert.equal(left.left, 0, "clamped to the left edge");
-  const zoomed = cropWindow(2000, 1000, ASPECT.plate, { x: 0.9, y: 0.5 }, 2);
+  const zoomed = cropWindow(2000, 1000, ASPECT.thumb, { x: 0.9, y: 0.5 }, 2);
   assert.equal(zoomed.width, 500);
   assert.equal(zoomed.left + zoomed.width, 2000, "clamped to the right edge");
-  for (const w of [centre, left, zoomed]) assert.ok(Math.abs(w.height / w.width - ASPECT.plate) < 0.01);
+  for (const w of [centre, left, zoomed]) assert.ok(Math.abs(w.height / w.width - ASPECT.thumb) < 0.01);
 });
 
 test("cropImage: exact aspect, resampled, never upscaled, progressive JPEG; loadWork rejects junk", async () => {
   const work = (await loadWork(await makeSyntheticPhoto(1, 2400, 1200)))!;
-  const a = (await cropImage(work, { aspect: ASPECT.plate, outWidth: 1040, quality: 80 }))!;
+  const a = (await cropImage(work, { aspect: ASPECT.thumb, outWidth: 1040, quality: 80 }))!;
   assert.ok(a.width <= 1040 && a.width >= 1000, `width ${a.width}`);
-  assert.ok(Math.abs(a.height / a.width - ASPECT.plate) < 0.01);
+  assert.ok(Math.abs(a.height / a.width - ASPECT.thumb) < 0.01);
   assert.ok(a.bytes < 600_000, `bytes ${a.bytes}`);
   const jpeg = Buffer.from(a.dataUri.replace(/^data:image\/jpeg;base64,/, ""), "base64");
   assert.deepEqual([jpeg[0], jpeg[1]], [0xff, 0xd8]);
@@ -465,11 +465,11 @@ test("cropImage: exact aspect, resampled, never upscaled, progressive JPEG; load
   assert.equal(meta.isProgressive, true);
 
   const narrow = (await loadWork(await makeSyntheticPhoto(2, 900, 1800)))!;
-  const p = (await cropImage(narrow, { aspect: ASPECT.plate, outWidth: 1040, quality: 80 }))!;
+  const p = (await cropImage(narrow, { aspect: ASPECT.thumb, outWidth: 1040, quality: 80 }))!;
   assert.equal(p.width, 900, "narrow source is not upscaled");
 
   const small = (await loadWork(await makeSyntheticPhoto(3, 500, 400)))!;
-  const sm = (await cropImage(small, { aspect: ASPECT.plate, outWidth: 1040, quality: 80 }))!;
+  const sm = (await cropImage(small, { aspect: ASPECT.thumb, outWidth: 1040, quality: 80 }))!;
   assert.ok(sm.width <= 400 && sm.sourceCropWidth <= 400);
 
   assert.equal(await loadWork(Buffer.from("not an image")), null);
@@ -525,9 +525,10 @@ test("art pipeline: weak, missing and failed photos become typographic pages plu
   assert.deepEqual(got, [...got].sort((a, b) => bookOrder.indexOf(a) - bookOrder.indexOf(b)), "warnings come in book order");
   assert.ok(art.cover && art.cover.tripId === snap.coverTripId, "the cover is the data layer's pick when it prints well");
   assert.deepEqual(duplicateUses(art.uses), [], "no photograph is printed on two pages (the closing band is then a photo nobody used, or a plain band)");
+  // Owner, launch week 2: ONE trip-page design (near-square photo over the dark panel); only a trip whose
+  // photo cannot print falls back to the typographic page.
   const compositions = new Set(Object.values(art.trips).filter(t => t.composition !== "type").map(t => t.composition));
-  assert.ok(compositions.size >= 3, `at least three compositions, got ${[...compositions].join(",")}`);
-  assert.ok(Object.values(art.trips).some(t => t.composition === "diptych" && t.second), "a diptych carries its second photo");
+  assert.deepEqual([...compositions], ["plate"], "every printable photo page is the one plate design");
 });
 
 // ---------------------------------------------------------------------------------------------

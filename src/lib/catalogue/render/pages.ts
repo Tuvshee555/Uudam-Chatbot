@@ -4,6 +4,7 @@
  * deep navy, one teal, serif display type, generous space, the approved UUDAM logo flush in a corner
  * (never inside a tile or container).
  */
+import { transportLegendHtml } from "./transport";
 import type { CatalogueSnapshot } from "../types";
 import {
   DISCLAIMER,
@@ -158,7 +159,7 @@ export function guidePage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: R
   if (plan.firstIndexPage != null) appendix.push(`<a href="#${INDEX_ANCHOR}">Кодын жагсаалт · ${pad2(plan.firstIndexPage)}-р хуудас</a>`);
   const head = first
     ? `<div class="gtop">${logoCorner(assets, "guide")}<span class="kick">Агуулга</span></div>
-  <div class="ghead"><h2>Хаашаа аялах вэ?</h2><p class="csub">Бүлэг эсвэл аяллын нэр дээр дарж хуудас руу очоорой. Сонирхсон аяллынхаа кодыг бидэнд бичээрэй, жишээ нь <b>“${escapeHtml(exampleCode)}, ${SAMPLE_SIZE_AND_MONTH}”</b>.</p>${
+  <div class="ghead"><h2>Хаашаа аялах вэ?</h2><p class="csub">Бүлэг эсвэл аяллын нэр дээр дарж хуудас руу очоорой. Сонирхсон аяллынхаа кодыг бидэнд бичээрэй, жишээ нь <b>“${escapeHtml(exampleCode)}, ${SAMPLE_SIZE_AND_MONTH}”</b>.</p>${transportLegendHtml("light")}${
         appendix.length ? `<p class="glinks">${appendix.join("<i>·</i>")}</p>` : ""
       }</div>`
     : `<div class="gtop"><span class="kick">Агуулга · үргэлжлэл</span></div><div class="ghead small"><h2>Хаашаа аялах вэ?</h2></div>`;
@@ -190,7 +191,7 @@ export function schedulePage(snapshot: CatalogueSnapshot, plan: PagePlan, assets
   const pageNo = (plan.firstSchedulePage ?? 0) + index;
   const first = index === 0;
   const head = first
-    ? `<div class="ahead"><span class="kick">Хавсралт · Хөдөлгөөний товлол</span><h2>Бүх огноо</h2><p class="asub">Одооноос хойших бүх хөдөлгөөн, 90 хоногоос цаашхи огноо ч орно. Аяллын нэр дээр дарж хуудас руу очно. Үнэ нь нэг том хүнд ногдох хэмжээ бөгөөд огнооноос хамаарах үнийг огноо бүрийн хажууд бичсэн.</p></div>`
+    ? `<div class="ahead"><span class="kick">Хавсралт · Хөдөлгөөний товлол</span><h2>Бүх огноо</h2><p class="asub">Одооноос хойших бүх хөдөлгөөн, 90 хоногоос цаашхи огноо ч орно. Аяллын нэр дээр дарж хуудас руу очно. Үнэ нь нэг том хүнд ногдох хэмжээ бөгөөд огнооноос хамаарах үнийг огноо бүрийн хажууд бичсэн.</p>${transportLegendHtml("light")}</div>`
     : `<div class="ahead small"><span class="kick">Хавсралт · Хөдөлгөөний товлол · үргэлжлэл</span></div>`;
   const cols = (sp?.columns ?? [[], []]).map(col => `<div class="acol">${col.map(scheduleBlockHtml).join("")}</div>`).join("");
   return `<section class="page appendix schedule"${first ? ` id="${SCHEDULE_ANCHOR}"` : ""} data-page="${pageNo}">

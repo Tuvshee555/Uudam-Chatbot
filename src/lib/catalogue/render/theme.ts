@@ -13,6 +13,7 @@
  *  - flexible regions absorb long copy; text is never clipped
  */
 import type { RenderFontFace } from "./renderTypes";
+import { transportCss } from "./transport";
 
 export const COLORS = {
   paper: "#F5F0E6",
@@ -52,6 +53,7 @@ a{color:inherit;text-decoration:none}
 img{display:block}
 h1,h2,h3{font-family:'${SERIF}','Noto Serif',Georgia,serif;font-weight:300;font-synthesis:none;text-wrap:balance;overflow-wrap:anywhere}
 ul{list-style:none}
+${transportCss()}
 
 .page{position:relative;width:540pt;height:960pt;overflow:hidden;background:var(--paper);break-after:page;page-break-after:always}
 .page:last-of-type{break-after:auto;page-break-after:auto}
@@ -204,16 +206,28 @@ ul{list-style:none}
 .cinema .notes{margin-top:8pt;max-width:440pt}
 .cinema .pd{margin-top:22pt}
 
-/* composition: plate -------------------------------------------------------------------------- */
-.plate,.panorama,.diptych{display:flex;flex-direction:column}
-.plate .photo{position:relative;flex:1 1 0;min-height:360pt;background:var(--sand)}
-.plate .photo img,.panorama .photo img,.diptych .photo img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover}
-.plate .text{flex:none;padding:26pt var(--m) 62pt;display:flex;flex-direction:column}
+/* composition: plate (the one trip page) --------------------------------------------------------
+   A near-square photo at the top; the dark panel rises over its lower edge in a soft fade, so the
+   headline sits on the picture like a cinema page without making the photo a tall strip. */
+.plate{display:flex;flex-direction:column}
+.plate .photo{position:relative;flex:0 1 500pt;min-height:340pt;background:var(--sand)}
+.plate .photo img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover}
+.plate .text{position:relative;z-index:2;flex:1 0 auto;margin-top:-96pt;padding:96pt var(--m) 62pt;display:flex;flex-direction:column;background:linear-gradient(to bottom,color-mix(in srgb,var(--ink) 0%,transparent) 0,color-mix(in srgb,var(--ink) 78%,transparent) 44pt,var(--ink) 96pt)}
 .plate h2.headline{margin-top:10pt}
 .plate .meta{margin-top:11pt}
-.plate .lede{margin-top:14pt}
-.plate .notes{margin-top:6pt}
-.plate .pd{margin-top:22pt}
+.plate .lede{margin-top:13pt}
+.plate .notes{margin-top:5pt}
+.plate .pd{margin-top:auto;padding-top:16pt}
+
+/* transport colour code ------------------------------------------------------------------------ */
+.tdot{display:inline-block;width:7pt;height:7pt;margin-right:6pt;border-radius:50%;background:var(--tc,transparent);vertical-align:0.5pt}
+.trip .meta .tport{color:inherit;white-space:nowrap}
+.trip .meta .tport .tdot{background:var(--tc)}
+.trip[data-transport] .chip{border-color:var(--tc,#8E887B);background:color-mix(in srgb,var(--tc,transparent) 20%,transparent)}
+.tlegend{display:flex;flex-wrap:wrap;gap:3pt 14pt;margin-top:14pt;font-size:10.5pt;line-height:1.4;color:var(--ink-2)}
+.tlegend[data-on=dark]{color:var(--on-2)}
+.tlegend .tl{white-space:nowrap}
+.tlegend .tdot{background:var(--tc)}
 
 /* composition: panorama ----------------------------------------------------------------------- */
 .panorama{padding-top:58pt}

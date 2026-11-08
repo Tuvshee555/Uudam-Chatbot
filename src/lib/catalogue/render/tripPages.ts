@@ -22,6 +22,7 @@ import { NEXT_DEPARTURE_LABEL, PRICE_VARIES_NOTE, TRIP_GRID_DENSE_DATES, TRIP_GR
 import { creditLine, escapeHtml, footHtml, imageTag, px } from "./htmlParts";
 import type { RenderAssets, TripArt, TripComposition } from "./renderTypes";
 import { displayTitle } from "./titleCase";
+import { transportKindOf } from "./transport";
 
 const SEP = `<i>·</i>`;
 
@@ -43,8 +44,13 @@ function eyebrow(card: CatalogueTripCard, groupLabel: string, title: string): st
 }
 
 function metaLine(card: CatalogueTripCard): string {
-  const parts = [card.durationText, card.transportLabel].map(s => s.trim()).filter(Boolean);
-  return parts.length ? `<p class="meta">${parts.map(escapeHtml).join(SEP)}</p>` : "";
+  const kind = transportKindOf(card.transportLabel);
+  const transport = card.transportLabel.trim();
+  const parts = [
+    card.durationText.trim() ? escapeHtml(card.durationText.trim()) : "",
+    transport ? (kind === "none" ? escapeHtml(transport) : `<span class="tport"><i class="tdot"></i>${escapeHtml(transport)}</span>`) : "",
+  ].filter(Boolean);
+  return parts.length ? `<p class="meta">${parts.join(SEP)}</p>` : "";
 }
 
 /** One standfirst in italic serif, the rest as one flowing line. Short, real, from the data. */
@@ -76,7 +82,7 @@ function priceAndDates(card: CatalogueTripCard, asOfDay: string, plan: PagePlan)
   let label: string;
   let body: string;
   if (d.kind === "lines" || d.kind === "grid") {
-    const chips = d.kind === "grid";
+    const chips = true; // owner: boxed day chips everywhere, tinted by transport
     const dense = d.windowCount > TRIP_GRID_DENSE_DATES;
     const rows = dense ? d.lines.slice(0, TRIP_GRID_MAX_ROWS - 1) : d.lines;
     label = d.windowCount === 1 && !all ? "Хөдлөх огноо" : "Ойрын 90 хоногийн огноо";
@@ -110,7 +116,7 @@ export function tripPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: Re
   const { lede, notes } = highlightsHtml(card);
   const price = priceAndDates(card, snapshot.asOfDay, plan);
   const foot = footHtml({ page: t.page, total: plan.totalPages, back: true, credit: credits(card, art) });
-  const open = `<section class="page trip ${composition}${composition === "cinema" || composition === "type" ? " on-dark" : ""}${composition === "type" ? " dark" : ""}" id="${anchorId(card.code)}" data-page="${t.page}" data-code="${escapeHtml(card.code)}" data-composition="${composition}">`;
+  const open = `<section class="page trip ${composition} on-dark dark" id="${anchorId(card.code)}" data-page="${t.page}" data-code="${escapeHtml(card.code)}" data-composition="${composition}" data-transport="${transportKindOf(card.transportLabel)}">`;
 
   switch (composition) {
     case "cinema":
