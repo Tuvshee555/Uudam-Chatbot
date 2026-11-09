@@ -26,7 +26,7 @@ import { transportKindOf } from "./transport";
 
 const SEP = `<i>·</i>`;
 
-const HEAD_CAP_PT: Record<TripComposition, number> = { cinema: 48, plate: 44, panorama: 42, diptych: 31, type: 58 };
+const HEAD_CAP_PT: Record<TripComposition, number> = { cinema: 36, plate: 36, panorama: 42, diptych: 31, type: 44 };
 const HEAD_LINES: Record<TripComposition, number> = { cinema: 3, plate: 3, panorama: 3, diptych: 4, type: 4 };
 
 function headline(title: string, composition: TripComposition): string {
@@ -116,7 +116,7 @@ export function tripPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: Re
   const { lede, notes } = highlightsHtml(card);
   const price = priceAndDates(card, snapshot.asOfDay, plan);
   const foot = footHtml({ page: t.page, total: plan.totalPages, back: true, credit: credits(card, art) });
-  const open = `<section class="page trip ${composition} on-dark dark" id="${anchorId(card.code)}" data-page="${t.page}" data-code="${escapeHtml(card.code)}" data-composition="${composition}" data-transport="${transportKindOf(card.transportLabel)}"${art.tone && /^#[0-9a-f]{6}$/i.test(art.tone) ? ` style="--panel:${art.tone}"` : ""}>`;
+  const open = `<section class="page trip ${composition}${composition === "type" ? "" : " on-dark"}${composition === "plate" ? " dark" : ""}" id="${anchorId(card.code)}" data-page="${t.page}" data-code="${escapeHtml(card.code)}" data-composition="${composition}" data-transport="${transportKindOf(card.transportLabel)}"${art.tone && /^#[0-9a-f]{6}$/i.test(art.tone) ? ` style="--panel:${art.tone}"` : ""}>`;
 
   switch (composition) {
     case "cinema":

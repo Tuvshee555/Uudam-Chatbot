@@ -80,7 +80,7 @@ ${transportCss()}
 .on-dark .foot .pn,.dark .foot .pn{color:var(--on-2)}
 
 /* cover -------------------------------------------------------------------------------------- */
-.coverplate .panelbg{position:absolute;left:0;right:0;bottom:0;background:var(--ink)}
+.coverplate .panelbg{position:absolute;left:0;right:0;bottom:0;background:#111}
 .cover .photo{position:absolute;left:0;top:0;width:100%;height:400pt;overflow:hidden}
 .cover .photo img{width:100%;height:100%;object-fit:cover}
 .cover .block{position:absolute;left:var(--m);right:var(--m);bottom:58pt;color:var(--on)}
@@ -199,12 +199,12 @@ ${transportCss()}
 .on-dark .ml.more .md,.dark .ml.more .md{color:var(--on-3)}
 
 /* composition: cinema ------------------------------------------------------------------------- */
-.cinema .over{position:absolute;left:var(--m);right:var(--m);bottom:62pt;display:flex;flex-direction:column;gap:0}
-.cinema h2.headline{margin-top:12pt}
-.cinema .meta{margin-top:14pt}
-.cinema .lede{margin-top:16pt;max-width:440pt}
-.cinema .notes{margin-top:8pt;max-width:440pt}
-.cinema .pd{margin-top:22pt}
+.cinema .over{position:absolute;left:var(--m);right:var(--m);bottom:50pt;display:flex;flex-direction:column;gap:0}
+.cinema h2.headline{margin-top:8pt}
+.cinema .meta{margin-top:9pt}
+.cinema .lede{margin-top:10pt;max-width:440pt;font-size:14pt}
+.cinema .notes{margin-top:4pt;max-width:440pt;font-size:11.5pt}
+.cinema .pd{margin-top:14pt}
 
 /* composition: plate (the one trip page) --------------------------------------------------------
    A near-square photo at the top; the dark panel rises over its lower edge in a soft fade, so the
@@ -262,10 +262,10 @@ ${transportCss()}
 .type .notes{margin-top:8pt;max-width:440pt}
 
 /* closing ------------------------------------------------------------------------------------ */
-.closing .band{position:absolute;left:0;top:0;width:100%;height:80pt;overflow:hidden;background:var(--ink)}
+.closing .band{position:absolute;left:0;top:0;width:100%;height:80pt;overflow:hidden;background:var(--paper-deep)}
 .closing .band img{width:100%;height:100%;object-fit:cover}
-.closing .band.plain{background:var(--ink)}
-.closing .band.plain .bk{position:absolute;left:124pt;top:32pt;font-weight:500;font-size:10.5pt;letter-spacing:0.2em;text-transform:uppercase;color:var(--on-2)}
+.closing .band.plain{background:var(--paper-deep)}
+.closing .band.plain .bk{position:absolute;left:124pt;top:32pt;font-weight:500;font-size:10.5pt;letter-spacing:0.2em;text-transform:uppercase;color:var(--ink-2)}
 .closing .band.plain::after{content:"";position:absolute;left:var(--m);right:var(--m);bottom:0;border-top:1pt solid var(--gold)}
 .closing .body{position:absolute;left:var(--m);right:var(--m);top:100pt;bottom:50pt;display:flex;flex-direction:column}
 .closing.compact .band{height:80pt}

@@ -183,6 +183,11 @@ export function assignCompositions(fits: CompositionFit[]): TripComposition[] {
       previous = "type";
       return;
     }
+    if (fit.cinema) {
+      out.push("cinema");
+      previous = "cinema";
+      return;
+    }
     // Rotation order from this trip's own slot; among what the photos allow, the composition that
     // has been absent the longest wins (ties keep the rotation order), so no composition hogs the book.
     const order = ROTATION.map((_, k) => ROTATION[(i + k) % ROTATION.length]!);

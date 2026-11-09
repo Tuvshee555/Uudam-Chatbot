@@ -529,7 +529,8 @@ test("art pipeline: weak, missing and failed photos become typographic pages plu
   // Owner, launch week 2: ONE trip-page design (near-square photo over the dark panel); only a trip whose
   // photo cannot print falls back to the typographic page.
   const compositions = new Set(Object.values(art.trips).filter(t => t.composition !== "type").map(t => t.composition));
-  assert.deepEqual([...compositions], ["plate"], "every printable photo page is the one plate design");
+  // One design: the full-bleed photo page (cinema); a photo too small for the whole page uses the plate fallback.
+  assert.ok([...compositions].every(c => c === "cinema" || c === "plate") && compositions.has("cinema"), `compositions: ${[...compositions].join(",")}`);
 });
 
 // ---------------------------------------------------------------------------------------------

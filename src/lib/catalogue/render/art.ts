@@ -45,10 +45,10 @@ const OPENER_MIN_CROP_PX = 640;
 
 const WORK_LONG_EDGE = 2400;
 const FETCH_CONCURRENCY = 4;
-const SCRIM_RGB = "13,22,32";
+const SCRIM_RGB = "6,6,6"; // neutral: the photo darkens to black by itself, never to a brand blue
 const hexRgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(",");
 /** The cover panel's colour: a "solid" fade ends exactly here, so photo and panel are one surface. */
-const PANEL_RGB = hexRgb(COLORS.ink);
+const PANEL_RGB = "17,17,17";
 /** Cover thresholds (source pixels across the crop): the cover is the page everyone sees first. */
 const COVER_FULL_MIN_PX = 820;
 const COVER_PLATE_MIN_PX = 760;
@@ -149,7 +149,7 @@ export type Scrim = {
 
 /** Opacity needed under light type for a lower region of mean luminance `luma` (0 dark .. 1 bright). */
 export function scrimStrength(luma: number): number {
-  return Math.round(Math.min(0.9, Math.max(0.56, 0.52 + luma * 0.5)) * 100) / 100;
+  return Math.round(Math.min(0.94, Math.max(0.68, 0.62 + luma * 0.5)) * 100) / 100;
 }
 
 function scrimSvg(w: number, h: number, scrim: Scrim): Buffer {
@@ -277,10 +277,11 @@ export function compositionFit(card: CatalogueTripCard, hero: Work | null, secon
   const cinemaOk = cinemaPx >= CINEMA_MIN_CROP_PX && (hasFocal || srcAspect <= 1.05 || hero.height >= 1600);
   const panoramaOk = srcAspect >= 1.2 && cropPixels(hero, ASPECT.panorama, zoom) >= PANORAMA_MIN_CROP_PX;
   const diptychOk = !!second && cropPixels(second, ASPECT.inset) >= INSET_MIN_CROP_PX && cropPixels(hero, ASPECT.diptych, zoom) >= 700;
-  // Owner (launch week 2): ONE consistent trip page - a near-square photo over the dark panel - so the other
-  // compositions are retired (their code stays for the cover/closing helpers and old tests).
-  void cinemaOk; void panoramaOk; void diptychOk;
-  return { hasHero: true, cinema: false, plate: true, panorama: false, diptych: false };
+  // Owner (launch week 2): ONE consistent trip page - the full-bleed photo that darkens by itself toward the
+  // bottom, text on the photo - at the new 4:5 page. A photo too small for the whole page falls back to the
+  // plate; the other compositions are retired.
+  void panoramaOk; void diptychOk;
+  return { hasHero: true, cinema: cinemaOk, plate: true, panorama: false, diptych: false };
 }
 
 // --- the whole book's art ------------------------------------------------------------------------
@@ -478,7 +479,7 @@ export async function prepareArt(
     const common = { focal: p.focal, zoom: p.zoom, quality: profile.quality };
     const heroImage =
       composition === "cinema"
-        ? await cropImage(hero, { ...common, aspect: ASPECT.page, outWidth: profile.fullWidth, scrim: { from: 0.34 } })
+        ? await cropImage(hero, { ...common, aspect: ASPECT.page, outWidth: profile.fullWidth, scrim: { from: 0.24 } })
         : composition === "panorama"
           ? await cropImage(hero, { ...common, aspect: ASPECT.panorama, outWidth: profile.width })
           : composition === "diptych"
