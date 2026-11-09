@@ -38,7 +38,7 @@ export const ASPECT = {
 export const LOW_RESOLUTION_CROP_PX = 800;
 /** Below this the photo is not printed at all (typographic page + warning). */
 export const MIN_PRINT_CROP_PX = 560;
-const CINEMA_MIN_CROP_PX = 780;
+const CINEMA_MIN_CROP_PX = 700;
 const PANORAMA_MIN_CROP_PX = 880;
 const INSET_MIN_CROP_PX = 480;
 const OPENER_MIN_CROP_PX = 640;
@@ -153,10 +153,10 @@ export function scrimStrength(luma: number): number {
 }
 
 function scrimSvg(w: number, h: number, scrim: Scrim): Buffer {
-  const mid = scrim.from + (1 - scrim.from) * 0.45;
+  const mid = scrim.from + (1 - scrim.from) * 0.36;
   const rgb = scrim.solid ? PANEL_RGB : SCRIM_RGB;
   const strength = scrim.solid ? 1 : scrim.strength;
-  const midOpacity = scrim.solid ? 0.5 : scrim.strength * 0.66;
+  const midOpacity = scrim.solid ? 0.5 : scrim.strength * 0.82;
   return Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">` +
       `<stop offset="${scrim.from}" stop-color="rgb(${rgb})" stop-opacity="0"/>` +
@@ -192,7 +192,7 @@ export async function edgeTone(jpeg: Buffer, width: number, height: number): Pro
     let h = 0;
     if (d > 0) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
     h = (h * 60 + 360) % 360;
-    const sat = Math.min(0.42, max === 0 ? 0 : d / max);
+    const sat = Math.min(0.16, max === 0 ? 0 : d / max); // nearly neutral: a dark continuation of the photo, never a colour block
     const light = 0.12;
     const c = (1 - Math.abs(2 * light - 1)) * sat, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = light - c / 2;
     const [r1, g1, b1] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
