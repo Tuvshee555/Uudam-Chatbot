@@ -83,7 +83,6 @@ test("the need gate: what the customer needs is read before any trip is looked u
     await context.test("paraphrases of an organisation ask (Cyrillic, Latin, typos) are read the same way", async () => {
       const asks: Array<[string, RegExp]> = [
         ["Alban baiguulaga", /Нийт хэдэн хүн явах вэ\?$/],
-        ["albanii baiguullaga aylal zohion baiguulj ugdug uu", /Нийт хэдэн хүн явах вэ\?$/],
         ["Манай 35 ажилтныг шинэ жилээр дулаан орон руу явуулах гэсэн юм.", /төсөв хэд орчим вэ\?$/],
         ["Манай компани 80 хүнтэй, өвлийн амралтаар явмаар байна", /Аль чиглэлд явахыг хүсэж байна вэ\?$/],
         ["hamt olnoor 25 hun ywna, tusgai marshrut gargaj ugch bolh uu", /Аль чиглэлд явахыг хүсэж байна вэ\?$/],
@@ -98,6 +97,16 @@ test("the need gate: what the customer needs is read before any trip is looked u
         assert.equal(reply.modelCalls, 0, text);
         assert.ok(leadOf(`org-para-${index}`)!.context.startsWith("[need:business_group]"), text);
       }
+      // "organisation + travel" is the corporate catalogue's request (webhookCatalogue.ts, main 2026-11-06..09):
+      // it answers first with its own reply (here no catalogue is published, so its 'being updated' line) and a
+      // staff lead. The need gate covers the shapes the catalogue does not take. Still: one message, no model,
+      // nothing the data does not hold, and staff get a lead.
+      const catalogueAsk = "albanii baiguullaga aylal zohion baiguulj ugdug uu";
+      const catalogueReply = await say("org-para-catalogue", catalogueAsk);
+      assert.equal(catalogueReply.sends.length, 1, catalogueAsk);
+      assert.doesNotMatch(catalogueReply.text, NEVER_SAID, catalogueAsk);
+      assert.equal(catalogueReply.modelCalls, 0, catalogueAsk);
+      assert.ok(leadOf("org-para-catalogue"), catalogueAsk);
     });
 
     await context.test("case 9: a group naming a trip's place gets no fare card; the destination words and head count go to staff", async () => {
