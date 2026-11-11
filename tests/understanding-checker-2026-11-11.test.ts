@@ -54,5 +54,5 @@ test("under a list, a trip whose party fare depends on the departure date says s
   const reply = buildAmbiguousPassengerTotalReply("4 bolon 7 nastai huuhed tulbur hed ve?", [simple, byDate], now) || "";
   assert.ok(reply.includes("НОРВЕЛ ХОТЫН АЯЛАЛ: 2 хүүхэд") && reply.includes("x 1,590,000₮"), reply);
   assert.doesNotMatch(reply, /^• ОРВЕЛИЯ АРЛЫН АЯЛАЛ\s*$/mu, `never the bare name: ${reply}`);
-  assert.match(reply, /ОРВЕЛИЯ АРЛЫН АЯЛАЛ — (?:үнэ нь гарах өдрөөс хамаарна|энэ насны үнэ бүртгэгдээгүй)|ОРВЕЛИЯ АРЛЫН АЯЛАЛ:.*₮/u, reply);
+  assert.match(reply, /ОРВЕЛИЯ АРЛЫН АЯЛАЛ — (?:үнэ нь таны сонголтоос|энэ насны үнэ бүртгэгдээгүй)|ОРВЕЛИЯ АРЛЫН АЯЛАЛ:.*₮/u, reply);
 });

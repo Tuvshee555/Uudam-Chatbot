@@ -34,8 +34,9 @@ export function unknownPartyFareLine(trip: TravelTrip, reason: string): string |
  * "• <trip> — үнэ нь гарах өдрөөс хамаарна" instead of its bare name (live 2026-11-11: ages 4 and 7 fell in
  * two child bands whose fares change by date). Never an estimate.
  */
+export const PARTY_FARE_DEPENDS = "үнэ нь таны сонголтоос (гарах өдөр, буудал, нас) хамаарна";
 export function partyFareChoiceLine(trip: TravelTrip): string {
-  return `• ${trip.route_name} — үнэ нь гарах өдрөөс хамаарна`;
+  return `• ${trip.route_name} — ${PARTY_FARE_DEPENDS}`;
 }
 
 export function isUnknownPartyFareLine(line: string): boolean {
