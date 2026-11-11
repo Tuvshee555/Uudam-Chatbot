@@ -1,4 +1,5 @@
 import { createElement } from "react";
+import { launchWithRetry } from "../chromiumLaunch";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -66,10 +67,10 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
     "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   ].find(existsSync);
-  const browser = await playwright.launch({
+  const browser = await launchWithRetry(async () => playwright.launch({
     executablePath: localExecutable || await chromium.executablePath(),
     args: localExecutable ? [] : chromium.args, headless: true,
-  });
+  }));
   try {
     const page = await browser.newPage({ viewport: { width: 1080, height: 1528 } });
     // This renderer may load images, never arbitrary document scripts or local URLs.
