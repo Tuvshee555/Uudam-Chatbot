@@ -45,6 +45,7 @@ import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
 import { getRecentTripIds, getTripSelection, setTripSelection } from "./tripSelectionState";
 import { contrastCandidates } from "./tripContrast";
+import { getConstraintLedger, ledgerCarryFor, recordConstraints } from "./constraintLedger";
 import { pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
@@ -244,6 +245,14 @@ function isTripChoiceQuestion(reply: string): boolean {
  * know (staff take it). Live 2026-11-07: a two-city ask got a list of one trip that held neither city.
  */
 export async function routeFastPathText(input: Parameters<typeof routeFastPathTextInner>[0]): Promise<FastPathRoute> {
+  const route = await routeCoveringPlaces(input);
+  // The customer's constraints outlive any one trip (constraintLedger.ts); never a reason to fail a turn.
+  await recordConstraints(input.senderId, { text: route.requestText || input.text, trips: input.trips,
+    request: buildTripRequest(route.requestText || input.text, input.trips, route.understanding, input.now || new Date()) }).catch(() => {});
+  return route;
+}
+
+async function routeCoveringPlaces(input: Parameters<typeof routeFastPathTextInner>[0]): Promise<FastPathRoute> {
   const route = await routeFastPathTextInner(input);
   if (!route.scopedClarify?.length || parseNumberedChoice(input.text)) return route;
   // "A B C аялал" may ask for several trips at once, so a list need not have one trip holding every place;
@@ -314,7 +323,9 @@ async function routeFastPathTextInner(input: {
       return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
     }
     await clearClarificationState(senderId);
-    const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
+    // A trip new to the selection starts from what the customer already said about the party and the time.
+    const carry = previousSelection?.tripId === trip.id ? null : ledgerCarryFor(await getConstraintLedger(senderId), trip, now);
+    const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection, carry);
     // The party belongs to the customer, not to one trip: a switch that states no head count keeps the
     // one already given (fares differ per trip, the people do not). Date, hotel and package are the
     // old trip's own and are not carried.
