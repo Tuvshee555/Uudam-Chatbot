@@ -50,6 +50,9 @@ const FUNCTION_WORDS = new Set<string>([
   "билет", "захиалга", "захиалах", "суудал", "сул", "багтах", "хэмжээнд", "маршрут", "зураг", "зургийг", "хямд", "хямдрал", "хямдхан",
   "хамгийн", "өөр", "бусад", "дахиад", "дахин", "бүх", "бүгд", "зарим", "олон", "цөөн", "бага", "маш", "арай", "илүү", "ойрхон", "холын", "урт", "богино", "удаан",
   "trip", "trips", "tour", "tours", "travel", "price", "cost", "info", "what", "where", "when", "have", "there", "about", "available", "going", "want", "would", "could", "like", "from", "with", "please", "thanks", "thank", "family", "children", "kids", "adults", "people", "month", "year", "next", "this", "that", "holiday", "vacation", "book", "booking", "schedule", "departure", "dates", "date", "awii", "avii", "avya", "avy", "awy", "awya", "aviya", "aviy", "avay", "avia", "ymar", "ymr", "marshrut", "hamgiin", "oor", "busad", "bugd", "buh", "hyamd", "hyamdral",
+  // corrections and repeats: "үгүй 2 сарын 13", "dahin 2 sard" correct or repeat the date, they name no place
+  "үгүй", "угүй", "үгуй", "үгэй", "буруу", "уучлаарай", "зүгээр", "дахиж", "дахиад", "ugui", "ugvi", "bish", "buruu", "uuchlaarai", "zugeer",
+  "dahin", "dahiad", "dahij", "dahiin",
   // numbers in words
   "нэг", "хоёр", "гурав", "дөрөв", "тав", "зургаа", "найм", "ес", "арав", "арван",
   // Latin typing of the same words

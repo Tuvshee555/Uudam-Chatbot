@@ -92,7 +92,10 @@ test("nothing over the holiday: said plainly, closest departures labelled, never
   assert.match(near.reply, /2\/25/);
   const far = buildCatalogListingReply("Наадмын үеэр ямар аялал байна?", [november], now)!;
   assert.match(far.reply, /хуваарь одоогоор гараагүй байна/);
-  assert.match(far.reply, /хамгийн ойр гарах аяллууд/);
+  // Changed 2026-11-11: November departures are months from Naadam; they are no longer listed as "the
+  // closest" — the schedule is not out, and the website link is the whole answer.
+  assert.doesNotMatch(far.reply, /хамгийн ойр гарах аяллууд|НОРВЕЛ|11\/15|11\/22/);
+  assert.match(far.reply, /https:\/\/uudamtravel\.mn/);
   assert.doesNotMatch(far.reply, /ойролцоо өдрүүдэд/, "months away is not 'nearby'");
 });
 

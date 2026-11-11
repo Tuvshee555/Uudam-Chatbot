@@ -77,7 +77,10 @@ test("Lunar listings show three by default and eight for explicit full requests"
   // closest departures under their own heading, never as holiday trips.
   const none = listing("Сар шинийн аялал", [trip()]);
   assert.match(none.reply, /^Цагаан сарын үеэр \(2027 оны 2 сарын 6–9 орчим\) гарах аяллын хуваарь одоогоор гараагүй/);
-  assert.match(none.reply, /Одоогийн хуваарьт хамгийн ойр гарах аяллууд:\n\n1\. Вэлмор0/);
+  // Changed 2026-11-11: a departure months from the holiday is no longer printed as "the closest"
+  // (it answered nothing about the holiday); further than ~6 weeks, only the website link is given.
+  assert.match(none.reply, /Шинэ хуваарийг эндээс харна уу: https:\/\/uudamtravel\.mn$/);
+  assert.doesNotMatch(none.reply, /Вэлмор0|хамгийн ойр гарах аяллууд|📅/);
   assert.doesNotMatch(none.reply, /аялах боломжтой аяллууд/);
 });
 

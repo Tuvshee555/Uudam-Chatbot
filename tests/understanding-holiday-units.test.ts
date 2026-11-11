@@ -135,10 +135,11 @@ test("'after' and 'before' a holiday read their own window, and a holiday with n
   const before = listing("Цагаан сарын өмнө Тарвия явах аялал байна уу")!;
   assert.deepEqual(before.listed.map((trip) => trip.id), ["tarvia-a"]);
   assert.match(before.reply, /📅 1\/30/u);
-  // Nothing over Naadam: the window is named, the schedule "not out yet", and the dates are the ones nearest to July.
+  // Nothing over Naadam: the window is named and the schedule is "not out yet". Changed 2026-11-11: the January
+  // departure (six months from July) is no longer printed as the nearest; only one within ~6 weeks would be.
   const naadam = listing("Наадмаар Пекара явах аялал байна уу")!;
   assert.match(naadam.reply, /^Наадмын үеэр \(2027 оны 7 сарын 11–15\) Пекара чиглэлд гарах аяллын хуваарь одоогоор гараагүй байна/u);
-  assert.match(naadam.reply, /1\/10/u, "the departure nearest to July is January's");
+  assert.doesNotMatch(naadam.reply, /1\/10|📅/u, "a departure six months from July is not offered for it");
   // Close to the holiday it is "nearby dates", not months away.
   const near = catalogListing.buildCatalogListingReply("Цагаан сарын үеэр Пекара явах аялал байна уу", [
     fixtureTrip("near", "ПЕКАРА - БЛИЖНИЙ АЯЛАЛ", ["2027-02-20"], [1_000_000, null, null]) as unknown as TravelTrip], NOW)!;

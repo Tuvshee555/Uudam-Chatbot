@@ -30,9 +30,11 @@ import {
 } from "./travelFastPaths";
 import { normalizeTripOffers, resolveTripOfferFareCard, summarizeTripOfferPrices } from "./tripOffers";
 import { customerDate } from "./customerDate";
-import { departureMatchesScope, hasCalendarWeekWindow, requestedDepartureScope, type RequestedDepartureScope } from "./travelDates";
+import { departureMatchesScope, hasCalendarWeekWindow, requestedDepartureScope, splitReturnClause, type RequestedDepartureScope } from "./travelDates";
 import { detectHoliday, NEW_YEAR_RE, resolveHoliday, upcomingHolidays, withoutHolidayNames, type HolidayAsk } from "./holidayCalendar";
 import { holidayWindowOf } from "./askedWindow";
+import { partyFareLine } from "./partyFareLine";
+import { requestedPassengersFromText, type RequestedPassenger } from "./tripRequest";
 import { addDays, bookableDates, daysApart, holidayDatesFor, holidayDatesToShow, todayInUb, tripDays, type ResolvedHoliday } from "./holidayDepartures";
 import { isVerbOrFunctionWord, reportedPlaceIsInMessage, unknownPlaceTokens } from "./placeLikeTokens";
 import type { TravelTrip } from "./travelTypes";
@@ -403,6 +405,8 @@ function explicitDateWithHoliday(raw: string, normalized: string, ask: HolidayAs
 
 /** How far from the holiday a departure may be and still be offered as "nearby dates". */
 const HOLIDAY_NEARBY_DAYS = 21;
+/** Further than this from the holiday's days, a departure is not offered for it at all (about six weeks). */
+const HOLIDAY_SCHEDULE_DAYS = 45;
 
 /**
  * A medical check-up trip is not what a family asking for "a trip over the holidays" means. It is
@@ -427,7 +431,9 @@ export type HolidayWindowListing = Listing & { matched: boolean };
  */
 export function holidayWindowListing(input: { pool: TravelTrip[]; resolution: ResolvedHoliday; now: Date; where?: string; full?: boolean; choice?: boolean;
   /** New Year with no place keeps its own heading and points to the website. */
-  seasonHeading?: boolean }): HolidayWindowListing | null {
+  seasonHeading?: boolean;
+  /** The customer's party ("2 том 2 хүүхэдтэй"): each card also prints its fare for them (partyFareLine.ts). */
+  party?: RequestedPassenger[] }): HolidayWindowListing | null {
   const { pool, resolution, now } = input;
   const { period, window, phrase, ask } = resolution;
   const around = ask.relation === "around";
@@ -459,9 +465,10 @@ export function holidayWindowListing(input: { pool: TravelTrip[]; resolution: Re
       ...(input.choice === false ? [] : ["", ...tripChoiceFooter(count)])];
     for (const { trip, dates, note: line } of list.slice(0, limit)) {
       const price = priceDetail(trip, now, dates.length === 1 ? dates[0] : undefined);
-      const card = formatTripListCard(listed.length + 1, trip, {
-        duration: trip.duration_text, fare: price ? price[0].toUpperCase() + price.slice(1) : "", dates: dates.slice(0, limit > MAX_COMPACT ? 4 : 2), note: line || "",
-      }, now);
+      const shownDates = dates.slice(0, limit > MAX_COMPACT ? 4 : 2);
+      const card = [formatTripListCard(listed.length + 1, trip, {
+        duration: trip.duration_text, fare: price ? price[0].toUpperCase() + price.slice(1) : "", dates: shownDates, note: line || "",
+      }, now), input.party?.length ? partyFareLine(trip, shownDates, input.party, now) : null].filter(Boolean).join("\n");
       if ([...lines, "", card, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
       lines.push("", card);
       listed.push(trip);
@@ -476,20 +483,30 @@ export function holidayWindowListing(input: { pool: TravelTrip[]; resolution: Re
     const list = matching.map((row) => ({ trip: row.trip, dates: row.shown, note: note(row) }));
     return { ...cards(list, heading, footerLead), authoritative: true, matched: true };
   }
-  // Nothing over the holiday: the departures closest to it, labelled as nearby dates.
-  const anchor = ask.relation === "after" ? period.endYmd : period.startYmd;
-  const nearest = rows.filter((row) => row.all.length > 0).map((row) => {
-    const byDistance = [...row.all].sort((a, b) => daysApart(a, anchor) - daysApart(b, anchor));
+  // Nothing over the holiday: the departures closest to the holiday's days (before or after them),
+  // only those within HOLIDAY_SCHEDULE_DAYS. A departure months away answers nothing about the holiday.
+  const fromHoliday = (date: string) => (date < period.startYmd ? daysApart(date, period.startYmd) : date > period.endYmd ? daysApart(date, period.endYmd) : 0);
+  const nearby = (dates: string[]) => dates.filter((date) => fromHoliday(date) <= HOLIDAY_SCHEDULE_DAYS);
+  const nearest = rows.map((row) => {
+    const byDistance = nearby(row.all).sort((a, b) => fromHoliday(a) - fromHoliday(b) || a.localeCompare(b));
     // The trip is as far from the holiday as its NEAREST departure (not its earliest of the two shown).
-    return { trip: row.trip, dates: byDistance.slice(0, 2).sort(), distance: daysApart(byDistance[0], anchor) };
-  }).sort((a, b) => a.distance - b.distance).slice(0, MAX_COMPACT);
-  if (!nearest.length) return null;
-  // Months away is not "nearby": that season's schedule is simply not out yet.
+    return { trip: row.trip, dates: byDistance.slice(0, 2).sort(), distance: byDistance.length ? fromHoliday(byDistance[0]) : Infinity };
+  }).filter((row) => row.dates.length > 0).sort((a, b) => a.distance - b.distance || a.dates[0].localeCompare(b.dates[0])).slice(0, MAX_COMPACT);
+  if (!rows.some((row) => row.all.length > 0)) return null;
+  const notOut = `${phrase} ${where}гарах аяллын хуваарь одоогоор гараагүй байна 🙏 Шинэ хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`;
+  if (!nearest.length) {
+    // The one trip the question is about (on screen, or named) is still named, so the answer is
+    // visibly about it; its departures months away are not printed as if they answered the holiday.
+    const single = input.choice === false && pool.length === 1 ? pool[0] : null;
+    return single
+      ? { reply: [notOut, "", `${single.route_name}: одоогийн хуваарьт ${genitive} ${ask.relation === "after" ? "дараа" : ask.relation === "before" ? "өмнө" : "үеэр"} гарах өдөр алга.`].join("\n"), listed: [single], authoritative: true, matched: false }
+      : { reply: notOut, listed: [], authoritative: true, matched: false };
+  }
+  // A few weeks off is "nearby"; further, that season's schedule is simply not out yet.
   const close = nearest[0].distance <= HOLIDAY_NEARBY_DAYS;
   const heading = close
     ? [`Одоогоор ${phrase} ${where}гарах аялал хуваарьт алга байна.`, "", "Гэхдээ ойролцоо өдрүүдэд гарах аяллууд:"]
-    : [`${phrase} ${where}гарах аяллын хуваарь одоогоор гараагүй байна 🙏 Шинэ хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, "",
-      "Одоогийн хуваарьт хамгийн ойр гарах аяллууд:"];
+    : [notOut, "", "Одоогийн хуваарьт хамгийн ойр гарах аяллууд:"];
   return { ...cards(nearest, heading), authoritative: true, matched: false };
 }
 
@@ -522,7 +539,7 @@ function holidayReply(intentText: string, normalized: string, ask: HolidayAsk | 
   if (!pool.length) return noPlace && seaPool !== kindPool ? { reply: "REFER", listed: [], authoritative: true } : null;
   const where = noPlace ? "" : `${placeNames(destinations, active)} чиглэлд `;
   const newYearSeason = ask.holiday.key === "new_year" && noPlace && resolution.ask.relation === "around";
-  const listing = holidayWindowListing({ pool, resolution, now, where, full, choice: true, seasonHeading: newYearSeason });
+  const listing = holidayWindowListing({ pool, resolution, now, where, full, choice: true, seasonHeading: newYearSeason, party: requestedPassengersFromText(intentText) });
   // New Year with nothing leaving in its window keeps its own notice (whenListing, below).
   if (!listing) return newYearSeason ? null : { reply: "REFER", listed: [], authoritative: true };
   if (newYearSeason && !listing.matched) return null;
@@ -611,8 +628,11 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
   }
 }
 
-function catalogListingReply(rawIntentText: string, trips: TravelTrip[], now: Date): Listing | null {
-  if (hasCalendarWeekWindow(rawIntentText)) return null;
+function catalogListingReply(typedText: string, trips: TravelTrip[], now: Date): Listing | null {
+  if (hasCalendarWeekWindow(typedText)) return null;
+  // "12/30-нд явж 1 сарын эхээр буцдаг": the list is read from the leaving clause only; the coming-back
+  // clause is not a month the customer leaves in (travelDates.ts splitReturnClause).
+  const rawIntentText = splitReturnClause(typedText)?.departureText ?? typedText;
   const intentText = withFlightIntent(rawIntentText);
   const normalized = normText(intentText);
   if (!normalized) return null;

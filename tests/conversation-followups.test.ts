@@ -35,7 +35,9 @@ test("follow-ups under a trip list are answered from the data, never looped or s
         const reply = result.sends[0].text;
         assert.match(reply, /ЛУМАРА НИСЛЭГТЭЙ АЯЛАЛ: 6,833,000₮/);
         assert.match(reply, /ЛУМАРА ГАЗРЫН АЯЛАЛ: 4,866,000₮/);
-        assert.ok(reply.split("\n").includes("• ЛУМАРА + ТЭВРИН АЯЛАЛ"), "no infant fare: name only, no estimate");
+        // Changed 2026-11-11: the trip's bare name read as an unanswered line; it now says the fare for
+        // that age is not recorded. Still no estimate: no amount on that trip's line.
+        assert.ok(reply.split("\n").includes("• ЛУМАРА + ТЭВРИН АЯЛАЛ — энэ насны үнэ бүртгэгдээгүй"), `no infant fare: said for that trip, no estimate: ${reply}`);
       }
     });
 
