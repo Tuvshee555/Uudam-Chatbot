@@ -89,8 +89,11 @@ export type AgentOutcome =
   | { kind: "proposal"; proposal: AIChangeProposal }
   | { kind: "ask"; ask: AssistantAskPayload }
   | { kind: "note"; text: string; reason?: "timeout" | "budget" | "model_failed" | "reply" | "refused" }
-  /** A partner page or pasted program: the router hands it to the new-trip file pipeline. */
-  | { kind: "trip_source"; label: string; text: string; note: string };
+  /**
+   * A partner page or pasted program: the router hands it to the new-trip file pipeline. `url` is
+   * the page read (none for a paste); the new trip keeps it as extra.source_url (partner watch).
+   */
+  | { kind: "trip_source"; label: string; text: string; note: string; url?: string };
 
 export type AgentRun = {
   outcome: AgentOutcome;

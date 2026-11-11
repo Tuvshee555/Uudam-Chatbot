@@ -26,6 +26,8 @@ const text = (value: unknown) => (typeof value === "string" ? value.trim() : "")
 export type SeatState = "open" | "low" | "full";
 export type DayState = { state: SeatState; seats: number | null };
 export const DAY_STATES_KEY = "day_states";
+/** At most this many seats left reads as «Цөөн суудал». */
+export const FEW_SEATS = 5;
 
 const seatsOf = (value: unknown): number | null => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null);
 
@@ -34,7 +36,8 @@ export function rowDayState(row: Row): DayState | null {
   const status = text(row.status).toLowerCase();
   const seats = seatsOf(row.seats_left);
   if (["sold_out", "full", "closed"].includes(status) || seats === 0) return { state: "full", seats: null };
-  if (["almost_full", "low", "few"].includes(status)) return { state: "low", seats };
+  // "12 суудал үлдсэн" is not few: only a handful left is flagged (the count is kept either way).
+  if (["almost_full", "low", "few"].includes(status)) return { state: seats !== null && seats > FEW_SEATS ? "open" : "low", seats };
   return seats !== null ? { state: "open", seats } : null;
 }
 

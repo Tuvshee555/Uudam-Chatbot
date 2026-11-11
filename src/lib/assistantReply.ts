@@ -9,9 +9,13 @@
  * - small talk ("сайн уу", "за", "баярлалаа") is answered in code and costs nothing;
  * - a bulk paste (a price list) goes to the model whole, as one source;
  * - no database → one plain note; the day's AI budget spent or the model unreachable → the
- *   brain does the exact single edits it understands, and says so on the card.
+ *   brain does the exact single edits it understands, and says so on the card;
+ * - partner watch (src/lib/partnerWatch/assistant.ts): a pasted link a trip was already made from
+ *   is asked about (check that trip's page now, or add it again as a new trip), and the tapped
+ *   check reads the page and proposes the seat and fare changes — no model in either.
  * A partner page or a pasted program the agent hands back becomes the usual new-trip review
- * card through the file pipeline. Every proposal is stored and reviewed before anything is saved.
+ * card through the file pipeline; the new trip keeps the page as extra.source_url. Every
+ * proposal is stored and reviewed before anything is saved.
  */
 import {
   parseIntent, stripAnswerTags, think, withTripTag, type AssistantAskPayload,
@@ -25,6 +29,9 @@ import type { AgentAttachment, AgentDeps, AgentOutcome, AnswerTo } from "./assis
 import { assistantContextText, type AssistantTurn } from "./assistantLog";
 import { aiBudgetMessage, aiBudgetState } from "./aiUsage";
 import { logError, logInfo, recordCounter } from "./observability";
+import { duplicateLinkAsk, forcesNewTrip, partnerCheckReply, watchCheckTripId, withoutWatchTags, withSourceUrl } from "./partnerWatch/assistant";
+import { partnerPageReader } from "./partnerWatch/run";
+import { crossCheckProposal } from "./partnerWatch/crossCheck";
 import { ensureTravelSchema, findTripMatches, listTrips } from "./travelDb";
 import { generateAIProposal, generateAIProposalFromContentBatched, persistProposal, reviseAIRequest } from "./travelAI";
 import { validateAIChangeProposal } from "./travelAIValidation";
@@ -203,7 +210,10 @@ async function tripSourceReply(outcome: Extract<AgentOutcome, { kind: "trip_sour
   const budget = await aiBudgetState();
   if (budget.exceeded) return { kind: "note", text: aiBudgetMessage(budget) };
   try {
-    const result = await generateAIProposalFromContentBatched({ label: outcome.label, note: outcome.note, contentText: outcome.text, afterValidation: keepNewTripsOnly });
+    // A trip made from a page keeps that page, so the partner watch can check it again (partnerWatch/).
+    const checkedAt = new Date().toISOString();
+    const afterValidation = (proposal: AIChangeProposal, catalogue: TravelTrip[]) => crossCheckProposal(withSourceUrl(keepNewTripsOnly(proposal, catalogue), outcome.url, checkedAt), outcome.text);
+    const result = await generateAIProposalFromContentBatched({ label: outcome.label, note: outcome.note, contentText: outcome.text, afterValidation });
     const kept = (result.proposal.conflict_items || []).filter((item) => item.type === EXISTING_TRIP_KEPT).map((item) => item.text);
     if (!result.proposal.actions.length && kept.length) {
       return { kind: "note", text: ["Энэ эх сурвалжаас шинэ аялал гарсангүй.", ...kept].join(" ") };
@@ -215,9 +225,18 @@ async function tripSourceReply(outcome: Extract<AgentOutcome, { kind: "trip_sour
   }
 }
 
-export async function generateAssistantReply(instruction: string, options: AssistantReplyOptions = {}): Promise<AssistantReply> {
+export async function generateAssistantReply(typed: string, options: AssistantReplyOptions = {}): Promise<AssistantReply> {
   const trips = await readCatalogue();
   if (!trips) return { kind: "note", text: DB_DOWN_NOTE };
+  // A tapped «Хуваарь, суудлыг шинэчлэх»: the partner watch checks that trip's page now (no model).
+  const checkTripId = watchCheckTripId(typed);
+  if (checkTripId) {
+    // The page is read with the agent's fetcher (the SSRF-safe safeFetch; a fixture in tests).
+    const fetcher = options.agentDeps?.safeFetch;
+    const checked = await partnerCheckReply(checkTripId, trips, { now: options.now, ...(fetcher ? { fetchPage: partnerPageReader(fetcher) } : {}) });
+    return checked.kind === "proposal" ? { ...checked, source: "agent" } : checked;
+  }
+  const instruction = withoutWatchTags(typed);
   const context = options.context ?? assistantContextText(options.turns || []);
   const answering = Boolean(options.answerTo?.question);
   const attachments = options.attachments || [];
@@ -237,6 +256,11 @@ export async function generateAssistantReply(instruction: string, options: Assis
     }
     if (outcome.kind === "ask") return { kind: "ask", ask: outcome.ask, source: "brain" };
     if (outcome.kind === "note") return { kind: "note", text: outcome.text };
+  }
+  // A link a trip was already made from is not read again as a new trip unless he says so (in code, before the model).
+  if (!answering && !attachments.length && !forcesNewTrip(typed)) {
+    const known = duplicateLinkAsk(instruction, trips, options.now);
+    if (known) return { kind: "ask", ask: known, source: "brain" };
   }
   // Small talk is answered in code; it never costs a model call. A bare link is not small talk.
   if (!answering && !attachments.length && !urlsInText(instruction).length) {

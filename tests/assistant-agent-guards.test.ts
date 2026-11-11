@@ -184,3 +184,24 @@ test("'идэвхжүүл' on a hidden trip shows it again: one action, one save
   const { buildSystemPrompt } = await import("../src/lib/assistantAgent/prompt");
   assert.match(buildSystemPrompt(), /visible_on_site false → set_visibility \{visible:true\}/);
 });
+
+test("an archived trip whose dates have all passed is not activated: the system would archive it again", async () => {
+  const past = trip({ id: "t-past", route_name: "ӨНГӨРСӨН ТУРШИЛТЫН АЯЛАЛ", status: "archived", departure_dates: ["2098-10-20"],
+    extra: { archived_reason: "all_departure_dates_passed" } });
+  const result = await run("өнгөрсөн аяллыг идэвхжүүл", [
+    () => [{ name: "get_trip", args: { trip_id: "t-past" } }],
+    () => [{ name: "propose_changes", args: { reply_text: "", actions: [{ action: "patch", trip_id: "t-past", fields: { status: "active" }, summary: "" }] } }],
+  ], { trips: [...TRIPS, past] });
+  assert.equal(result.outcome.kind, "note");
+  assert.match((result.outcome as { text: string }).text, /гарах өдөр нь бүгд өнгөрсөн[\s\S]*шинэ огноо нэмээрэй/);
+});
+
+test("get_trip gives a website link only for a published page", async () => {
+  const { tripDetailView } = await import("../src/lib/assistantAgent/readTools");
+  const unpublished = trip({ id: "t-x", route_name: "НИЙТЛЭГДЭЭГҮЙ АЯЛАЛ", extra: { website_slug: "trip-0123456789abcdef0123", website_published: false } });
+  const published = trip({ id: "t-y", route_name: "НИЙТЛЭГДСЭН АЯЛАЛ", extra: { website_slug: "trip-0123456789abcdef0124", website_published: true } });
+  const hidden = tripDetailView(unpublished, NOW, null).website as Record<string, unknown>;
+  assert.equal(hidden.link, null);
+  assert.match(String(hidden.link_note), /нийтлэгдээгүй/);
+  assert.match(String((tripDetailView(published, NOW, null).website as Record<string, unknown>).link), /\/mn\/trips\/trip-0123456789abcdef0124$/);
+});

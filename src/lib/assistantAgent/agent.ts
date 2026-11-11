@@ -185,7 +185,7 @@ async function tripSourceOutcome(args: Args, state: TurnState): Promise<AgentOut
       page = { url: read.url, title: read.title, text: read.text };
     }
     if (!page) return { kind: "note", text: "Энэ холбоос таны мессежид алга тул уншихгүй. Холбоосыг нь хуулж оруулна уу.", reason: "refused" };
-    return { kind: "trip_source", label: (page.title || page.url).slice(0, 200), text: `Эх сурвалж: ${page.url}\nГарчиг: ${page.title}\n\n${page.text}`, note };
+    return { kind: "trip_source", label: (page.title || page.url).slice(0, 200), text: `Эх сурвалж: ${page.url}\nГарчиг: ${page.title}\n\n${page.text}`, note, url: page.url };
   }
   // A pasted program: the admin's own words are the source, never a copy the model re-typed.
   const pasted = withoutOptionTags([state.answerToInstruction, state.instruction].filter(Boolean).join("\n\n"));

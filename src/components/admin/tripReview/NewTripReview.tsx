@@ -1,75 +1,63 @@
 /**
- * A trip read from a file, reviewed in the trip editor's own design: the same
- * section groups, fields, duration steppers, day timeline, per-date price
- * editor (hotel, package, child and infant bands per departure) and hotel
- * editor. What only a file review needs is added on top: the departure
- * calendar, the transport switch, the checks against the file's own dates and
- * length, and the file's words quoted beside what was read from them.
- * Everything else (discounts, extra fees, website fields, settings) is one click
- * away in the full editor, which hands its result back here.
+ * A trip read from a file or a partner page, reviewed as the customer will see it on
+ * uudamtravel.mn: the photos, name, summary and facts; «Гарах өдөр ба үнэ» as a table; the
+ * day-by-day program; what the price includes; the hotels; the notes and booking terms. Every part
+ * is edited where it is shown: a click opens it in place.
  *
- * Read as one page: sections with large headings separated by rules, ink labels, hints at 13px
- * or more, no boxes inside boxes (the owner, 2026-11-11: the old one was hard on the eyes).
+ * Above it, ONE list of what stops a publish (red) and what deserves a look (amber), each a link to
+ * the place that fixes it (tripReviewProblems.ts), or a calm «Нийтлэхэд бэлэн».
+ *
+ * Empty optional fields are not shown: they are small «+ …» chips at the bottom of their part
+ * (reviewView.ts); a field with a value always shows. «Бүх талбар» shows them all.
+ *
+ * The owner, 2026-11-11: the old review was a long form of ~40 boxes, mostly empty, and he scrolled
+ * all of it to find the two that mattered. What is saved did not change: every edit goes through the
+ * same helpers as before (tripReview.ts, tripReviewPrices.ts, tripDayStates.ts).
  */
-import type { ReactNode } from "react";
-import { Button, Icons, cx } from "@/components/ui";
-import type { HotelProfile } from "@/lib/adminTypes";
+import { useEffect, useRef, useState } from "react";
+import { Icons, cx } from "@/components/ui";
 import {
-  addDaysYmd, applyTransport, checkDeparture, checkDuration, departureDays, formatYmd, itineraryOf, makeCover,
-  removePhoto, reviewIssues, setProgramDays, shiftDepartureDay, transportOf, tripPhotos, withProgramDuration,
+  addDaysYmd, checkDeparture, departureDays, formatYmd, itineraryOf, reviewIssues, setProgramDays, shiftDepartureDay,
 } from "@/lib/tripReview";
-import { reviewPriceGroups, withCalendarDays } from "@/lib/tripReviewPrices";
+import { withCalendarDays } from "@/lib/tripReviewPrices";
 import { dayStates, setDayState } from "@/lib/tripDayStates";
-import { parseHotelProfiles } from "@/lib/tripEditorState";
-import { TRANSPORT_TYPES, isTransitDay, type TransportType } from "@/lib/tripTransitDays";
-import { DurationSteppers } from "../tripEditor/DurationSteppers";
-import { HotelProfilesEditor, hotelNamesOf } from "../tripEditor/HotelProfilesEditor";
+import { reviewProblems, type ReviewProblem } from "@/lib/tripReviewProblems";
+import { isTransitDay } from "@/lib/tripTransitDays";
 import { ItineraryTimeline } from "../tripEditor/ItineraryTimeline";
-import { EmptyHint, Field, Group, TextArea, TextInput } from "../tripEditor/parts";
 import { MultiDateCalendar } from "./MultiDateCalendar";
 import { PriceSection } from "./PriceSection";
-import { ReviewList } from "./ReviewList";
-import { thumb } from "./photoThumb";
+import { ConditionsSection, HotelsSection, IncludedSection } from "./ReviewConditions";
+import { ReviewHero, type HeroPanel } from "./ReviewHero";
+import { EditPanel, Evidence, GhostInput, Notice, ReviewSection, primarySmall, secondarySmall } from "./ReviewParts";
+import { ReviewProblemsBar } from "./ReviewProblemsBar";
+import { splitOptional, type OptionalKey } from "./reviewView";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => (value && typeof value === "object" && !Array.isArray(value) ? value as Row : {});
 const text = (value: unknown) => (typeof value === "string" ? value : "");
-const strings = (value: unknown) => (Array.isArray(value) ? value.map((item) => String(item ?? "")) : []);
 
-const TRANSPORT_SHORT: Record<TransportType, { label: string; hint: string }> = {
-  land: { label: "Газраар", hint: "галт тэрэг, автобус" },
-  land_flight: { label: "Газар + нислэг", hint: "хил гараад нисдэг" },
-  direct_flight: { label: "Шууд нислэг", hint: "Улаанбаатараас нисдэг" },
-  cruise: { label: "Усан онгоц", hint: "галт тэргээр боомт хүрнэ" },
-};
+/** The parts that open as a panel (the rest are fields shown in place). */
+const PANELS = new Set(["photos", "duration", "transport", "hotel", "calendar", "profiles"]);
+const isPanel = (part: string) => PANELS.has(part) || part.startsWith("card:");
 
-const TERMS: Array<[string, string, string]> = [
-  ["deposit", "Урьдчилгаа", "ж: 500,000₮ бүртгүүлэхдээ"],
-  ["payment", "Төлбөр", "ж: Үлдэгдлийг гарахаас 14 хоногийн өмнө"],
-  ["documents", "Бичиг баримт", "ж: Гадаад паспорт, 2 зураг"],
-  ["visa", "Виз", "ж: Визгүй / Виз шаардлагатай"],
-  ["cancellation", "Цуцлалт", "ж: Цуцалбал хураамж авна"],
-];
+const AGES = [["adult", "Том хүн", "ж: 12+ нас"], ["child", "Хүүхэд", "ж: 2-11 нас"], ["infant", "Нярай", "ж: 0-23 сар"]] as const;
 
-/** What the file itself says, quoted, so a value can be checked against it at a glance. */
-function Evidence({ quote }: { quote: unknown }) {
-  const value = text(quote).trim();
-  if (!value) return null;
-  return (
-    <p className="mt-3 flex items-start gap-1.5 text-[13px] leading-5 text-ink-muted">
-      <Icons.file size={13} className="mt-0.5 shrink-0" />
-      <span className="min-w-0">Файлд: <span className="text-ink">«{value}»</span></span>
-    </p>
-  );
-}
-
-function Notice({ tone, children }: { tone: "warning" | "success" | "muted"; children: ReactNode }) {
-  return (
-    <div className={cx("mt-3 rounded-lg px-4 py-3 text-sm leading-6",
-      tone === "warning" ? "border border-warning/30 bg-warning-soft/60 text-ink" : tone === "success" ? "text-success" : "text-ink-muted")}>
-      {children}
-    </div>
-  );
+/**
+ * Scrolls a part of the review into view and puts the cursor in it: the box `field` names (a fare),
+ * else its first box. A click in place (`center` false) only focuses: the browser scrolls as little as it can.
+ */
+export function revealTarget(root: ParentNode | null, target: string, field?: string, center = true) {
+  const place = root?.querySelector<HTMLElement>(`[data-review-target="${target}"]`);
+  if (!place) return;
+  if (center) place.scrollIntoView({ block: "center", behavior: "smooth" });
+  const named = field ? place.querySelector<HTMLElement>(`[data-focus="${field}"]`) : null;
+  const scope = named ?? place;
+  // A box marked wrong first (the extra bands), then the first box to type in, then the first button.
+  const box = named?.matches("input, textarea, select, button") ? named
+    : scope.querySelector<HTMLElement>("input[aria-invalid=true], input.border-danger")
+      ?? scope.querySelector<HTMLElement>("input:not([type=checkbox]):not([type=radio]):not(:disabled), textarea:not(:disabled), select:not(:disabled)")
+      ?? scope.querySelector<HTMLElement>("button:not(:disabled):not([data-panel-close])");
+  box?.focus({ preventScroll: center });
 }
 
 export function NewTripReview({
@@ -78,245 +66,167 @@ export function NewTripReview({
   warnings,
   disabled,
   onOpenEditor,
+  initialOpen,
 }: {
   fields: Row;
   onChange: (next: Row) => void;
-  /** The assistant's real doubts about this trip (not what the sections already say). */
+  /** The assistant's real doubts about this trip (not what the review already says). */
   warnings: string[];
   disabled?: boolean;
   /** Opens this trip in the full trip editor; its save comes back into this review. */
   onOpenEditor?: () => void;
+  /** A part to show open from the start: a panel («calendar», «card:all» …) or an optional field («terms:visa» …). */
+  initialOpen?: string;
 }) {
   const extra = record(fields.extra);
   const setExtra = (patch: Row) => onChange({ ...fields, extra: { ...extra, ...patch } });
-  const evidence = record(extra.source_evidence);
   const itinerary = itineraryOf(fields);
-  const transport = transportOf(fields);
-  const added = itinerary.filter(isTransitDay).length;
   const { days: departures, other: rules } = departureDays(fields.departure_dates);
+  const evidence = record(extra.source_evidence);
+  const added = itinerary.filter(isTransitDay).length;
   const check = checkDeparture(departures, itinerary);
-  const photos = tripPhotos(fields);
-  const duration = checkDuration(fields);
-  const found = photos.filter((photo) => photo.author || photo.license).length;
-  const programDuration = text(extra.program_duration_text).trim();
-  // What still stops a save or a publish, said beside the field it is about (the footer says it once more).
   const issues = reviewIssues(fields);
-  const issueOf = (...keys: string[]) => issues.find((issue) => keys.includes(issue.key));
-  const dateIssue = issueOf("dates", "past_dates");
-  const boundaryIssue = issueOf("boundary");
-  const priceRows = reviewPriceGroups(fields) as Array<{ hotel?: string | null }>;
+  const dateIssue = issues.find((issue) => issue.key === "dates" || issue.key === "past_dates");
+  const boundaryIssue = issues.find((issue) => issue.key === "boundary");
+  const problems = reviewProblems(fields, warnings);
   const states = dayStates(fields);
+  const ages = record(extra.age_rules);
+
+  const rootRef = useRef<HTMLFieldSetElement>(null);
+  // One part is open at a time: a hero fact, the photos, the calendar, a price row («card:<key>»), the hotels.
+  // With no departure day yet, the calendar is what the admin needs first.
+  const [open, setOpen] = useState<string | null>(() => (initialOpen && isPanel(initialOpen) ? initialOpen
+    : departures.length === 0 && rules.length === 0 ? "calendar" : null));
+  // Optional fields opened from their chip stay shown while the review is open, even while still empty.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set(initialOpen ? [initialOpen] : []));
+  const [showAll, setShowAll] = useState(false);
+  const [focus, setFocus] = useState<{ target: string; field?: string; center: boolean; at: number } | null>(null);
+  useEffect(() => {
+    if (!focus) return;
+    const frame = window.requestAnimationFrame(() => revealTarget(rootRef.current, focus.target, focus.field, focus.center));
+    return () => window.cancelAnimationFrame(frame);
+  }, [focus]);
+  const show = { all: showAll, revealed };
+  const go = (target: string, field?: string, center = true) => {
+    setFocus({ target, field, center, at: Date.now() });
+  };
+  const openPart = (part: string | null, field?: string, center = false) => {
+    setOpen(part);
+    if (part) go(part, field, center);
+  };
+  const reveal = (key: OptionalKey) => {
+    setRevealed((current) => new Set([...current, key]));
+    if (key === "hotel" || key === "profiles") setOpen(key);
+    go(key, undefined, false);
+  };
+  const goProblem = (problem: ReviewProblem) => {
+    if (!problem.target) return;
+    if (isPanel(problem.target)) setOpen(problem.target);
+    go(problem.target, problem.field, true);
+  };
+
   // A day taken off the calendar loses its seat state: added back later, it starts open.
   const setCalendar = (next: string[]) => {
     const kept = new Set(next);
     const cleared = Object.keys(states).filter((day) => !kept.has(day)).reduce((acc, day) => setDayState(acc, day, null), withCalendarDays(fields, next));
     onChange(cleared);
   };
-  const ages = record(extra.age_rules);
-  const terms = record(extra.booking_terms);
-  const profiles = parseHotelProfiles(JSON.stringify(Array.isArray(extra.hotel_profiles) ? extra.hotel_profiles : []));
-  const setDuration = (value: string) => {
-    const days = Number(/(\d+)\s*өдөр/.exec(value)?.[1]);
-    const nights = Number(/(\d+)\s*шөнө/.exec(value)?.[1]);
-    onChange({ ...fields, duration_text: value, extra: { ...extra, ...(days ? { duration_days: days } : {}), ...(Number.isFinite(nights) ? { duration_nights: nights } : {}) } });
-  };
+  const calendarOpen = open === "calendar";
+  const ageView = splitOptional(fields, ["ages"], show);
+  const programTitle = `Өдөр тутмын хөтөлбөр · ${itinerary.length} өдөр`;
 
   return (
     // While it saves the review is read-only: an edit made then would not be in what is being saved.
-    <fieldset disabled={disabled} className="m-0 min-w-0 space-y-8 border-0 px-4 py-6 text-[15px] sm:px-8 sm:py-7">
-      {onOpenEditor && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-canvas px-4 py-3">
-          <p className="min-w-0 flex-1 basis-60 text-sm leading-6 text-ink-muted">
-            Энд гол мэдээллийг шалгана. Хямдрал, нэмэлт төлбөр, вэбсайтын талбар, тохиргоо зэрэг бүх зүйлийг <b className="text-ink">аялал засах</b> цонхонд засна.
-          </p>
-          <Button size="sm" variant="secondary" disabled={disabled} onClick={onOpenEditor}>
-            <Icons.edit size={14} /> Бүтэн засварлагчаар нээх
-          </Button>
-        </div>
-      )}
+    <fieldset ref={rootRef} disabled={disabled} className="m-0 min-w-0 space-y-7 border-0 px-4 py-5 text-[15px] sm:px-8 sm:py-6">
+      <ReviewProblemsBar problems={problems} onGo={goProblem} showAll={showAll} onShowAll={setShowAll} onOpenEditor={onOpenEditor} disabled={disabled} />
 
-      {warnings.length > 0 && (
-        <Group size="section" title="Шалгах зүйлс">
-          <ul className="space-y-1.5">
-            {warnings.map((warning) => (
-              <li key={warning} className="flex items-start gap-2 text-[15px] leading-6 text-ink">
-                <Icons.alert size={16} className="mt-1 shrink-0 text-warning" />
-                <span className="min-w-0 whitespace-pre-line">{warning}</span>
-              </li>
-            ))}
-          </ul>
-        </Group>
-      )}
+      <ReviewHero fields={fields} onChange={onChange} open={open} onOpen={(panel: HeroPanel | null) => openPart(panel)}
+        onReveal={reveal} show={show} disabled={disabled} />
 
-      <Group size="section" title="Үндсэн">
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field id="review-route-name" label="Аяллын нэр" required missing={!text(fields.route_name).trim()} danger className="sm:col-span-2" hint="Огноог нэрэнд бичихгүй, доорх календарьт сонгоно.">
-            <TextInput id="review-route-name" value={text(fields.route_name)} disabled={disabled} missing={!text(fields.route_name).trim()} danger className="font-semibold"
-              placeholder="Аяллын нэр" onChange={(e) => onChange({ ...fields, route_name: e.target.value })} />
-          </Field>
-          <Field label="Тээвэр" className="sm:col-span-2" hint={itinerary.length ? undefined : "Хөтөлбөр алга тул тээврийг сонгох боломжгүй. Хөтөлбөртэй болмогц сонгоно."}>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup" aria-label="Тээврийн төрөл">
-              {TRANSPORT_TYPES.map((type) => {
-                const on = transport === type;
-                return (
-                  <button key={type} type="button" role="radio" aria-checked={on} disabled={disabled || !itinerary.length}
-                    onClick={() => { if (!on) onChange(applyTransport(fields, type).fields); }}
-                    className={cx("rounded-md border px-3 py-2.5 text-left transition-colors disabled:opacity-60",
-                      on ? "border-brand bg-brand-soft" : "border-line-strong bg-surface hover:border-brand")}>
-                    <span className={cx("flex items-center gap-1.5 text-sm font-semibold", on ? "text-brand" : "text-ink")}>
-                      {on && <Icons.check size={12} />}{TRANSPORT_SHORT[type].label}
-                    </span>
-                    <span className="mt-0.5 block text-[13px] leading-5 text-ink-muted">{TRANSPORT_SHORT[type].hint}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </Field>
-          <Field label="Хугацаа" required missing={!text(fields.duration_text).trim()}
-            hint={itinerary.length > 0 ? (added > 0
-              ? `Файлын хөтөлбөр${programDuration ? ` (${programDuration})` : ""} хилээс эхэлдэг тул Улаанбаатараас гарах, буцах ${added} өдөр нэмэгдсэн.`
-              : "Хөтөлбөр Улаанбаатараас эхэлж Улаанбаатарт дуусдаг тул өдөр нэмээгүй.") : undefined}>
-            <DurationSteppers value={text(fields.duration_text)} disabled={disabled} missing={!text(fields.duration_text).trim()} onChange={setDuration} />
-          </Field>
-          <Field id="review-hotel" label="Зочид буудал" hint="Товч нэр: хэд хэдэн бол «А эсвэл Б» гэж бичнэ. Буудал бүрийн холбоос, зургийг доорх «Зочид буудлууд»-д нэмнэ.">
-            <TextInput id="review-hotel" value={text(fields.hotel)} disabled={disabled} placeholder="ж: 4* буудал" onChange={(e) => onChange({ ...fields, hotel: e.target.value })} />
-          </Field>
-        </div>
-        {duration.kind === "mismatch" && (
-          <Notice tone="warning">
-            Файлд <b>«{duration.written}»</b> гэж бичсэн ч хөтөлбөрт <b>{duration.programDays} өдөр</b> байна.
-            <button type="button" disabled={disabled} onClick={() => onChange(withProgramDuration(fields))}
-              className="ml-2 rounded-md bg-brand px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-brand-hover">Хөтөлбөрөөр: {duration.byProgram}</button>
-          </Notice>
-        )}
-        <Evidence quote={evidence.duration} />
-      </Group>
-
-      <Group size="section" title="Гарах өдөр ба үнэ" hint="Календариас гарах өдрөө сонгоно, сонгосон өдөр бүрийн үнэ доор гарна. Бүх өдөр ижил үнэтэй бол нэг үнэ л оруулна; өөр үнэтэй өдрийг нь тусад нь гаргана.">
-        <MultiDateCalendar selected={departures} tripDays={itinerary.length || undefined} disabled={disabled} onChange={setCalendar}
-          states={states} onStateChange={(day, next) => onChange(setDayState(fields, day, next))} />
-        {rules.length > 0 && <p className="mt-3 text-[13px] leading-5 text-ink-muted">Файлд бичсэн хуваарь: <span className="font-medium text-ink">{rules.join(", ")}</span></p>}
+      <ReviewSection target="dates" title="Гарах өдөр ба үнэ" meta={departures.length + rules.length ? `· ${departures.length + rules.length} гарах өдөр` : undefined}
+        action={(
+          <button type="button" aria-expanded={calendarOpen} onClick={() => openPart(calendarOpen ? null : "calendar")}
+            className={cx("inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors",
+              calendarOpen ? "border-brand bg-brand-soft text-brand" : "border-line-strong bg-surface text-ink hover:border-brand")}>
+            <Icons.calendar size={15} /> Огноо нэмэх, хасах
+          </button>
+        )}>
         {check.kind === "shift" && (
-          <Notice tone="warning">
+          <Notice className="mb-3 mt-0">
             Файлд <b>{formatYmd(check.departure)}</b> нь хөтөлбөрийн эхний өдөр (хил дээр). Улаанбаатараас галт тэрэг өмнөх орой нь хөдөлдөг.
             <span className="mt-2 flex flex-wrap gap-2">
-              <button type="button" disabled={disabled} onClick={() => onChange(shiftDepartureDay(fields, check.departure, check.suggested))}
-                className="rounded-md bg-brand px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-brand-hover">{formatYmd(check.suggested)}-нд Улаанбаатараас гарна</button>
-              <button type="button" disabled={disabled} onClick={() => onChange({ ...fields, extra: { ...extra, itinerary_days: itinerary.map((day) => ({ ...day, date: "" })) } })}
-                className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-[13px] font-medium text-ink hover:border-brand">{formatYmd(check.departure)} хэвээр</button>
+              <button type="button" disabled={disabled} onClick={() => onChange(shiftDepartureDay(fields, check.departure, check.suggested))} className={primarySmall}>
+                {formatYmd(check.suggested)}-нд Улаанбаатараас гарна
+              </button>
+              <button type="button" disabled={disabled} onClick={() => onChange({ ...fields, extra: { ...extra, itinerary_days: itinerary.map((day) => ({ ...day, date: "" })) } })} className={secondarySmall}>
+                {formatYmd(check.departure)} хэвээр
+              </button>
             </span>
           </Notice>
         )}
         {check.kind === "conflict" && (
-          <Notice tone="warning">Гарах өдөр {formatYmd(check.departure)} боловч файлд хөтөлбөрийн эхний өдрийг {formatYmd(check.programStart)} гэж бичсэн ({formatYmd(check.expected)} байх ёстой). Аль нь зөвийг шалгаад календариас засна уу.</Notice>
+          <Notice className="mb-3 mt-0">Гарах өдөр {formatYmd(check.departure)} боловч файлд хөтөлбөрийн эхний өдрийг {formatYmd(check.programStart)} гэж бичсэн ({formatYmd(check.expected)} байх ёстой). Аль нь зөвийг шалгаад календариас засна уу.</Notice>
         )}
-        {check.kind === "consistent" && (
-          <p className="mt-3 flex items-center gap-1.5 text-[13px] text-success"><Icons.check size={13} /> Файлын өдрүүдтэй таарч байна: хөтөлбөрийн эхний өдөр {formatYmd(check.programStart)}.</p>
+        {calendarOpen && (
+          <EditPanel target="calendar" title="Гарах өдрүүд" onClose={() => setOpen(null)} className="mb-4 mt-0">
+            <MultiDateCalendar selected={departures} tripDays={itinerary.length || undefined} disabled={disabled} onChange={setCalendar}
+              states={states} onStateChange={(day, next) => onChange(setDayState(fields, day, next))} />
+            {rules.length > 0 && <p className="mt-3 text-[13px] leading-5 text-ink-muted">Файлд бичсэн хуваарь: <span className="font-medium text-ink">{rules.join(", ")}</span></p>}
+            {check.kind === "consistent" && (
+              <p className="mt-3 flex items-center gap-1.5 text-[13px] text-success"><Icons.check size={13} /> Файлын өдрүүдтэй таарч байна: хөтөлбөрийн эхний өдөр {formatYmd(check.programStart)}.</p>
+            )}
+            {check.kind === "unknown" && added > 0 && departures.length > 0 && (
+              <p className="mt-3 text-[13px] leading-5 text-ink-muted">Сонгосон өдөр бол Улаанбаатараас галт тэрэг хөдлөх өдөр. Хөтөлбөрийн дараагийн өдөр ({formatYmd(addDaysYmd(departures[0], 1))}) хил давна.</p>
+            )}
+            {dateIssue && (
+              <p className="mt-3 flex items-start gap-2 text-[13px] font-medium leading-5 text-danger" role="status"><Icons.alert size={14} className="mt-0.5 shrink-0" />{dateIssue.text}{dateIssue.blocks === "publish" ? " Ноорог болгон хадгалж болно." : ""}</p>
+            )}
+            <Evidence quote={evidence.departure} />
+          </EditPanel>
         )}
-        {check.kind === "unknown" && added > 0 && departures.length > 0 && (
-          <p className="mt-3 text-[13px] leading-5 text-ink-muted">Сонгосон өдөр бол Улаанбаатараас галт тэрэг хөдлөх өдөр. Хөтөлбөрийн дараагийн өдөр ({formatYmd(addDaysYmd(departures[0], 1))}) хил давна.</p>
-        )}
-        {dateIssue && (
-          <p className="mt-3 flex items-start gap-2 text-[13px] font-medium leading-5 text-danger" role="status"><Icons.alert size={14} className="mt-0.5 shrink-0" />{dateIssue.text}{dateIssue.blocks === "publish" ? " Ноорог болгон хадгалж болно." : ""}</p>
-        )}
-        <Evidence quote={evidence.departure} />
-        <PriceSection fields={fields} onChange={onChange} />
-        <div className="mt-8 border-t border-line pt-6">
-          <h4 className="text-base font-semibold text-ink">Насны ангилал</h4>
-          <p className="mb-4 mt-1 text-[13px] leading-5 text-ink-muted">Хүүхэд, нярайн үнэ хэдэн настай хүнд хамаарахыг бичнэ. Дээрх бүх үнэнд адил хамаарна.</p>
-          <div className="grid gap-5 sm:grid-cols-3">
-            {([["adult", "Том хүн", "ж: 12+ нас"], ["child", "Хүүхэд", "ж: 2-11 нас"], ["infant", "Нярай", "ж: 0-23 сар"]] as const).map(([key, label, placeholder]) => (
-              <Field key={key} label={label}><TextInput value={text(ages[key])} disabled={disabled} placeholder={placeholder} onChange={(e) => setExtra({ age_rules: { ...ages, [key]: e.target.value } })} /></Field>
-            ))}
-          </div>
-        </div>
-      </Group>
+        <PriceSection fields={fields} onChange={onChange} showAll={showAll}
+          openCard={open?.startsWith("card:") ? open.slice(5) : null}
+          onOpenCard={(key, field) => (key ? openPart(`card:${key}`, field) : setOpen(null))}
+          extraChips={ageView.chips} onExtraChip={() => reveal("ages")}
+          below={ageView.shown.length > 0 && (
+            <div data-review-target="ages" className="mt-4 scroll-mt-24">
+              <p className="text-[13px] font-semibold text-ink-muted">Насны ангилал <span className="font-normal">· дээрх бүх үнэнд адил хамаарна</span></p>
+              <div className="mt-1 grid gap-x-4 sm:grid-cols-3">
+                {AGES.map(([key, label, placeholder]) => (
+                  <label key={key} className="flex min-w-0 items-center gap-1 text-[15px]">
+                    <span className="shrink-0 text-ink-muted">{label}</span>
+                    <GhostInput value={text(ages[key])} disabled={disabled} placeholder={placeholder} aria-label={`${label}: нас`}
+                      onChange={(e) => setExtra({ age_rules: { ...ages, [key]: e.target.value } })} />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )} />
+      </ReviewSection>
 
-      <div>
+      <div data-review-target="program" className="scroll-mt-24">
         <ItineraryTimeline
           days={itinerary.map((day, index) => ({ ...day, day: day.day ?? index + 1, title: day.title || "", description: day.description || "" }))}
           locked={isTransitDay}
           showSourceDates
           showMealNotes
           size="section"
-          title={`Өдөр тутмын хөтөлбөр · ${itinerary.length} өдөр`}
-          photoNote="Энэ өдрийн зураг. Доорх «Зураг» хэсгээс хасах эсвэл нүүр болгоно."
+          title={programTitle}
+          photoNote="Энэ өдрийн зураг. Дээрх зургууд дээр дарж хасах эсвэл нүүр болгоно."
           onChange={(days) => onChange(setProgramDays(fields, days))}
         />
-        {boundaryIssue && <Notice tone="warning">{boundaryIssue.text}</Notice>}
+        {boundaryIssue && (
+          <p className="mt-3 flex items-start gap-2 rounded-lg border border-danger/25 bg-danger-soft/60 px-4 py-3 text-sm leading-6 text-danger" role="status">
+            <Icons.alert size={15} className="mt-1 shrink-0" />{boundaryIssue.text}
+          </p>
+        )}
         <Evidence quote={evidence.meals} />
       </div>
 
-      <Group size="section" title={photos.length ? `Зураг · ${photos.length}` : "Зураг"} hint={photos.length ? "Эхнийх нь нүүр зураг. Тохирохгүй зургийг хасна — цөөн, зөв зураг нь дээр." : undefined}>
-        {photos.length > 0 ? (
-          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {photos.map((photo, index) => (
-              <li key={photo.url} className="group relative min-w-0">
-                <div className="relative overflow-hidden rounded-lg border border-line bg-surface-sunken">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={thumb(photo.url, 480, 320)} alt={photo.title || `Зураг ${index + 1}`} loading="lazy" className="aspect-[3/2] w-full object-cover" />
-                  {index === 0 && <span className="absolute left-2 top-2 rounded bg-ink/80 px-1.5 py-0.5 text-[12px] font-semibold text-white">Нүүр зураг</span>}
-                  <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-                    {index > 0 && (
-                      <button type="button" disabled={disabled} onClick={() => onChange(makeCover(fields, photo.url))} title="Нүүр зураг болгох" aria-label="Нүүр зураг болгох"
-                        className="flex h-7 items-center rounded-md bg-surface/95 px-2 text-[12px] font-semibold text-ink shadow-sm hover:bg-surface">Нүүр</button>
-                    )}
-                    <button type="button" disabled={disabled} onClick={() => onChange(removePhoto(fields, photo.url))} title="Энэ зургийг хасах" aria-label={`${photo.title || "Зураг"} хасах`}
-                      className="flex h-7 w-7 items-center justify-center rounded-md bg-surface/95 text-ink-muted shadow-sm hover:bg-danger-soft hover:text-danger">
-                      <Icons.trash size={13} />
-                    </button>
-                  </div>
-                </div>
-                <p className="mt-1.5 truncate text-[13px] font-medium text-ink" title={photo.title}>{photo.title || "Файлын зураг"}</p>
-                <p className="truncate text-[13px] text-ink-muted">{[photo.day ? `${photo.day}-р өдөр` : "", photo.author, photo.license].filter(Boolean).join(" · ") || "Таны оруулсан зураг"}</p>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyHint>Энэ аялалд тохирох зураг олдсонгүй. «Бүтэн засварлагчаар нээх» → «Зураг, бичлэг»-ээс нэмнэ.</EmptyHint>
-        )}
-        {found > 0 && <p className="mt-3 text-[13px] leading-5 text-ink-muted">{found} зургийг хөтөлбөрт нэрлэсэн газруудаар Wikimedia Commons-оос хайж олсон (зохиогч, лицензийг хадгалсан).</p>}
-      </Group>
-
-      <Group size="section" title="Зочид буудлууд" hint="Буудал бүрийн холбоос, тайлбар, зураг. Вэбсайтын «Байрлах буудал» картанд харагдана.">
-        <HotelProfilesEditor
-          profiles={profiles}
-          suggestions={hotelNamesOf(priceRows, text(fields.hotel))}
-          onChange={(next: HotelProfile[]) => setExtra({ hotel_profiles: next })}
-        />
-      </Group>
-
-      <Group size="section" title="Нөхцөл">
-        <div className="grid gap-6 sm:grid-cols-2">
-          <Field label="Үнэд багтсан"><ReviewList ariaLabel="Үнэд багтсан" addLabel="Нэмэх" tone="good" items={strings(extra.included_items)} onChange={(items) => setExtra({ included_items: items })} /></Field>
-          <Field label="Үнэд багтаагүй"><ReviewList ariaLabel="Үнэд багтаагүй" addLabel="Нэмэх" tone="bad" items={strings(extra.excluded_items)} onChange={(items) => setExtra({ excluded_items: items })} /></Field>
-          <Field label="Анхаарах зүйлс" className="sm:col-span-2" hint="Аялагчид урьдчилж мэдэх ёстой бусад зүйл, жагсаалтаар. Урьдчилгаа, виз, цуцлалтыг доорх «Бүртгэлийн нөхцөл»-д бичнэ.">
-            <ReviewList ariaLabel="Анхаарах зүйл" addLabel="Нэмэх" items={strings(extra.important_notes)} onChange={(items) => setExtra({ important_notes: items })} />
-          </Field>
-        </div>
-        <div className="mt-8 border-t border-line pt-6">
-          <h4 className="text-base font-semibold text-ink">Бүртгэлийн нөхцөл</h4>
-          <p className="mb-4 mt-1 text-[13px] leading-5 text-ink-muted">Бот «урьдчилгаа хэд вэ?», «виз хэрэгтэй юу?» зэрэг асуултад эндээс хариулна. Хоосон үлдвэл бот тэр асуултад хариулахгүй. Файлд бичсэн валютаар нь бичнэ.</p>
-          <div className="grid gap-5 sm:grid-cols-2">
-            {TERMS.map(([key, label, placeholder]) => (
-              <Field key={key} label={label}>
-                <TextInput value={text(terms[key])} disabled={disabled} placeholder={placeholder} onChange={(e) => setExtra({ booking_terms: { deposit: "", payment: "", documents: "", visa: "", cancellation: "", ...terms, [key]: e.target.value } })} />
-              </Field>
-            ))}
-          </div>
-        </div>
-      </Group>
-
-      <Group size="section" title="Вэбсайтын бичвэр">
-        <div className="grid gap-6">
-          <Field label="Картанд гарах товч" hint="Сайтын аяллын жагсаалтын картанд гарах 1-2 өгүүлбэр: үзэх газрууд, онцлог. Огноо, үнэ бичихгүй.">
-            <TextArea value={text(extra.website_summary)} disabled={disabled} placeholder="ж: Далайн эрэг, усан парк, шилэн гүүр — гэр бүлээрээ амрах аялал." onChange={(e) => setExtra({ website_summary: e.target.value })} />
-          </Field>
-          <Field label="Хуудсанд гарах тайлбар" hint="Аяллын хуудсанд тайлбар болж харагдана. Бүтэн өгүүлбэрээр бичнэ. Заавал биш.">
-            <TextArea value={text(fields.notes)} disabled={disabled} placeholder="заавал биш" onChange={(e) => onChange({ ...fields, notes: e.target.value })} />
-          </Field>
-        </div>
-      </Group>
+      <IncludedSection fields={fields} onChange={onChange} onReveal={reveal} show={show} disabled={disabled} />
+      <HotelsSection fields={fields} onChange={onChange} onReveal={reveal} show={show} disabled={disabled}
+        open={open === "profiles"} onOpen={(next) => setOpen(next ? "profiles" : null)} />
+      <ConditionsSection fields={fields} onChange={onChange} onReveal={reveal} show={show} disabled={disabled} />
     </fieldset>
   );
 }

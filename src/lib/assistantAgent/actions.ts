@@ -23,6 +23,7 @@ import { dateStateProblem, dateStatusOf, expandFareChangeAll, fareChangeOf, part
 import { PARTNER_EDIT_REASON, partnerSourceUrl } from "../tripDatePrice";
 import { isHostedPhotoUrl } from "../tripPhotoEdit";
 import { addDepartureDates, removeDepartureDates } from "../tripScheduleChange";
+import { prunePastDepartureDates, type ResolvedDepartureDate } from "../travelDates";
 import type { AIChangeProposal, AITripAction, ConflictItem, TravelTrip, TripMutationFields } from "../travelTypes";
 import { tripDepartures } from "./readTools";
 
@@ -333,6 +334,22 @@ export function buildAgentProposal(rawActions: unknown, replyText: string, ctx: 
     if (!("customer_visible" in extra)) patch.summary = `${patch.summary}; ${visibility.visible ? "Сайт, ботод харуулна" : "Сайт, ботоос нууна"}`;
     patch.fields = { ...record(patch.fields), extra: { ...extra, customer_visible: visibility.visible } };
     actions.splice(actions.indexOf(visibility), 1);
+  }
+  // Going live needs a departure still ahead: a trip whose dates have all passed is archived again
+  // the moment it is read (tripScheduleMaintenance), and the admin was told "saved" with a link to a
+  // page that never came back (2026-11-11). Dates added in the same message count.
+  for (const action of [...actions]) {
+    const fields = record(action.fields);
+    const activates = action.action === "patch" && (text(fields.status) === "active" || record(fields.extra).customer_visible === true);
+    const trip = byId.get(action.trip_id);
+    if (!activates || !trip || (trip.status === "active" && text(fields.status) !== "active")) continue;
+    const dated = actions.filter((other) => other.trip_id === trip.id).map((other) => record(other.fields).departure_dates).find(Array.isArray) as string[] | undefined;
+    const dates = dated ?? trip.departure_dates;
+    const resolved = dated ? undefined : (trip.extra?.departure_dates_resolved as ResolvedDepartureDate[] | undefined);
+    if (dates.length && prunePastDepartureDates(dates, ctx.now, resolved).dates.length) continue;
+    actions.splice(actions.indexOf(action), 1);
+    const last = dates.length ? ` (сүүлийн огноо: ${dates.slice(-3).join(", ")})` : "";
+    refusals.push(`«${trip.route_name}»: гарах өдөр нь бүгд өнгөрсөн${last} тул идэвхжүүлбэл систем шууд дахин архивлана. Эхлээд шинэ огноо нэмээрэй, ж: «${trip.route_name} 12/5, 12/12-нд гарна» — тэгвэл өөрөө идэвхжиж сайтад гарна.`);
   }
   // A day's state is written on the website and leaves the trip's version as it was; saved first,
   // it never makes a later edit of the same trip look "changed since the proposal".

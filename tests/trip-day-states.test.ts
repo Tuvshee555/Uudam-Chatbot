@@ -24,6 +24,7 @@ test("a row's words become a state: full, few seats with the count, open with a 
   assert.deepEqual(rowDayState({ status: "almost_full", seats_left: 4 }), { state: "low", seats: 4 });
   assert.deepEqual(rowDayState({ seats_left: 0 }), { state: "full", seats: null });
   assert.deepEqual(rowDayState({ seats_left: 12 }), { state: "open", seats: 12 });
+  assert.deepEqual(rowDayState({ status: "almost_full", seats_left: 12 }), { state: "open", seats: 12 }, "12 left is not few");
   assert.equal(rowDayState({}), null);
 });
 

@@ -195,7 +195,10 @@ export function tripDetailView(trip: TravelTrip, now: Date, poster: PosterPhotoV
     visible_on_site: isVisible(trip),
     website: {
       published: trip.extra?.website_published === true,
-      link: slug ? `${BOOKING_WEBSITE_URL}/mn/trips/${encodeURIComponent(slug)}` : null,
+      // An unpublished page answers "not found": its address is never handed out as a link (2026-11-11,
+      // an archived trip's link was given and the owner found a dead page).
+      link: slug && trip.extra?.website_published === true ? `${BOOKING_WEBSITE_URL}/mn/trips/${encodeURIComponent(slug)}` : null,
+      ...(slug && trip.extra?.website_published !== true ? { link_note: "Сайтад нийтлэгдээгүй — хуудас нь «олдсонгүй» гэж харагдана. Холбоос бүү өг." } : {}),
       slug: slug || null,
       generated_slug: hashedSlugFor(trip.id),
     },

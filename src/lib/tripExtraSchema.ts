@@ -55,6 +55,10 @@ const KNOWN_EXTRA_KEYS = new Set([
   "hotel_profiles",
   "hotel_links",
   "package_options",
+  // The partner page a trip was made from (assistant link → new trip) and when it was read;
+  // the partner watch (src/lib/partnerWatch) checks that page again.
+  "source_url",
+  "source_checked_at",
 ]);
 
 /**
@@ -369,6 +373,12 @@ export function statedDayMeals(meals: unknown, mealNote?: unknown): StatedDayMea
   return { breakfast: state(day.breakfast), lunch: state(day.lunch), dinner: state(day.dinner) };
 }
 
+/** An ISO date-time ("2026-11-11T06:00:00.000Z"), or "" for anything else. */
+function isoTimestamp(value: unknown): string {
+  const text = asString(value).trim();
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text) && Number.isFinite(Date.parse(text)) ? new Date(text).toISOString() : "";
+}
+
 /**
  * A hotel link a customer may be sent to, or a hotel photo: https only. The website's hotel cards,
  * the bot's hotel answer and the AI catalogue show nothing else, so an "http:" link (or
@@ -575,6 +585,8 @@ export function normalizeExtra(
     ...optionalList(raw, "hotel_profiles", warnings, normalizeHotelProfiles),
     ...optionalList(raw, "hotel_links", warnings, normalizeHotelLinks),
     ...optionalList(raw, "package_options", warnings, normalizePackageOptions),
+    ...(httpsLink(raw.source_url) ? { source_url: httpsLink(raw.source_url) } : {}),
+    ...(isoTimestamp(raw.source_checked_at) ? { source_checked_at: isoTimestamp(raw.source_checked_at) } : {}),
   };
 
   return { extra, warnings };

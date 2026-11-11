@@ -429,7 +429,7 @@ export function ProposalCard({
         {showSummary && <p className="mt-1 text-sm leading-6 text-ink-muted">{summary}</p>}
         {reviewing && (
           <p className="mt-2 text-[15px] leading-6 text-ink">
-            Файлаас уншсан мэдээлэл доор байна. Зөв бол шууд хадгална, буруу зүйлийг л дарж засна.
+            Аялал сайт дээр ингэж харагдана. Зөв бол шууд хадгална, буруу зүйл дээр нь дарж засна.
           </p>
         )}
         {message.sourceNames && message.sourceNames.length > 0 && (

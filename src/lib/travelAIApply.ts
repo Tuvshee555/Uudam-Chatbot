@@ -20,7 +20,7 @@
 import { logError, logWarn } from "./observability";
 import { queryNeon } from "./neonDb";
 import type { AIChangeProposal, AITripAction, DateSeatState, DepartureDateState, TravelTrip, TripMutationFields } from "./travelTypes";
-import { ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, isDateSeatState } from "./travelDb";
+import { ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, isDateSeatState, sanitizeTripScheduleForCurrentDate } from "./travelDb";
 import { instructionForbidsTripCreation, validateAIChangeProposal } from "./travelAIValidation";
 import { attachPersistedPhotoSources, changeRequestId } from "./travelAI";
 import { PUBLISH_PRICE_TEXT, publishPriceGap, withoutReviewOnly } from "./tripReview";
@@ -525,7 +525,9 @@ export async function linksForSnapshots(snapshots: AIActionSnapshot[]): Promise<
         if (!read.has(snapshot.trip_id)) read.set(snapshot.trip_id, await deps.getTripById(snapshot.trip_id));
         trip = read.get(snapshot.trip_id) ?? null;
       }
-      if (trip) saved.push({ trip, created: snapshot.created, slugHint: snapshot.website_slug });
+      // As the trip stands once its dates are checked: a trip whose dates have all passed is archived on
+      // read, and its link would lead to a page that is not there.
+      if (trip) saved.push({ trip: sanitizeTripScheduleForCurrentDate(trip).trip, created: snapshot.created, slugHint: snapshot.website_slug });
     }
     if (!saved.length) return [];
     const synced = await deps.readWebsiteSlugs(saved.map((entry) => entry.trip.id)).catch(() => ({}));

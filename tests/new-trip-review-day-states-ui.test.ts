@@ -41,7 +41,11 @@ test("a typed seat count is a whole number of at least 1, else no count", () => 
 });
 
 test("the calendar's chips and days carry the state; a full day stays selected", () => {
-  const html = renderToStaticMarkup(createElement(NewTripReview, { fields: trip({ [D2]: { state: "low", seats: 4 }, [D3]: { state: "full", seats: null } }), onChange: noop, warnings: [] }));
+  const fields = trip({ [D2]: { state: "low", seats: 4 }, [D3]: { state: "full", seats: null } });
+  // The table's days say it without opening anything (2026-11-11: the calendar opens from «Огноо нэмэх, хасах»).
+  const closed = plain(renderToStaticMarkup(createElement(NewTripReview, { fields, onChange: noop, warnings: [] })));
+  assert.ok(closed.includes("4 суудал") && closed.includes("Дүүрсэн"), "the table's days carry the state");
+  const html = renderToStaticMarkup(createElement(NewTripReview, { fields, onChange: noop, warnings: [], initialOpen: "calendar" }));
   const text = plain(html);
   assert.ok(text.includes("Сонгосон 3 өдөр"), "the full day is still one of the selected days");
   assert.ok(text.includes("4 суудал") && text.includes("Дүүрсэн"));
@@ -54,6 +58,6 @@ test("the price card's day chips show the same state and the price stays", () =>
   const html = renderToStaticMarkup(createElement(PriceSection, { fields: trip({ [D3]: { state: "full", seats: null } }), onChange: noop }));
   const text = plain(html);
   assert.ok(text.includes("Дүүрсэн"));
-  assert.ok(html.includes('value="2,190,000"'), "the full day keeps its fare");
+  assert.ok(text.includes("2,190,000₮"), "the full day keeps its fare");
   assert.equal((text.match(/Цөөн суудал|суудал /g) || []).length, 0, "no badge on the open days");
 });

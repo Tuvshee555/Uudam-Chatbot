@@ -662,7 +662,11 @@ export default function AdminPage() {
    * flow is the save path, this only gets them to a pre-filled box faster.
    */
   function askAiAboutTrip(tripName: string) {
-    setAiInput(`"${tripName}" аяллыг `);
+    askAiWith(`"${tripName}" аяллыг `);
+  }
+  /** The AI туслах tab with this instruction in the box, ready to review and send (the «Тойм» partner-page card). */
+  function askAiWith(instruction: string) {
+    setAiInput(instruction);
     selectAdminTab("assistant");
     requestAnimationFrame(() => {
       const el = inputRef.current;
@@ -1096,7 +1100,7 @@ export default function AdminPage() {
             />
           )}
           {tab === "analytics" && (
-            <AnalyticsTab apiFetch={fetchWithAdmin} onNavigate={selectAdminTab} onUnauthorized={markAdminLocked} />
+            <AnalyticsTab apiFetch={fetchWithAdmin} onNavigate={selectAdminTab} onUnauthorized={markAdminLocked} onAskAssistant={askAiWith} />
           )}
           {tab === "flow" && (
             <FlowBuilderTab

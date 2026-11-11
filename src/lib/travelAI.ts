@@ -126,9 +126,18 @@ const MAX_TEXT_CHARS_PER_BATCH = 18_000;
 const MAX_TRIPS_PER_CHUNK = 4;
 
 /** Counts numbered-heading lines ("1.", "2.", "12)") in the text. */
+/**
+ * Numbered lines that start a trip block ("1. ХАЙНАН…"). A numbered TABLE row ("1. | Дүүрсэн | 12 сарын 11 | …")
+ * is one departure of the same trip, never a new trip: counting those split one partner page into half-trips.
+ */
+function tripHeadingLines(text: string): number[] {
+  return [...text.matchAll(/(^|\n)[ \t]*\d{1,2}[.)][^\n]*/g)]
+    .filter((match) => !match[0].includes("|"))
+    .map((match) => (match.index ?? 0) + match[1].length);
+}
+
 function countNumberedTrips(text: string): number {
-  const matches = text.match(/(?:^|\n)[ \t]*\d{1,2}[.)]/g);
-  return matches ? matches.length : 0;
+  return tripHeadingLines(text).length;
 }
 
 function sourceDigits(text: string): string {
@@ -277,13 +286,8 @@ export function enforceTextSourceEvidence(
 function splitTextIntoChunks(text: string, maxChars: number): string[] {
   // Collect positions of numbered headings (each starts a new trip block)
   const positions: number[] = [0];
-  const re = /\n[ \t]*\d{1,2}[.)]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const pos = m.index + 1; // position right after the \n
-    if (pos - positions[positions.length - 1] > 100) {
-      positions.push(pos);
-    }
+  for (const pos of tripHeadingLines(text)) {
+    if (pos > 0 && pos - positions[positions.length - 1] > 100) positions.push(pos);
   }
 
   // No numbered structure → fall back to plain char slicing.
@@ -343,8 +347,11 @@ function splitLargeTextSources(
   for (const source of sources) {
     const text = source.contentText ?? "";
     const tripCount = countNumberedTrips(text);
+    // One web page is one source (readWebPage caps it at 20,000 characters): cut in two, each half was read
+    // as its own trip with part of the schedule (2026-11-11).
+    const webPage = /^https?:\/\//i.test(source.label.trim());
     const needsSplit =
-      !source.inline &&
+      !source.inline && !webPage &&
       (text.length > MAX_TEXT_CHARS_PER_BATCH || tripCount > MAX_TRIPS_PER_CHUNK);
 
     if (needsSplit) {

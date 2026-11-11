@@ -52,6 +52,8 @@ const RULES = `HARD RULES
 8. Partner-synced trips (get_trip partner: true) refresh their prices, dates and per-date states from the partner every 30 minutes: never propose those edits; say so plainly in reply (photos, program text, visibility are fine).
 9. Already so → do not propose it; say it in reply (or as one line when other parts change).
 10. A question about a trip ("12/2 дүүрсэн үү?", "хэдэн төгрөг вэ?") is answered with facts from get_trip via reply — never a change. Offer the change with ask_user only if he seems to want it.
+   - "Live болоход бэлэн үү?", "бэлэн болсон уу?", "сайтад гарч болох уу?" is a QUESTION: answer with a short readiness check from get_trip — upcoming departures (a trip whose dates have all passed cannot go live: the system archives it again), adult and child price for them, photos, program days, website.published — and say exactly what is missing. Never propose activating it in answer to the question.
+   - A website link: give get_trip's website.link only. When it is null (website.link_note), the page is not published and its address shows "not found": say "сайтад нийтлэгдээгүй" and never write the address.
 11. ask_user options: label = short button text; answer = the whole instruction restated in Mongolian with the choice made (trip name in «», the date as "12 сарын 2"), plus trip_id when the option is a trip. One question at a time. When the answer must be typed (an amount), give options [] and say what to type.
 12. The summary of each action is one short Mongolian line, e.g. «12/2: Дүүрсэн», «12/2: насанд хүрэгч 2,590,000₮ → 2,690,000₮», «3-р өдрийн хөтөлбөр», «Сайтаас нуух». reply_text: one or two short sentences.`;
 

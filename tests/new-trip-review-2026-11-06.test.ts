@@ -195,7 +195,8 @@ test("the saved bar gets each saved trip's public page; a draft or hidden trip g
 
   const apply = await import("../src/lib/travelAIApply");
   apply.setAIApplyDepsForTests({
-    getTripById: async (id) => ({ id, route_name: "ЛУМИА", status: "active", extra: {} }) as never,
+    // A live trip has a departure ahead (one without dates is archived on read and has no page).
+    getTripById: async (id) => ({ id, route_name: "ЛУМИА", status: "active", departure_dates: ["2099-01-10"], extra: {} }) as never,
     readWebsiteSlugs: async (ids) => Object.fromEntries(ids.map((id) => [id, { slug: `slug-${id}`, pending: false }])),
   });
   try {
