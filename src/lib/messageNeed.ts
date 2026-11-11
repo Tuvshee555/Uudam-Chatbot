@@ -12,12 +12,13 @@
  * count under a trip card, "2 том 2 хүүхэд", a trip question that merely contains a thanks word)
  * keeps today's path. Words are matched in Cyrillic and in the Latin spellings customers type.
  */
-import { normText } from "./travelTextNorm";
+import { normText, phoneticLatinText } from "./travelTextNorm";
 import { isBookingStatusQuestion } from "./bookedFollowup";
 import { isThanksOnly } from "./greetingPhrases";
 import { isGroupInquiryReply } from "./groupInquiry";
 
-export const MESSAGE_NEEDS = ["social", "business_group", "commercial_policy", "transport_only", "existing_booking", "complaint"] as const;
+/** "policy" (visa, passport, insurance, travel documents) was added 2026-11-11 at the END, so every older value keeps its meaning. */
+export const MESSAGE_NEEDS = ["social", "business_group", "commercial_policy", "transport_only", "existing_booking", "complaint", "policy"] as const;
 export type MessageNeed = (typeof MESSAGE_NEEDS)[number];
 /** thanks/praise get a short warm line; an acknowledgement or farewell is met with silence. */
 export type SocialKind = "thanks" | "praise" | "ack" | "farewell";
@@ -38,7 +39,15 @@ export type NeedConstraints = {
 export type NeedContext = {
   /** The bot's last reply in this conversation, when there is one. */
   lastBotReply?: string | null;
+  /**
+   * Whether a trip is under discussion (a selected trip or offered candidates). Only an explicit false lets a bare
+   * discount question ("Хөнгөлөлт байдаг уу") be read as commercial policy; unknown keeps today's trip path.
+   */
+  hasTripContext?: boolean;
 };
+
+/** Travel-document terms a policy question asks about (visa, passport / documents, insurance). */
+export type PolicyTerm = "visa" | "documents" | "insurance";
 
 export type MessageNeedResult = {
   need: MessageNeed;
@@ -55,6 +64,21 @@ function prepare(text: string): Prepared {
   const raw = (text || "").toLowerCase().normalize("NFKC");
   const norm = normText(raw).replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
   return { raw, norm, tokens: norm ? norm.split(" ") : [] };
+}
+
+/** The same words in phonetic space: Cyrillic and Latin-typed Mongolian meet ("tsutslah" and "цуцлах" both read "cuclah"). */
+function phonetic(p: Prepared): string {
+  return phoneticLatinText(p.norm);
+}
+
+/** "Сайн байна уу.", "Sain bnuu,", "Hi!" opening a longer message: a greeting's "уу" is not a question. */
+const LEADING_GREETING = /^\s*(?:(?:сайн|сн)\s*(?:б(?:ай)?н(?:а)?\s*)?у+|сайн\s+байцгаана\s+уу|(?:sain|sn)\s*(?:b(?:ai)?n(?:a)?\s*)?u+|hi|hello|hey|өдрийн\s+мэнд|оройн\s+мэнд|өглөөний\s+мэнд|мэнд\s+хүргэе|мэндчилье)(?=[\s,.!?？…]|$)[\s,.!?？…🙏😊👋]*/u;
+
+/** The message without its opening greeting, or null when there is none (or nothing follows it). */
+function withoutLeadingGreeting(p: Prepared): Prepared | null {
+  const rest = p.raw.replace(LEADING_GREETING, "");
+  if (rest === p.raw || !rest.trim()) return null;
+  return prepare(rest);
 }
 
 // ── shared building blocks ───────────────────────────────────────────────────────────────────────
@@ -143,7 +167,7 @@ function orgHits(p: Prepared): { strong: boolean; weak: boolean } {
 }
 
 const TRAVEL_CUE = /(?:^|\s)(?:аял\p{L}*|ayl\p{L}*|яв\p{L}*|yav\p{L}*|yaw\p{L}*|ywa\p{L}*|тур|tour|trip|travel|амрал\p{L}*|амрах|amral\p{L}*|хөтөлбөр\p{L}*|маршрут\p{L}*|marsh?rut\p{L}*|нислэг\p{L}*|багц\p{L}*)(?=\s|$)/u;
-const DISCOUNT_CUE = /хямдр|хөнгөлөлт|hymdr|hamdr|hyamdr|hongol|hungul|discount|урамшуул/u;
+const DISCOUNT_CUE = /хямдр|хөнгөлөлт|hymdr|hamdr|hyamdr|hongol|hungul|discount|урамшуул|uramsh?uul/u;
 
 /** A route/programme the customer wants made for them, or a quote outside the standard programmes. */
 const CUSTOM_MARKERS: RegExp[] = [
@@ -183,10 +207,44 @@ const DELIVER = /хүргэж\s+(?:өг|өгч|өгөх|өгөөч)|hurgej\s+ug/
 const MOVEMENT = /(?:^|\s)\p{L}*(?:хүртэл|руу|луу|рүү|хилээс|орох|ирэх|буцах|гарах|aas|ees|ruu|luu|hurtel|orah|irah|butsah)(?=\s|$)|\p{L}+(?:аас|ээс|оос|өөс)(?=\s|$)/u;
 const HOTEL_ONLY = /буудал\s+(?:захиал|авах)|buudal\s+(?:zahial|avah)/u;
 
+/**
+ * A group of 10+ that wants its own route: "шууд X руу" (straight there), "зөвхөн X" (only X), "бусад хотыг үзэхгүй",
+ * "өөр хот үзэхгүй", "X, Y хэрэггүй". Read in phonetic space, so "shuud", "zuvhun", "uzehgui", "hereggui" match too.
+ * "шууд нислэг" (a direct-flight trip) is a kind of trip, not a custom route.
+ */
+const ROUTE_EXCLUSIVITY = /(?:^|\s)(?:uzehgui|uzexgui|uzhgui|uzehgvi|uzhgvi|uzehguigeer|ocihgui|ocixgui|hereggui|heregui|herggui|zovhon|zuvhun|zuvhon|zovhun|zuvhn|zovhn)(?=\s|$)|(?:^|\s)suud\s+(?!nisl|ongoc)\p{L}/u;
+
+// ── travel documents: visa, passport, insurance ──────────────────────────────────────────────────
+
+/** Phonetic space: "виз", "viz", "visa", "паспорт", "pasport", "даатгал", "daatgal", "бичиг баримт", "bichig barimt". */
+const POLICY_TERMS: Array<[PolicyTerm, RegExp]> = [
+  ["visa", /(?:^|\s)(?:viz|visa|viza|vizz)\p{L}*/u],
+  ["documents", /(?:^|\s)(?:pasport|passport|paspor|pasprt)\p{L}*|(?:^|\s)bicig\s+barimt\p{L}*|(?:^|\s)documents?(?=\s|$)/u],
+  ["insurance", /(?:^|\s)(?:daatgal|datgal|daatgl|insurance)\p{L}*/u],
+];
+/** "Do I need it / is it required": a policy question even without a question particle. */
+const POLICY_NEED_CUE = /(?:^|\s)(?:heregtei|heregte|hergtei|saardlagatai|saardlaga|hereg\s+bolo|required|need|needed)\p{L}*/u;
+/** A visa-free trip search ("визгүй аялал") is a catalogue question, not a document rule. */
+const VISA_FREE = /(?:^|\s)(?:vizgui|visagui|visa\s+free|visa-free)(?=\s|$)/u;
+/** Other trip content in the same message keeps the ordinary path (it may answer the rest from the trip data). */
+const OTHER_TRIP_CONTENT = /(?:^|\s)(?:une\p{L}*|uni|unin|heze|ognoo\p{L}*|hutulbur\p{L}*|honog\p{L}*|buudal\p{L}*|nisleg\p{L}*|seats?|suudal\p{L}*)(?=\s|$)/u;
+
 // ── existing booking ─────────────────────────────────────────────────────────────────────────────
 
 const OWN_BOOKING = /захиалгаа|захиалга\s*(?:маань|минь|чинь)|миний\s+захиалга|захиалсан|захиалчихсан|захиалж\s+авсан|захиалгын\s+(?:дугаар|төлөв|мэдээлэл)|zahialgaa|zahialga\s*(?:maani|mini|minii)|minii\s+zahialga|zahialsan|zahialchihsan|my\s+(?:booking|reservation|order)/u;
 const BOOKING_ACTION = /цуцл|цуцал|cuclah|cancel|буцаан\s+(?:ав|олго)\p{L}*|буцаалт|мөнгө\s+буцаа|refund|өөрчил|өөрчл|хойшлуул|шилжүүл|reschedule|баталгаажс|баталгаажл|баталгаажуулс|батлагд|батлуулс|юу\s+болсон|яасан|хаана\s+явна|ямар\s+байдалтай|төлөв|batalgaajs|batlagd|yu\s+bolson|uurchl|oorchl|urchl|hoishluul|status/u;
+/**
+ * The same two families in phonetic space, so Latin spellings and typos meet the Cyrillic forms: "zahialgaa tsutslah uu",
+ * "zakhialgaa tsuclax", "zahialga maani hoishluulj bolh uu".
+ */
+const OWN_BOOKING_PHONETIC = /(?:^|\s)(?:zahialgaa\p{L}*|zahialga\s*(?:mani|mini|cini)|zahialgin\s+(?:dugaar|tolov|medel)\p{L}*|zahialsan|zahialcihsan|zahialcisan|zahialj\s+avsan)(?=\s|$)|(?:^|\s)(?:mini|bidni|manai)\s+zahialg\p{L}*/u;
+const BOOKING_ACTION_PHONETIC = /(?:^|\s)(?:cucl|cucal|cuctl|cancel|refund|bucaalt|hoisl|uurcl|urcl|orcl|siljul|batalgaajs|batalgaajl|batalgaajuls|batlagd)\p{L}*|bucaan\s+(?:av|olg)\p{L}*|mongo\s+buca\p{L}*/u;
+/**
+ * A booking the customer already made, then a question about it: "Миний захиалсан аялал хэзээ гарах вэ", "bid zahialsan
+ * ayalaa hezee garah ve". Phonetic space. "захиалсан бол" (if I book) is hypothetical, not a booking made.
+ */
+const OWN_PAST_BOOKING = /(?:^|\s)(?:mini|bidni|manai|bi|bid)\s+(?:\p{L}+\s+)?(?:zahialsan|zahialcihsan|zahialcisan|zahialj\s+avsan)(?=\s|$)|(?:^|\s)(?:zahialsan|zahialcihsan|zahialcisan)\s+(?:aalal|ayalal|ayal|aylal|tiz|bilet|suudal)\p{L}*|(?:^|\s)(?:mini|bidni)\s+zahialga\p{L}*/u;
+const HYPOTHETICAL_BOOKING = /zahialsan\s+bol|zahialbal|zahialval|zahialahad/u;
 
 // ── complaint ────────────────────────────────────────────────────────────────────────────────────
 
@@ -211,7 +269,10 @@ const CLOSE_PHRASE = /бодоод\s+үзье|бодож\s+үзье|бодоод
 const FAREWELL = /баяртай|bayartai|\bbye\b|goodbye|сайхан\s+амраарай|сайхан\s+өнгөрүүлээрэй|амжилт\s+хүсье|амжилт\s+хүсэе/u;
 const CONTENT_NOUN = /(?:^|\s)(?:үнэ|хөтөлбөр\p{L}*|огноо|зураг|буудал|нислэг|мэдээлэл|захиалга\p{L}*|une|hutulbur)(?=\s|$)/u;
 
-function socialKind(p: Prepared): SocialKind | null {
+function socialKind(prepared: Prepared): SocialKind | null {
+  // "Сайн байна уу. ... баярлалаа.": the greeting that opens a thank-you does not make it a question; a real
+  // question in the rest still does.
+  const p = withoutLeadingGreeting(prepared) ?? prepared;
   const text = p.norm;
   // "thank u": the "u" is not the question particle "уу".
   const unthanked = prepare(p.raw.replace(/\bthank(?:s)?\s+(?:you|u|ya)\b/giu, "thanks"));
@@ -297,7 +358,7 @@ export function needCueMatches(need: MessageNeed, span: string, wholeText = span
   switch (need) {
     case "social": {
       // A social close asks nothing: a thanks word inside a question is not one.
-      const whole = prepare(wholeText);
+      const whole = withoutLeadingGreeting(prepare(wholeText)) ?? prepare(wholeText);
       if (asksSomething(whole) || REQUEST_VERB.test(whole.norm)) return false;
       return p.tokens.some((token) => THANKS_TOKEN.test(token) || ACK_WORDS.has(token)) || FAREWELL.test(p.norm) || (PRAISE_WORD.test(p.norm) && PAST_MARK.test(p.norm));
     }
@@ -310,9 +371,12 @@ export function needCueMatches(need: MessageNeed, span: string, wholeText = span
     case "transport_only":
       return p.tokens.some((token) => TICKET_TOKEN.test(token)) || PICKUP.test(p.norm) || DELIVER.test(p.norm) || HOTEL_ONLY.test(p.norm);
     case "existing_booking":
-      return OWN_BOOKING.test(p.norm) || BOOKING_ACTION.test(p.norm) || isBookingStatusQuestion(span);
+      return OWN_BOOKING.test(p.norm) || BOOKING_ACTION.test(p.norm) || isBookingStatusQuestion(span)
+        || OWN_BOOKING_PHONETIC.test(phonetic(p)) || BOOKING_ACTION_PHONETIC.test(phonetic(p));
     case "complaint":
       return COMPLAINT_NOUN.test(p.norm) || COMPLAINT_STRONG.test(p.norm) || (PAST_MARK.test(p.norm) && /муу|муухай/u.test(p.norm));
+    case "policy":
+      return POLICY_TERMS.some(([, pattern]) => pattern.test(phonetic(p)));
   }
 }
 
@@ -331,7 +395,8 @@ export function commercialSignalCovered(signals: readonly string[], ownerText: s
       case "contract": return CONTRACT.test(p.norm);
       case "instalment": return INSTALMENT.test(p.norm);
       case "card": return CARD_PAY.test(p.norm);
-      case "group_discount": return DISCOUNT_CUE.test(p.norm);
+      case "group_discount":
+      case "discount": return DISCOUNT_CUE.test(p.norm);
       default: return false;
     }
   });
@@ -353,6 +418,12 @@ function organisedGroup(p: Prepared, size: number | null): string[] | null {
   return null;
 }
 
+/** A group of 10+ wanting its own route ("20 hun shuud yavmaar bn, busad hotiig uzehgui"): a custom ask, never a fare card. */
+function groupCustomRoute(p: Prepared, size: number | null): string[] | null {
+  if (size === null || size < 10) return null;
+  return ROUTE_EXCLUSIVITY.test(phonetic(p)) ? ["custom_route", `headcount:${size}`] : null;
+}
+
 /** Looser group / bespoke shapes, tried after the commercial terms (a bare "бартер" is not a trip request). */
 function bespokeTravel(p: Prepared): string[] | null {
   const org = orgHits(p);
@@ -372,7 +443,19 @@ function bespokeTravel(p: Prepared): string[] | null {
   return null;
 }
 
-function commercialPolicy(p: Prepared, size: number | null): string[] | null {
+/** Age words: a child or infant discount is the trip's own child fare, a trip question. */
+const AGE_WORD = /хүүхд|хүүхэд|huuhd|huuhed|нярай|nyarai|child|infant|kid/u;
+
+/**
+ * "Хөнгөлөлт байдаг уу", "hymdral bga yu" with no trip under discussion: a discount policy question. Under a trip card
+ * it is that trip's discount (the existing data path), so it is read only when the webhook says there is no trip context.
+ */
+function bareDiscountQuestion(p: Prepared, context: NeedContext): boolean {
+  if (context.hasTripContext !== false || /₮/u.test(context.lastBotReply || "")) return false;
+  return DISCOUNT_CUE.test(p.norm) && asksSomething(p) && p.tokens.length <= 8 && !TRAVEL_CUE.test(p.norm) && !AGE_WORD.test(p.norm);
+}
+
+function commercialPolicy(p: Prepared, size: number | null, context: NeedContext = {}): string[] | null {
   const signals: string[] = [];
   if (BARTER.test(p.norm)) signals.push("barter");
   if (INVOICE.test(p.norm)) signals.push("invoice");
@@ -380,6 +463,7 @@ function commercialPolicy(p: Prepared, size: number | null): string[] | null {
   if (INSTALMENT.test(p.norm) && PAY_CUE.test(p.norm)) signals.push("instalment");
   if (CARD_PAY.test(p.norm)) signals.push("card");
   if (!signals.length && DISCOUNT_CUE.test(p.norm) && (GROUP_WORD.test(p.norm) || (size !== null && size >= 10)) && !orgHits(p).strong) signals.push("group_discount");
+  if (!signals.length && bareDiscountQuestion(p, context)) signals.push("discount");
   return signals.length ? signals : null;
 }
 
@@ -394,9 +478,32 @@ function transportOnly(p: Prepared): string[] | null {
 }
 
 function existingBooking(p: Prepared, text: string): string[] | null {
-  if (OWN_BOOKING.test(p.norm) && BOOKING_ACTION.test(p.norm)) return ["own_booking", "action"];
+  const ph = phonetic(p);
+  if ((OWN_BOOKING.test(p.norm) || OWN_BOOKING_PHONETIC.test(ph)) && (BOOKING_ACTION.test(p.norm) || BOOKING_ACTION_PHONETIC.test(ph))) return ["own_booking", "action"];
   if (isBookingStatusQuestion(text)) return ["status_question"];
+  if (OWN_PAST_BOOKING.test(ph) && !HYPOTHETICAL_BOOKING.test(ph) && asksSomething(p)) return ["own_booking", "own_booking_question"];
   return null;
+}
+
+/**
+ * Visa / passport / insurance / document rules asked without other trip content and with no trip under discussion.
+ * Under a trip card it is that trip's booking terms (the answer plan answers from them or hands off), so it is left to the
+ * pipeline; needDispatch.ts also steps aside when the message names exactly one trip. Otherwise nobody in the data knows.
+ */
+function travelPolicy(p: Prepared, context: NeedContext): string[] | null {
+  if (context.hasTripContext === true || /₮/u.test(context.lastBotReply || "")) return null;
+  const ph = phonetic(p);
+  const terms = POLICY_TERMS.filter(([, pattern]) => pattern.test(ph)).map(([term]) => term);
+  if (!terms.length || VISA_FREE.test(ph) || INCLUDED_QUESTION.test(p.norm) || OTHER_TRIP_CONTENT.test(ph)) return null;
+  if (!asksSomething(p) && !POLICY_NEED_CUE.test(ph)) return null;
+  if (p.tokens.length > 20) return null;
+  return terms.map((term) => `policy:${term}`);
+}
+
+/** Does the message ask about a booking the customer already made (status, cancellation, change, "my booked trip ...")? */
+export function asksAboutOwnBooking(text: string): boolean {
+  const p = prepare(text);
+  return Boolean(p.norm) && existingBooking(p, text) !== null;
 }
 
 function complaint(p: Prepared): string[] | null {
@@ -414,7 +521,8 @@ function looksLikeInquiryAnswer(p: Prepared): boolean {
 /**
  * Names what the customer needs, or null when this is an ordinary trip question (or anything the
  * existing pipeline already handles). Order matters: a complaint or a booking already made outranks
- * a commercial term, which outranks a group, which outranks a ticket-only wish, which outranks thanks.
+ * a commercial term, which outranks a group, which outranks a ticket-only wish, which outranks a
+ * travel-document (visa / passport / insurance) question, which outranks thanks.
  */
 export function classifyMessageNeed(text: string, context: NeedContext = {}): MessageNeedResult | null {
   const p = prepare(text);
@@ -427,14 +535,16 @@ export function classifyMessageNeed(text: string, context: NeedContext = {}): Me
   if (complained) return finish("complaint", complained);
   const booked = existingBooking(p, text);
   if (booked) return finish("existing_booking", booked);
-  const organised = organisedGroup(p, size);
+  const organised = organisedGroup(p, size) ?? groupCustomRoute(p, size);
   if (organised) return finish("business_group", organised);
-  const commercial = commercialPolicy(p, size);
+  const commercial = commercialPolicy(p, size, context);
   if (commercial) return finish("commercial_policy", commercial);
   const bespoke = bespokeTravel(p);
   if (bespoke) return finish("business_group", bespoke);
   const transport = transportOnly(p);
   if (transport) return finish("transport_only", transport);
+  const policy = travelPolicy(p, context);
+  if (policy) return finish("policy", policy);
   const social = socialKind(p) ?? (isThanksOnly(text) ? "thanks" : null);
   if (social) {
     // "ok" right after a question from the bot may be the answer to it: leave it to the pipeline.

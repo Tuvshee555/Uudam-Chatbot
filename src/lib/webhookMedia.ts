@@ -27,6 +27,7 @@ import {
 import type { TravelTrip } from "./travelTypes";
 import { hasPaymentClaimIntent } from "./reply";
 import { normText } from "./travelTextNorm";
+import { asksAboutOwnBooking } from "./messageNeed";
 import { getEnv } from "./env";
 import {
   classifyError,
@@ -581,6 +582,9 @@ export function isQuestionAboutBooking(text: string): boolean {
   if (hasPaymentClaimIntent(text)) return true;
   const norm = normText(text);
   if (BOOKING_CANCEL_OR_CHANGE.test(norm) || BOOKING_STATUS.test(norm) || BOOKING_HYPOTHETICAL.test(norm)) return true;
+  // A booking already made, in any script or spelling: "zahialgaa tsutslah uu", "Миний захиалсан аялал хэзээ гарах вэ"
+  // (both got "Утасны дугаараа бичнэ үү.", 2026-11-11). The need gate reads them as existing_booking.
+  if (asksAboutOwnBooking(text)) return true;
   // "урьдчилгаа яаж захиалга өгдөг вэ": a question about how booking works, not "book it".
   return BOOKING_TERMS_WORD.test(norm) && ASKING.test(norm);
 }

@@ -8,6 +8,9 @@
  *  transport_only      the same.
  *  existing_booking    the lead's real status when a booking lead exists, otherwise a typed lead and silence;
  *                      never the booking collector's phone ask.
+ *  policy              visa / passport / insurance / documents: when the message names exactly one trip (or one is
+ *                      selected) the ordinary path answers from that trip's own booking terms or hands off with the
+ *                      missing fact; otherwise (no trip, several trips) a typed lead and silence, never a trip list.
  *  complaint           the existing hand-off branch (the webhook passes it in).
  *
  * Every customer-facing line leaves through the webhook's deliverFastPathReply; "silence" sends nothing.
@@ -22,7 +25,7 @@ import { PRAISE_REPLY, THANKS_REPLY } from "./greetingPhrases";
 import { hasBankAccountRequest, hasPaymentClaimIntent } from "./reply";
 import { buildGroupInquiryReply } from "./groupInquiry";
 import { commercialSignalCovered, socialKindOfText, type MessageNeed, type MessageNeedResult, type NeedConstraints } from "./messageNeed";
-import { getAliases } from "./travelFastPathsSearch";
+import { getAliases, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import { GENERIC_ROUTE_WORDS, normText, phoneticLatinText } from "./travelTextNorm";
 
 export const NEED_TAG = (need: MessageNeed | string) => `[need:${need}]`;
@@ -55,25 +58,49 @@ export type NeedDispatchInput = {
    * switched off: the complaint then becomes a typed staff lead and silence, never a trip answer.
    */
   handoff?: (context: string) => Promise<void>;
-  /** Active catalogue, only read to recognise the destination words a customer typed. */
+  /** Active catalogue, only read to recognise the destination words a customer typed and the trip a message names. */
   trips: () => Promise<TravelTrip[]>;
   /** What the owner entered as offers, discount policies and FAQ (commercialFacts.ts): when it covers the asked term, the gate steps aside. */
   configuredFacts?: string;
+  /** The trip under discussion (the conversation's selection), when there is one. */
+  selectedTripId?: string | null;
+  /** A selected trip or offered candidates: a bare discount question then belongs to them (the existing data path). */
+  hasTripContext?: boolean;
 };
 
+/**
+ * The one trip the customer means: named in this message, else the conversation's selected trip. A place word that
+ * several trips share ("Велмара" with two Велмара trips) identifies none of them, even when the matcher prefers one.
+ */
+function identifiedTrip(text: string, trips: TravelTrip[], selectedTripId: string | null | undefined): TravelTrip | null | "several" {
+  const named = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
+  if (named.status === "ambiguous") return "several";
+  if (named.status === "verified") {
+    const typed = catalogPlaceWordsIn(text, trips).map((word) => phoneticLatinText(word));
+    const sharing = typed.length ? trips.filter((trip) => { const own = placeWordsOf(trip); return typed.every((word) => own.has(word)); }) : [];
+    return sharing.length > 1 ? "several" : named.trip;
+  }
+  return selectedTripId ? trips.find((trip) => trip.id === selectedTripId) ?? null : null;
+}
+
 const STATUS_QUESTION = /баталгаажс|баталгаажл|баталгаажуулс|юу\s+болсон|яасан|хаана\s+явна|төлөв|batalgaajs|yu\s+bolson/iu;
+
+/** A trip's own place words (aliases, destinations, name words), in phonetic space. */
+function placeWordsOf(trip: TravelTrip): Set<string> {
+  const words = new Set<string>();
+  const destinations = Array.isArray(trip.extra?.destinations) ? trip.extra.destinations.filter((city): city is string => typeof city === "string") : [];
+  for (const source of [...getAliases(trip), ...destinations, trip.route_name]) {
+    for (const word of phoneticLatinText(source).split(" ")) {
+      if (word.length >= 4 && !GENERIC_ROUTE_WORDS.has(word)) words.add(word);
+    }
+  }
+  return words;
+}
 
 /** Destination words from the catalogue (aliases, destinations, name words) that the customer typed, as typed. */
 export function catalogPlaceWordsIn(text: string, trips: TravelTrip[]): string[] {
   const known = new Set<string>();
-  for (const trip of trips) {
-    const destinations = Array.isArray(trip.extra?.destinations) ? trip.extra.destinations.filter((city): city is string => typeof city === "string") : [];
-    for (const source of [...getAliases(trip), ...destinations, trip.route_name]) {
-      for (const word of phoneticLatinText(source).split(" ")) {
-        if (word.length >= 4 && !GENERIC_ROUTE_WORDS.has(word)) known.add(word);
-      }
-    }
-  }
+  for (const trip of trips) for (const word of placeWordsOf(trip)) known.add(word);
   const found: string[] = [];
   for (const word of normText(text).replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/)) {
     const phonetic = phoneticLatinText(word);
@@ -131,6 +158,21 @@ export async function dispatchNeed(input: NeedDispatchInput): Promise<boolean> {
   if (hit.need === "commercial_policy" && input.configuredFacts && commercialSignalCovered(hit.signals, input.configuredFacts)) {
     logInfo("webhook.need_data_covers", { ...base, need: hit.need, signals: hit.signals });
     return false;
+  }
+  // A travel-document question about one trip: the answer plan answers from that trip's own booking terms, or hands off
+  // recording the missing fact (admin coverage). Only a question with no trip, or several, is claimed here.
+  if (hit.need === "policy") {
+    const trip = await input.trips().then((trips) => identifiedTrip(text, trips, input.selectedTripId)).catch(() => null);
+    if (trip && trip !== "several") {
+      logInfo("webhook.need_data_covers", { ...base, need: hit.need, signals: hit.signals, tripId: trip.id });
+      return false;
+    }
+  }
+  // A bare discount question that names a trip, or follows one, is that trip's discount (the existing data path).
+  if (hit.need === "commercial_policy" && hit.signals.length === 1 && hit.signals[0] === "discount") {
+    const named = input.hasTripContext || await input.trips()
+      .then((trips) => resolveTripFromUserMessage(text, trips, { allowLooseFallback: false }).status !== "not_found").catch(() => false);
+    if (named) return false;
   }
   const classified = () => {
     logInfo("webhook.need_classified", { ...base, need: hit.need, source: input.source, signals: hit.signals, ...(hit.social ? { social: hit.social } : {}) });
@@ -190,7 +232,8 @@ export async function dispatchNeed(input: NeedDispatchInput): Promise<boolean> {
     await appendMessage(senderId, "user", text).catch(() => {});
     const lead = await latestCustomerLead(senderId).catch(() => null);
     // A booking this bot took: the status is the lead's own (never a confirmation or a call time).
-    if (lead?.kind === "booking" && (hit.signals.includes("status_question") || STATUS_QUESTION.test(text))) {
+    // "Миний захиалсан аялал хэзээ гарах вэ": a question about the booking itself is answered with what the lead holds.
+    if (lead?.kind === "booking" && (hit.signals.includes("status_question") || hit.signals.includes("own_booking_question") || STATUS_QUESTION.test(text))) {
       const recorded = await recordLeadFollowup(lead.id, followupLeadLine(text, undefined, "Захиалгын төлөв асуусан")).catch(() => false);
       const reply = recorded ? bookedStatusTurn(lead, input.lastBotReply ?? undefined) : null;
       if (reply) {
@@ -205,7 +248,7 @@ export async function dispatchNeed(input: NeedDispatchInput): Promise<boolean> {
     return true;
   }
 
-  // commercial_policy, transport_only: nothing in the data answers; staff do, the customer hears nothing.
+  // commercial_policy, transport_only, policy: nothing in the data answers; staff do, the customer hears nothing.
   classified();
   await appendMessage(senderId, "user", text).catch(() => {});
   await holdForStaff(input, hit.constraints, { catchFailure: false });
