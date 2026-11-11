@@ -40,13 +40,19 @@ function tierHeader(label: string, ageRange: string, infant: boolean): string {
 function tiersOf(group: Row, ages: Row): Tier[] {
   const listed = records(group.passenger_prices);
   if (listed.length) {
-    return listed.map((tier) => {
+    const tiers = listed.map((tier) => {
       const label = text(tier.label);
       const ageRange = text(tier.age_range);
       const infant = isInfantShapedAge(label.toLowerCase(), ageRange);
       const price = num(tier.price);
       return { header: tierHeader(label, ageRange, infant), infant, price, free: price === 0 || /үнэгүй/i.test(text(tier.note)) };
     });
+    // An infant fare kept only on the row (bands list the children) is still a fare the card quotes.
+    const infant = num(group.infant_price);
+    if (!tiers.some((tier) => tier.infant) && infant != null) {
+      tiers.push({ header: tierHeader("Нярай", text(group.infant_age) || text(ages.infant), true), infant: true, price: infant, free: infant === 0 });
+    }
+    return tiers;
   }
   const out: Tier[] = [];
   const child = num(group.child_price);
@@ -110,7 +116,8 @@ export function posterTableFromTrip(trip: TripPrices, now: Date): PosterTableFro
   type Draft = { seller: string; dates: string[]; dateText: string; adult: string; tiers: Tier[]; single: number | null };
   const drafts: Draft[] = [];
   for (const group of groups) {
-    if (text(group.status) === "sold_out" || text(group.status) === "cancelled") continue;
+    // A full date keeps its row: the card still prints its prices (the partner page does too). Cancelled is gone.
+    if (text(group.status) === "cancelled") continue;
     const allDays = pricingDays(group, now);
     const days = allDays.filter((day) => day >= today);
     const stored = Array.isArray(group.dates) ? group.dates.map(String).filter(Boolean) : [];

@@ -73,18 +73,35 @@ export function completeFromSchedule(fields: Row, pageText: string, now = new Da
   if (!parsed.ok || !parsed.rows.length) return { fields, notes: [] };
   const extra = record(fields.extra);
   const key = records(extra.price_groups).length ? "price_groups" : "departure_date_groups";
-  const rows = records(extra[key]);
-  if (!rows.length || !rows.some((row) => text(row.hotel))) return { fields, notes: [] };
+  // Copies: a row whose name is moved to its note is changed here, never the caller's object.
+  const rows = records(extra[key]).map((row) => ({ ...row }));
+  if (!rows.length) return { fields, notes: [] };
+  // Adding a hotel option needs the reader's rows to name hotels; moving a note does not.
+  const hotelRows = rows.some((row) => text(row.hotel));
   const dayOf = (row: Row) => departureDays(pricingDates(row, now), now).days;
   const added: Row[] = [];
   const addedText: string[] = [];
   const skipped: string[] = [];
   const differ: string[] = [];
+  const relabelled: string[] = [];
   for (const entry of parsed.rows) {
     const day = isoOf(entry, now);
-    if (!day || !entry.hotel) continue;
+    if (!day) continue;
     const sameDay = rows.filter((row) => dayOf(row).includes(day));
     if (!sameDay.length) continue;
+    // The page's note for this date («Шинэ жил», «Нэг талдаа дамжих нислэг») written as the row's name is read
+    // as a PACKAGE by the fare card («Багц: Шинэ жил»): it is the row's note.
+    if (entry.note) {
+      for (const row of sameDay) {
+        const label = text(row.label);
+        if (label && (entry.note.includes(label) || label.includes(entry.note))) {
+          row.note = [text(row.note), label].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index).join("; ");
+          row.label = "";
+          relabelled.push(`${entry.date} «${label}»`);
+        }
+      }
+    }
+    if (!entry.hotel || !hotelRows) continue;
     const match = sameDay.find((row) => sameHotel(row.hotel, entry.hotel));
     const adult = entry.prices.find((price) => ADULT.test(price.column))?.amount;
     if (match) {
@@ -107,7 +124,8 @@ export function completeFromSchedule(fields: Row, pageText: string, now = new Da
   if (addedText.length) notes.push({ text: `Хуудасны хүснэгтээс нэмсэн буудлын үнэ (AI уншаагүй): ${addedText.join("; ")}.`, severity: "info", type: "schedule_rows_added" });
   if (skipped.length) notes.push({ text: `Хүснэгтэд байгаа ч нэмж чадаагүй: ${skipped.join("; ")} — гараар шалгана уу.`, severity: "warning", type: "schedule_rows_skipped" });
   if (differ.length) notes.push({ text: `Хүснэгтийн үнэ AI уншсанаас өөр: ${differ.join("; ")} — хуудастай тулгаж шалгана уу.`, severity: "warning", type: "schedule_price_differs" });
-  if (!added.length) return { fields, notes };
+  if (relabelled.length) notes.push({ text: `Огнооны тэмдэглэлийг багцын нэр биш, тэмдэглэл болгосон: ${relabelled.join("; ")}.`, severity: "info", type: "schedule_notes_moved" });
+  if (!added.length && !relabelled.length) return { fields, notes };
   return { fields: { ...fields, extra: { ...extra, [key]: [...rows, ...added] } }, notes };
 }
 

@@ -258,6 +258,23 @@ export function guardInventedCommercialClaims(reply: string, commercialFacts: st
 const TUGRIK_AMOUNT_RE = /(\d{1,3}(?:[.,]\d{3}){1,4}|\d{4,})\s*(?:₮|төгрөг|tugrik|mnt)(?![\p{L}])/giu;
 
 /** Exact names scope a reply section; an embedded shorter name is not a second trip. */
+/**
+ * The line without the trips' own names and their own departure texts, for reading dates out of it. A
+ * date inside a trip's name («… - 2026-12-15-с өмнөх өдрүүдэд хамт олны захиалга авна») or inside its
+ * departure rule («12/15-аас өмнөх өдрүүдэд хамт олны захиалгаар») is the operator's own wording, not a
+ * departure the reply claims: read as one, every answer about such a trip was silenced (2026-11-11).
+ */
+export function withoutOwnTripWords(line: string, trips: TravelTrip[]): string {
+  let rest = line.normalize("NFKC");
+  const own = trips.flatMap((trip) => [trip.route_name, ...(trip.departure_dates || []).filter((date) => !/^\d{4}-\d{2}-\d{2}$/.test(String(date)))])
+    .map((text) => String(text || "").trim().normalize("NFKC")).filter((text) => text.length >= 8).sort((a, b) => b.length - a.length);
+  for (const text of own) {
+    const at = rest.toLowerCase().indexOf(text.toLowerCase());
+    if (at >= 0) rest = `${rest.slice(0, at)} ${rest.slice(at + text.length)}`;
+  }
+  return rest;
+}
+
 export function replySectionTrips(line: string, trips: TravelTrip[]): TravelTrip[] {
   let remaining = line.normalize("NFKC").toLowerCase();
   const named: TravelTrip[] = [];
@@ -294,7 +311,7 @@ export function guardUnverifiedPrices(
 ): string {
   if (candidateTrips.length === 0) return reply;
   const lines = reply.split(/\r?\n/);
-  const allReplyDates = parseDepartureDateText(reply, now);
+  const allReplyDates = parseDepartureDateText(withoutOwnTripWords(reply, candidateTrips), now);
   let activeDates = allReplyDates.length === 1 ? allReplyDates : [];
   let activeTrips = candidateTrips;
   const activeHotels = new Map<string, string>();
@@ -307,12 +324,12 @@ export function guardUnverifiedPrices(
       const sectionDates = new Set<string>();
       for (let next = index; next < lines.length; next++) {
         if (next > index && replySectionTrips(lines[next], candidateTrips).length) break;
-        for (const date of parseDepartureDateText(lines[next], now)) sectionDates.add(date);
+        for (const date of parseDepartureDateText(withoutOwnTripWords(lines[next], candidateTrips), now)) sectionDates.add(date);
       }
       activeDates = sectionDates.size === 1 ? [...sectionDates] : [];
       activeHotels.clear();
     }
-    const lineDates = parseDepartureDateText(line, now);
+    const lineDates = parseDepartureDateText(withoutOwnTripWords(line, candidateTrips), now);
     if (lineDates.length > 0) activeDates = lineDates;
     for (const trip of activeTrips) {
       const hotel = mentionedOfferHotel(trip, line, now);
@@ -362,7 +379,7 @@ export function guardUnverifiedDates(
   for (const line of withoutHolidaySpans(reply).split(/\r?\n/)) {
     const named = replySectionTrips(line, candidateTrips);
     if (named.length) activeTrips = named;
-    const dates = parseDepartureDateText(line, now);
+    const dates = parseDepartureDateText(withoutOwnTripWords(line, candidateTrips), now);
     if (dates.length === 0) continue;
     // A truthful denial may repeat a date that is absent from the schedule.
     if (/байхгүй|алга|гарахгүй|хуваарьгүй/i.test(line)) continue;
