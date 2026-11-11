@@ -40,3 +40,19 @@ test("a free infant fare labelled 'up to 2' and a sold-on-request trip pass the 
   assert.equal(verifyTripReply({ reply: `✈️ ${onRequest.route_name}\n💰 Үнэ:\n• Том хүн: 1,999,000₮`, trips: [onRequest], now }), "REFER");
   assert.equal(verifyTripReply({ reply: `✈️ ${infant.route_name}\n3/5:\n• Нярай /2 нас хүртэл/: 500,000₮`, trips: [infant], now }), "REFER");
 });
+
+test("under a list, a trip whose party fare depends on the departure date says so, never a bare name", async () => {
+  const { buildAmbiguousPassengerTotalReply } = await import("../src/lib/travelFastPaths");
+  const now = new Date("2098-02-01T04:00:00Z");
+  const simple = base("simple", "НОРВЕЛ ХОТЫН АЯЛАЛ", { adult_price: 1_790_000, child_price: 1_590_000, infant_price: null, departure_dates: ["2098-03-15"],
+    extra: { customer_visible: true, age_rules: { adult: "12+ нас", child: "2-11 нас" } } });
+  const byDate = base("by-date", "ОРВЕЛИЯ АРЛЫН АЯЛАЛ", { adult_price: 5_390_000, child_price: null, infant_price: null, departure_dates: ["2098-03-10", "2098-03-24"],
+    extra: { customer_visible: true, price_groups: [
+      { dates: ["2098-03-10"], adult_price: 5_390_000, passenger_prices: [{ label: "Хүүхэд", age_range: "3-6 нас", price: 3_590_000 }, { label: "Хүүхэд", age_range: "7-13 нас", price: 4_990_000 }] },
+      { dates: ["2098-03-24"], adult_price: 5_190_000, passenger_prices: [{ label: "Хүүхэд", age_range: "3-6 нас", price: 3_390_000 }, { label: "Хүүхэд", age_range: "7-13 нас", price: 4_790_000 }] },
+    ] } });
+  const reply = buildAmbiguousPassengerTotalReply("4 bolon 7 nastai huuhed tulbur hed ve?", [simple, byDate], now) || "";
+  assert.ok(reply.includes("НОРВЕЛ ХОТЫН АЯЛАЛ: 2 хүүхэд") && reply.includes("x 1,590,000₮"), reply);
+  assert.doesNotMatch(reply, /^• ОРВЕЛИЯ АРЛЫН АЯЛАЛ\s*$/mu, `never the bare name: ${reply}`);
+  assert.match(reply, /ОРВЕЛИЯ АРЛЫН АЯЛАЛ — (?:үнэ нь гарах өдрөөс хамаарна|энэ насны үнэ бүртгэгдээгүй)|ОРВЕЛИЯ АРЛЫН АЯЛАЛ:.*₮/u, reply);
+});

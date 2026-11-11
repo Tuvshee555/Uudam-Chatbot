@@ -29,6 +29,15 @@ export function unknownPartyFareLine(trip: TravelTrip, reason: string): string |
   return PASSENGER_FARE_GAP.test(reason) ? `• ${trip.route_name} — ${PARTY_FARE_UNKNOWN}` : null;
 }
 
+/**
+ * Under a list, a trip whose party fare depends on a choice still to make (the departure date, a hotel):
+ * "• <trip> — үнэ нь гарах өдрөөс хамаарна" instead of its bare name (live 2026-11-11: ages 4 and 7 fell in
+ * two child bands whose fares change by date). Never an estimate.
+ */
+export function partyFareChoiceLine(trip: TravelTrip): string {
+  return `• ${trip.route_name} — үнэ нь гарах өдрөөс хамаарна`;
+}
+
 export function isUnknownPartyFareLine(line: string): boolean {
   return line.endsWith(` — ${PARTY_FARE_UNKNOWN}`);
 }

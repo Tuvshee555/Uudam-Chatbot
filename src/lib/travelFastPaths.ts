@@ -19,7 +19,7 @@ import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
 import { buildFareSection, dateIsOnSale, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice, upcomingDepartures } from "./tripFareBlock";
 import { budgetReplyForQuotedPrice, quotedPriceRows, safeDurationText } from "./quotedPriceReply";
 import { buildTripRequest } from "./tripRequest";
-import { isUnknownPartyFareLine, unknownPartyFareLine } from "./partyFareLine";
+import { isUnknownPartyFareLine, partyFareChoiceLine, unknownPartyFareLine } from "./partyFareLine";
 import { renderTripOfferReply, resolveTripOffer, type OfferFare, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import { compactReplyOptions, replyPreferences } from "./chatbotReplyPolicy";
 import {
@@ -270,7 +270,7 @@ export function buildAmbiguousPassengerTotalReply(
   // child age) must not throw away the totals the others give (live 2026-10-26); never an estimated total.
   // Every trip unknown is no answer at all (staff take it).
   if (shown.length < 2 || !totals.some((line) => line && !isUnknownPartyFareLine(line))) return null;
-  const lines = totals.map((line, index) => line || `• ${shown[index].route_name}`);
+  const lines = totals.map((line, index) => line || partyFareChoiceLine(shown[index]));
   return [
     ...lines,
     ...(trips.length > lines.length ? [`Өөр ${trips.length - lines.length} сонголт бий.`] : []),
