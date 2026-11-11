@@ -23,7 +23,7 @@ const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test
   // Understanding journeys (2026-11-11): need gate, identity/context, calendar/holiday, scenario suite.
   "tests/understanding-need-journeys.test.ts", "tests/understanding-routing-journeys.test.ts", "tests/understanding-routing-unavailable.test.ts",
   "tests/understanding-routing-existing-customer.test.ts", "tests/understanding-holiday-journeys.test.ts", "tests/understanding-scenarios.test.ts",
-  "tests/understanding-catalogue-need.test.ts"],
+  "tests/understanding-catalogue-need.test.ts", "tests/understanding-live-2026-11-11.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);
