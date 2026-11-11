@@ -419,22 +419,22 @@ export function ProposalCard({
   return (
     <article id={`proposal-${message.id}`} className="animate-fade-up w-full min-w-0 scroll-mt-4 rounded-xl border border-line bg-surface" aria-label={`${eyebrow}: ${title}`}>
       {/* ---------- header ---------- */}
-      <header className="px-4 pt-4 sm:px-6">
-        <div className="flex items-center gap-2 text-[11px] font-semibold tracking-wide text-ink-muted">
-          <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", VERB_DOT[eyebrow] || "bg-brand")} aria-hidden="true" />
+      <header className={cx("px-4 pt-4", reviewing ? "sm:px-8 sm:pt-5" : "sm:px-6")}>
+        <div className="flex items-center gap-2 text-[12px] font-semibold tracking-wide text-ink-muted">
+          <span className={cx("h-2 w-2 shrink-0 rounded-full", VERB_DOT[eyebrow] || "bg-brand")} aria-hidden="true" />
           <span className="min-w-0 truncate">{eyebrow.toLocaleUpperCase("mn")}</span>
-          <span className={cx("ml-auto shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold", tag.className)}>{tag.label}</span>
+          <span className={cx("ml-auto shrink-0 rounded-md px-2 py-0.5 text-[12px] font-semibold", tag.className)}>{tag.label}</span>
         </div>
         {showTitle && <h3 className="mt-2 text-lg font-bold leading-6 tracking-tight text-ink">{title}</h3>}
         {showSummary && <p className="mt-1 text-sm leading-6 text-ink-muted">{summary}</p>}
         {reviewing && (
-          <p className="mt-2 text-sm leading-6 text-ink-muted">
+          <p className="mt-2 text-[15px] leading-6 text-ink">
             Файлаас уншсан мэдээлэл доор байна. Зөв бол шууд хадгална, буруу зүйлийг л дарж засна.
           </p>
         )}
         {message.sourceNames && message.sourceNames.length > 0 && (
-          <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-ink-subtle">
-            <Icons.paperclip size={12} className="shrink-0" />
+          <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[13px] text-ink-muted">
+            <Icons.paperclip size={13} className="shrink-0" />
             <span className="truncate">{message.sourceNames.join(", ")}</span>
           </p>
         )}
@@ -695,8 +695,8 @@ export function ProposalCard({
       )}
 
       {reviewing && (
-        // Stays in reach while the review scrolls; the negative offset is the conversation's own padding.
-        <footer className={cx(footerCls, "sticky -bottom-3.5 z-10 bg-surface/95 shadow-[0_-8px_16px_-12px_rgb(0_0_0/0.25)] backdrop-blur-sm sm:-bottom-5")}>
+        // Stays in reach while the review scrolls, one slim row; the negative offset is the conversation's own padding (AssistantTab).
+        <footer className="sticky -bottom-4 z-10 rounded-b-xl border-t border-line bg-surface/95 px-4 py-2 shadow-[0_-8px_16px_-12px_rgb(0_0_0/0.25)] backdrop-blur-sm sm:-bottom-5 sm:px-8">
           {message.saveError && (unknownSave ? (
             <p role="status" className="mb-2.5 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
               <Icons.alert size={14} className="mt-0.5 shrink-0 text-warning" />
@@ -709,21 +709,22 @@ export function ProposalCard({
             </p>
           ))}
           {applyBusy && <div className="mb-2"><SaveWaitHint /></div>}
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
-            <p className="min-w-0 flex-1 basis-56 text-xs leading-5" aria-live="polite">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            {/* On a phone the «ready» line is left out so the footer stays one row; what still blocks is always said. */}
+            <p className={cx("min-w-0 flex-1 basis-56 text-[13px] leading-5", !publishBlock && "hidden sm:block")} aria-live="polite">
               {publishBlock ? (
                 <span className="flex items-start gap-1.5 font-medium text-warning">
-                  <Icons.alert size={13} className="mt-0.5 shrink-0" />
+                  <Icons.alert size={14} className="mt-0.5 shrink-0" />
                   <span>{tripTag(publishBlock.index)}{publishBlock.text}{publishBlock.blocks === "publish" && !saveBlock ? " Ноорог болгон хадгалж болно." : ""}</span>
                 </span>
               ) : (
                 <span className="flex items-start gap-1.5 text-ink-muted">
-                  <Icons.check size={13} className="mt-0.5 shrink-0 text-success" />
+                  <Icons.check size={14} className="mt-0.5 shrink-0 text-success" />
                   <span>Нийтлэхэд бэлэн. Ноорог нь сайтад гарахгүй, бот хариулахгүй.</span>
                 </span>
               )}
             </p>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <Button size="sm" variant="ghost" disabled={applyBusy} onClick={() => onCancelProposal(message.id)}>Болих</Button>
               <Button size="sm" variant="secondary" loading={applyBusy && message.savedAs === "draft"} disabled={applyBusy || locked || Boolean(saveBlock)} onClick={() => save("draft")}>
                 Ноорог хадгалах

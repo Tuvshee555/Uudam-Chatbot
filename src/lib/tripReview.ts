@@ -15,6 +15,7 @@ import { itineraryEndsInUlaanbaatar, itineraryStartsInUlaanbaatar } from "./trip
 // A cycle by nature: the price cards read the calendar helpers here, and what is saved is shaped by the cards.
 // Each side calls the other only inside functions, never while loading.
 import { normalizePriceRows, priceProblems } from "./tripReviewPrices";
+import { lowerDayStates } from "./tripDayStates";
 import {
   durationForDays, isTransitDay, isTransportType, withStandardTransitDays,
   type ItineraryDay, type TransportType,
@@ -532,7 +533,7 @@ export function reviewIssues(fields: Row, now = new Date()): ReviewIssue[] {
 /* ------------------------------------------------------------------ save */
 
 /** Keys that exist only for the review and must never reach a saved trip. */
-const REVIEW_ONLY_EXTRA = ["source_evidence", "program_duration_text"];
+const REVIEW_ONLY_EXTRA = ["source_evidence", "program_duration_text", "day_states"];
 
 /**
  * The fields without what only the review needed: the source quotes, the
@@ -557,7 +558,9 @@ export function withoutReviewOnly(fields: Row): Row {
  * The reviewed trip as the fields to save. A draft stays off the website and
  * out of the bot's answers until it is published from the trip list.
  */
-export function reviewedFields(fields: Row, mode: "draft" | "publish", now = new Date()): Row {
+export function reviewedFields(input: Row, mode: "draft" | "publish", now = new Date()): Row {
+  // Each day's seat state (full / few seats) goes back onto the price rows (tripDayStates.ts).
+  const fields = lowerDayStates(input, now);
   const next: Row = { ...withoutReviewOnly(fields), status: mode === "draft" ? "draft" : "active" };
   for (const key of ["adult_price", "child_price", "infant_price"]) {
     const value = fields[key];

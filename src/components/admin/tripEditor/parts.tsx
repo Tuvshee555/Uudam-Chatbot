@@ -9,7 +9,7 @@ import React from "react";
 import { Icons, cx } from "@/components/ui";
 
 export const controlCls =
-  "w-full rounded-md border bg-surface text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand focus:outline-none focus:ring-3 focus:ring-brand/10 disabled:bg-surface-sunken/60 disabled:text-ink-subtle";
+  "w-full rounded-md border bg-surface text-[15px] text-ink transition-colors placeholder:text-ink-subtle focus:border-brand focus:outline-none focus:ring-3 focus:ring-brand/10 disabled:bg-surface-sunken/60 disabled:text-ink-subtle";
 
 /** `danger`: a value that is required to publish and still empty is red, not the editor's calm amber. */
 export function borderFor(missing?: boolean, danger?: boolean) {
@@ -45,15 +45,21 @@ export function SectionHeader({ title, description, audiences }: { title: string
   );
 }
 
-/** A named group of fields. Groups follow each other separated by a rule. */
-export function Group({ title, hint, action, children, className }: { title?: string; hint?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode; className?: string }) {
+/**
+ * A named group of fields. Groups follow each other separated by a rule. `size="section"` is a
+ * page-level heading (the new-trip review reads as one long page of sections, not small groups).
+ */
+export function Group({ title, hint, action, children, className, size = "group" }: { title?: string; hint?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode; className?: string; size?: "group" | "section" }) {
+  const section = size === "section";
   return (
-    <section className={cx("border-t border-line pt-6 first:border-t-0 first:pt-0", className)}>
+    <section className={cx("border-t border-line first:border-t-0 first:pt-0", section ? "pt-8" : "pt-6", className)}>
       {(title || action) && (
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className={cx("flex flex-wrap items-start justify-between gap-3", section ? "mb-5" : "mb-4")}>
           <div className="min-w-0">
-            {title && <h3 className="text-[13px] font-semibold uppercase tracking-wide text-ink-muted">{title}</h3>}
-            {hint && <p className="mt-1 max-w-2xl text-xs leading-5 text-ink-muted">{hint}</p>}
+            {title && (section
+              ? <h3 className="text-lg font-bold leading-7 tracking-tight text-ink">{title}</h3>
+              : <h3 className="text-[13px] font-semibold uppercase tracking-wide text-ink-muted">{title}</h3>)}
+            {hint && <p className={cx("mt-1 max-w-3xl text-ink-muted", section ? "text-sm leading-6" : "text-[13px] leading-5")}>{hint}</p>}
           </div>
           {action}
         </div>
@@ -94,16 +100,16 @@ export function Field({
 }) {
   return (
     <div className={cx("min-w-0", className)} data-trip-field={anchor}>
-      <label htmlFor={id} className="mb-1.5 flex items-baseline justify-between gap-2 text-sm font-medium text-ink">
+      <label htmlFor={id} className="mb-1.5 flex items-baseline justify-between gap-2 text-sm font-semibold text-ink">
         <span className="min-w-0">{label}</span>
         {required && (
-          <span className={cx("shrink-0 text-[11px] font-medium", missing ? (danger ? "text-danger" : "text-warning") : "text-ink-subtle")}>
+          <span className={cx("shrink-0 text-[12px] font-medium", missing ? (danger ? "font-semibold text-danger" : "font-semibold text-warning") : "text-ink-muted")}>
             {missing ? "Дутуу" : "Заавал"}
           </span>
         )}
       </label>
       {children}
-      {hint && <p className="mt-1.5 text-xs leading-5 text-ink-subtle">{hint}</p>}
+      {hint && <p className="mt-1.5 text-[13px] leading-5 text-ink-muted">{hint}</p>}
     </div>
   );
 }
@@ -209,7 +215,7 @@ export function MoneyField({
         value={number ? Number(number).toLocaleString("en-US") : ""}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))}
-        className="min-w-0 flex-1 bg-transparent text-sm tabular-nums text-ink outline-none placeholder:text-ink-subtle disabled:text-ink-subtle"
+        className="min-w-0 flex-1 bg-transparent text-[15px] tabular-nums text-ink outline-none placeholder:text-ink-subtle disabled:text-ink-subtle"
       />
       <span className="ml-2 shrink-0 text-sm font-semibold text-ink-muted">{currency === "MNT" ? "₮" : currency === "CNY" ? "¥" : currency === "USD" ? "$" : currency}</span>
     </span>
@@ -265,7 +271,7 @@ export function SwitchRow({ title, hint, control }: { title: string; hint?: stri
     <div className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
       <div className="min-w-0">
         <p className="text-sm font-medium text-ink">{title}</p>
-        {hint && <p className="mt-0.5 text-xs leading-5 text-ink-muted">{hint}</p>}
+        {hint && <p className="mt-0.5 text-[13px] leading-5 text-ink-muted">{hint}</p>}
       </div>
       <div className="shrink-0">{control}</div>
     </div>

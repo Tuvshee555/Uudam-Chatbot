@@ -23,6 +23,7 @@ import {
   type ItineraryDay, type TransportType,
 } from "./tripTransitDays";
 import { DEPARTURE_CONFLICT, DEPARTURE_SHIFT, applyTransport, checkDeparture, dayMeals, departureDays, deriveHasFood, formatYmd } from "./tripReview";
+import { liftDayStates, withPricedDaysOnCalendar } from "./tripDayStates";
 
 export { DEPARTURE_CONFLICT, DEPARTURE_SHIFT };
 
@@ -337,6 +338,10 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
     // 2026-11-06 each was a «+» suggestion the admin had to click, or it was never saved.
     const withHotels = withSuggestedHotelProfiles(fields);
     if (withHotels !== fields) fields.extra = withHotels.extra;
+    // Every priced row's day is on the calendar, and each day's seat state (full / few seats)
+    // moves off the rows so the review shows it per day (tripDayStates.ts; put back on save).
+    const scheduled = liftDayStates(withPricedDaysOnCalendar(fields, options.now ?? new Date()), options.now ?? new Date());
+    if (scheduled !== fields) Object.assign(fields, { departure_dates: scheduled.departure_dates, extra: scheduled.extra });
     const extra = record(fields.extra);
     const days = (Array.isArray(extra.itinerary_days) ? extra.itinerary_days : []).map((entry) => record(entry) as ItineraryDay);
     if (!days.length || !route) continue;

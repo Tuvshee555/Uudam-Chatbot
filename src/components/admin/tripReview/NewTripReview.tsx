@@ -7,6 +7,9 @@
  * length, and the file's words quoted beside what was read from them.
  * Everything else (discounts, extra fees, website fields, settings) is one click
  * away in the full editor, which hands its result back here.
+ *
+ * Read as one page: sections with large headings separated by rules, ink labels, hints at 13px
+ * or more, no boxes inside boxes (the owner, 2026-11-11: the old one was hard on the eyes).
  */
 import type { ReactNode } from "react";
 import { Button, Icons, cx } from "@/components/ui";
@@ -16,6 +19,7 @@ import {
   removePhoto, reviewIssues, setProgramDays, shiftDepartureDay, transportOf, tripPhotos, withProgramDuration,
 } from "@/lib/tripReview";
 import { reviewPriceGroups, withCalendarDays } from "@/lib/tripReviewPrices";
+import { dayStates, setDayState } from "@/lib/tripDayStates";
 import { parseHotelProfiles } from "@/lib/tripEditorState";
 import { TRANSPORT_TYPES, isTransitDay, type TransportType } from "@/lib/tripTransitDays";
 import { DurationSteppers } from "../tripEditor/DurationSteppers";
@@ -52,16 +56,16 @@ function Evidence({ quote }: { quote: unknown }) {
   const value = text(quote).trim();
   if (!value) return null;
   return (
-    <p className="mt-2.5 flex items-start gap-1.5 text-xs leading-5 text-ink-subtle">
-      <Icons.file size={12} className="mt-1 shrink-0" />
-      <span className="min-w-0">Файлд: <span className="text-ink-muted">«{value}»</span></span>
+    <p className="mt-3 flex items-start gap-1.5 text-[13px] leading-5 text-ink-muted">
+      <Icons.file size={13} className="mt-0.5 shrink-0" />
+      <span className="min-w-0">Файлд: <span className="text-ink">«{value}»</span></span>
     </p>
   );
 }
 
 function Notice({ tone, children }: { tone: "warning" | "success" | "muted"; children: ReactNode }) {
   return (
-    <div className={cx("mt-3 rounded-lg px-3.5 py-3 text-[13px] leading-5",
+    <div className={cx("mt-3 rounded-lg px-4 py-3 text-sm leading-6",
       tone === "warning" ? "border border-warning/30 bg-warning-soft/60 text-ink" : tone === "success" ? "text-success" : "text-ink-muted")}>
       {children}
     </div>
@@ -101,6 +105,13 @@ export function NewTripReview({
   const dateIssue = issueOf("dates", "past_dates");
   const boundaryIssue = issueOf("boundary");
   const priceRows = reviewPriceGroups(fields) as Array<{ hotel?: string | null }>;
+  const states = dayStates(fields);
+  // A day taken off the calendar loses its seat state: added back later, it starts open.
+  const setCalendar = (next: string[]) => {
+    const kept = new Set(next);
+    const cleared = Object.keys(states).filter((day) => !kept.has(day)).reduce((acc, day) => setDayState(acc, day, null), withCalendarDays(fields, next));
+    onChange(cleared);
+  };
   const ages = record(extra.age_rules);
   const terms = record(extra.booking_terms);
   const profiles = parseHotelProfiles(JSON.stringify(Array.isArray(extra.hotel_profiles) ? extra.hotel_profiles : []));
@@ -112,10 +123,10 @@ export function NewTripReview({
 
   return (
     // While it saves the review is read-only: an edit made then would not be in what is being saved.
-    <fieldset disabled={disabled} className="m-0 min-w-0 space-y-8 border-0 px-4 py-6 sm:px-6">
+    <fieldset disabled={disabled} className="m-0 min-w-0 space-y-8 border-0 px-4 py-6 text-[15px] sm:px-8 sm:py-7">
       {onOpenEditor && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-canvas/60 px-4 py-3">
-          <p className="min-w-0 flex-1 basis-60 text-[13px] leading-5 text-ink-muted">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-canvas px-4 py-3">
+          <p className="min-w-0 flex-1 basis-60 text-sm leading-6 text-ink-muted">
             Энд гол мэдээллийг шалгана. Хямдрал, нэмэлт төлбөр, вэбсайтын талбар, тохиргоо зэрэг бүх зүйлийг <b className="text-ink">аялал засах</b> цонхонд засна.
           </p>
           <Button size="sm" variant="secondary" disabled={disabled} onClick={onOpenEditor}>
@@ -125,11 +136,11 @@ export function NewTripReview({
       )}
 
       {warnings.length > 0 && (
-        <Group title="Шалгах зүйлс">
+        <Group size="section" title="Шалгах зүйлс">
           <ul className="space-y-1.5">
             {warnings.map((warning) => (
-              <li key={warning} className="flex items-start gap-2 text-[13px] leading-5 text-ink">
-                <Icons.alert size={14} className="mt-0.5 shrink-0 text-warning" />
+              <li key={warning} className="flex items-start gap-2 text-[15px] leading-6 text-ink">
+                <Icons.alert size={16} className="mt-1 shrink-0 text-warning" />
                 <span className="min-w-0 whitespace-pre-line">{warning}</span>
               </li>
             ))}
@@ -137,10 +148,10 @@ export function NewTripReview({
         </Group>
       )}
 
-      <Group title="Үндсэн">
+      <Group size="section" title="Үндсэн">
         <div className="grid gap-5 sm:grid-cols-2">
           <Field id="review-route-name" label="Аяллын нэр" required missing={!text(fields.route_name).trim()} danger className="sm:col-span-2" hint="Огноог нэрэнд бичихгүй, доорх календарьт сонгоно.">
-            <TextInput id="review-route-name" value={text(fields.route_name)} disabled={disabled} missing={!text(fields.route_name).trim()} danger className="text-[15px] font-semibold"
+            <TextInput id="review-route-name" value={text(fields.route_name)} disabled={disabled} missing={!text(fields.route_name).trim()} danger className="font-semibold"
               placeholder="Аяллын нэр" onChange={(e) => onChange({ ...fields, route_name: e.target.value })} />
           </Field>
           <Field label="Тээвэр" className="sm:col-span-2" hint={itinerary.length ? undefined : "Хөтөлбөр алга тул тээврийг сонгох боломжгүй. Хөтөлбөртэй болмогц сонгоно."}>
@@ -152,10 +163,10 @@ export function NewTripReview({
                     onClick={() => { if (!on) onChange(applyTransport(fields, type).fields); }}
                     className={cx("rounded-md border px-3 py-2.5 text-left transition-colors disabled:opacity-60",
                       on ? "border-brand bg-brand-soft" : "border-line-strong bg-surface hover:border-brand")}>
-                    <span className={cx("flex items-center gap-1.5 text-[13px] font-semibold", on ? "text-brand" : "text-ink")}>
+                    <span className={cx("flex items-center gap-1.5 text-sm font-semibold", on ? "text-brand" : "text-ink")}>
                       {on && <Icons.check size={12} />}{TRANSPORT_SHORT[type].label}
                     </span>
-                    <span className="mt-0.5 block text-[11px] leading-4 text-ink-muted">{TRANSPORT_SHORT[type].hint}</span>
+                    <span className="mt-0.5 block text-[13px] leading-5 text-ink-muted">{TRANSPORT_SHORT[type].hint}</span>
                   </button>
                 );
               })}
@@ -175,23 +186,24 @@ export function NewTripReview({
           <Notice tone="warning">
             Файлд <b>«{duration.written}»</b> гэж бичсэн ч хөтөлбөрт <b>{duration.programDays} өдөр</b> байна.
             <button type="button" disabled={disabled} onClick={() => onChange(withProgramDuration(fields))}
-              className="ml-2 rounded-md bg-brand px-2.5 py-1 text-xs font-semibold text-white hover:bg-brand-hover">Хөтөлбөрөөр: {duration.byProgram}</button>
+              className="ml-2 rounded-md bg-brand px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-brand-hover">Хөтөлбөрөөр: {duration.byProgram}</button>
           </Notice>
         )}
         <Evidence quote={evidence.duration} />
       </Group>
 
-      <Group title="Гарах өдөр ба үнэ" hint="Календариас гарах өдрөө сонгоно, сонгосон өдөр бүрийн үнэ доор гарна. Бүх өдөр ижил үнэтэй бол нэг үнэ л оруулна; өөр үнэтэй өдрийг нь тусад нь гаргана.">
-        <MultiDateCalendar selected={departures} tripDays={itinerary.length || undefined} disabled={disabled} onChange={(next) => onChange(withCalendarDays(fields, next))} />
-        {rules.length > 0 && <p className="mt-3 text-xs leading-5 text-ink-muted">Файлд бичсэн хуваарь: <span className="font-medium text-ink">{rules.join(", ")}</span></p>}
+      <Group size="section" title="Гарах өдөр ба үнэ" hint="Календариас гарах өдрөө сонгоно, сонгосон өдөр бүрийн үнэ доор гарна. Бүх өдөр ижил үнэтэй бол нэг үнэ л оруулна; өөр үнэтэй өдрийг нь тусад нь гаргана.">
+        <MultiDateCalendar selected={departures} tripDays={itinerary.length || undefined} disabled={disabled} onChange={setCalendar}
+          states={states} onStateChange={(day, next) => onChange(setDayState(fields, day, next))} />
+        {rules.length > 0 && <p className="mt-3 text-[13px] leading-5 text-ink-muted">Файлд бичсэн хуваарь: <span className="font-medium text-ink">{rules.join(", ")}</span></p>}
         {check.kind === "shift" && (
           <Notice tone="warning">
             Файлд <b>{formatYmd(check.departure)}</b> нь хөтөлбөрийн эхний өдөр (хил дээр). Улаанбаатараас галт тэрэг өмнөх орой нь хөдөлдөг.
             <span className="mt-2 flex flex-wrap gap-2">
               <button type="button" disabled={disabled} onClick={() => onChange(shiftDepartureDay(fields, check.departure, check.suggested))}
-                className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover">{formatYmd(check.suggested)}-нд Улаанбаатараас гарна</button>
+                className="rounded-md bg-brand px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-brand-hover">{formatYmd(check.suggested)}-нд Улаанбаатараас гарна</button>
               <button type="button" disabled={disabled} onClick={() => onChange({ ...fields, extra: { ...extra, itinerary_days: itinerary.map((day) => ({ ...day, date: "" })) } })}
-                className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-ink-muted hover:border-brand hover:text-ink">{formatYmd(check.departure)} хэвээр</button>
+                className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-[13px] font-medium text-ink hover:border-brand">{formatYmd(check.departure)} хэвээр</button>
             </span>
           </Notice>
         )}
@@ -199,19 +211,19 @@ export function NewTripReview({
           <Notice tone="warning">Гарах өдөр {formatYmd(check.departure)} боловч файлд хөтөлбөрийн эхний өдрийг {formatYmd(check.programStart)} гэж бичсэн ({formatYmd(check.expected)} байх ёстой). Аль нь зөвийг шалгаад календариас засна уу.</Notice>
         )}
         {check.kind === "consistent" && (
-          <p className="mt-3 flex items-center gap-1.5 text-xs text-success"><Icons.check size={12} /> Файлын өдрүүдтэй таарч байна: хөтөлбөрийн эхний өдөр {formatYmd(check.programStart)}.</p>
+          <p className="mt-3 flex items-center gap-1.5 text-[13px] text-success"><Icons.check size={13} /> Файлын өдрүүдтэй таарч байна: хөтөлбөрийн эхний өдөр {formatYmd(check.programStart)}.</p>
         )}
         {check.kind === "unknown" && added > 0 && departures.length > 0 && (
-          <p className="mt-3 text-xs leading-5 text-ink-muted">Сонгосон өдөр бол Улаанбаатараас галт тэрэг хөдлөх өдөр. Хөтөлбөрийн дараагийн өдөр ({formatYmd(addDaysYmd(departures[0], 1))}) хил давна.</p>
+          <p className="mt-3 text-[13px] leading-5 text-ink-muted">Сонгосон өдөр бол Улаанбаатараас галт тэрэг хөдлөх өдөр. Хөтөлбөрийн дараагийн өдөр ({formatYmd(addDaysYmd(departures[0], 1))}) хил давна.</p>
         )}
         {dateIssue && (
-          <p className="mt-3 flex items-start gap-2 text-xs font-medium leading-5 text-danger" role="status"><Icons.alert size={13} className="mt-0.5 shrink-0" />{dateIssue.text}{dateIssue.blocks === "publish" ? " Ноорог болгон хадгалж болно." : ""}</p>
+          <p className="mt-3 flex items-start gap-2 text-[13px] font-medium leading-5 text-danger" role="status"><Icons.alert size={14} className="mt-0.5 shrink-0" />{dateIssue.text}{dateIssue.blocks === "publish" ? " Ноорог болгон хадгалж болно." : ""}</p>
         )}
         <Evidence quote={evidence.departure} />
         <PriceSection fields={fields} onChange={onChange} />
         <div className="mt-8 border-t border-line pt-6">
-          <h4 className="text-sm font-semibold text-ink">Насны ангилал</h4>
-          <p className="mb-4 mt-1 text-xs leading-5 text-ink-muted">Хүүхэд, нярайн үнэ хэдэн настай хүнд хамаарахыг бичнэ. Дээрх бүх үнэнд адил хамаарна.</p>
+          <h4 className="text-base font-semibold text-ink">Насны ангилал</h4>
+          <p className="mb-4 mt-1 text-[13px] leading-5 text-ink-muted">Хүүхэд, нярайн үнэ хэдэн настай хүнд хамаарахыг бичнэ. Дээрх бүх үнэнд адил хамаарна.</p>
           <div className="grid gap-5 sm:grid-cols-3">
             {([["adult", "Том хүн", "ж: 12+ нас"], ["child", "Хүүхэд", "ж: 2-11 нас"], ["infant", "Нярай", "ж: 0-23 сар"]] as const).map(([key, label, placeholder]) => (
               <Field key={key} label={label}><TextInput value={text(ages[key])} disabled={disabled} placeholder={placeholder} onChange={(e) => setExtra({ age_rules: { ...ages, [key]: e.target.value } })} /></Field>
@@ -226,6 +238,7 @@ export function NewTripReview({
           locked={isTransitDay}
           showSourceDates
           showMealNotes
+          size="section"
           title={`Өдөр тутмын хөтөлбөр · ${itinerary.length} өдөр`}
           photoNote="Энэ өдрийн зураг. Доорх «Зураг» хэсгээс хасах эсвэл нүүр болгоно."
           onChange={(days) => onChange(setProgramDays(fields, days))}
@@ -234,7 +247,7 @@ export function NewTripReview({
         <Evidence quote={evidence.meals} />
       </div>
 
-      <Group title={photos.length ? `Зураг · ${photos.length}` : "Зураг"} hint={photos.length ? "Эхнийх нь нүүр зураг. Тохирохгүй зургийг хасна — цөөн, зөв зураг нь дээр." : undefined}>
+      <Group size="section" title={photos.length ? `Зураг · ${photos.length}` : "Зураг"} hint={photos.length ? "Эхнийх нь нүүр зураг. Тохирохгүй зургийг хасна — цөөн, зөв зураг нь дээр." : undefined}>
         {photos.length > 0 ? (
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {photos.map((photo, index) => (
@@ -242,11 +255,11 @@ export function NewTripReview({
                 <div className="relative overflow-hidden rounded-lg border border-line bg-surface-sunken">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={thumb(photo.url, 480, 320)} alt={photo.title || `Зураг ${index + 1}`} loading="lazy" className="aspect-[3/2] w-full object-cover" />
-                  {index === 0 && <span className="absolute left-2 top-2 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">Нүүр зураг</span>}
+                  {index === 0 && <span className="absolute left-2 top-2 rounded bg-ink/80 px-1.5 py-0.5 text-[12px] font-semibold text-white">Нүүр зураг</span>}
                   <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                     {index > 0 && (
                       <button type="button" disabled={disabled} onClick={() => onChange(makeCover(fields, photo.url))} title="Нүүр зураг болгох" aria-label="Нүүр зураг болгох"
-                        className="flex h-7 items-center rounded-md bg-surface/95 px-2 text-[11px] font-semibold text-ink shadow-sm hover:bg-surface">Нүүр</button>
+                        className="flex h-7 items-center rounded-md bg-surface/95 px-2 text-[12px] font-semibold text-ink shadow-sm hover:bg-surface">Нүүр</button>
                     )}
                     <button type="button" disabled={disabled} onClick={() => onChange(removePhoto(fields, photo.url))} title="Энэ зургийг хасах" aria-label={`${photo.title || "Зураг"} хасах`}
                       className="flex h-7 w-7 items-center justify-center rounded-md bg-surface/95 text-ink-muted shadow-sm hover:bg-danger-soft hover:text-danger">
@@ -254,18 +267,18 @@ export function NewTripReview({
                     </button>
                   </div>
                 </div>
-                <p className="mt-1.5 truncate text-xs font-medium text-ink" title={photo.title}>{photo.title || "Файлын зураг"}</p>
-                <p className="truncate text-[11px] text-ink-subtle">{[photo.day ? `${photo.day}-р өдөр` : "", photo.author, photo.license].filter(Boolean).join(" · ") || "Таны оруулсан зураг"}</p>
+                <p className="mt-1.5 truncate text-[13px] font-medium text-ink" title={photo.title}>{photo.title || "Файлын зураг"}</p>
+                <p className="truncate text-[13px] text-ink-muted">{[photo.day ? `${photo.day}-р өдөр` : "", photo.author, photo.license].filter(Boolean).join(" · ") || "Таны оруулсан зураг"}</p>
               </li>
             ))}
           </ul>
         ) : (
           <EmptyHint>Энэ аялалд тохирох зураг олдсонгүй. «Бүтэн засварлагчаар нээх» → «Зураг, бичлэг»-ээс нэмнэ.</EmptyHint>
         )}
-        {found > 0 && <p className="mt-2.5 text-xs leading-5 text-ink-subtle">{found} зургийг хөтөлбөрт нэрлэсэн газруудаар Wikimedia Commons-оос хайж олсон (зохиогч, лицензийг хадгалсан).</p>}
+        {found > 0 && <p className="mt-3 text-[13px] leading-5 text-ink-muted">{found} зургийг хөтөлбөрт нэрлэсэн газруудаар Wikimedia Commons-оос хайж олсон (зохиогч, лицензийг хадгалсан).</p>}
       </Group>
 
-      <Group title="Зочид буудлууд" hint="Буудал бүрийн холбоос, тайлбар, зураг. Вэбсайтын «Байрлах буудал» картанд харагдана.">
+      <Group size="section" title="Зочид буудлууд" hint="Буудал бүрийн холбоос, тайлбар, зураг. Вэбсайтын «Байрлах буудал» картанд харагдана.">
         <HotelProfilesEditor
           profiles={profiles}
           suggestions={hotelNamesOf(priceRows, text(fields.hotel))}
@@ -273,7 +286,7 @@ export function NewTripReview({
         />
       </Group>
 
-      <Group title="Нөхцөл">
+      <Group size="section" title="Нөхцөл">
         <div className="grid gap-6 sm:grid-cols-2">
           <Field label="Үнэд багтсан"><ReviewList ariaLabel="Үнэд багтсан" addLabel="Нэмэх" tone="good" items={strings(extra.included_items)} onChange={(items) => setExtra({ included_items: items })} /></Field>
           <Field label="Үнэд багтаагүй"><ReviewList ariaLabel="Үнэд багтаагүй" addLabel="Нэмэх" tone="bad" items={strings(extra.excluded_items)} onChange={(items) => setExtra({ excluded_items: items })} /></Field>
@@ -282,8 +295,8 @@ export function NewTripReview({
           </Field>
         </div>
         <div className="mt-8 border-t border-line pt-6">
-          <h4 className="text-sm font-semibold text-ink">Бүртгэлийн нөхцөл</h4>
-          <p className="mb-4 mt-1 text-xs leading-5 text-ink-muted">Бот «урьдчилгаа хэд вэ?», «виз хэрэгтэй юу?» зэрэг асуултад эндээс хариулна. Хоосон үлдвэл бот тэр асуултад хариулахгүй. Файлд бичсэн валютаар нь бичнэ.</p>
+          <h4 className="text-base font-semibold text-ink">Бүртгэлийн нөхцөл</h4>
+          <p className="mb-4 mt-1 text-[13px] leading-5 text-ink-muted">Бот «урьдчилгаа хэд вэ?», «виз хэрэгтэй юу?» зэрэг асуултад эндээс хариулна. Хоосон үлдвэл бот тэр асуултад хариулахгүй. Файлд бичсэн валютаар нь бичнэ.</p>
           <div className="grid gap-5 sm:grid-cols-2">
             {TERMS.map(([key, label, placeholder]) => (
               <Field key={key} label={label}>
@@ -294,7 +307,7 @@ export function NewTripReview({
         </div>
       </Group>
 
-      <Group title="Вэбсайтын бичвэр">
+      <Group size="section" title="Вэбсайтын бичвэр">
         <div className="grid gap-6">
           <Field label="Картанд гарах товч" hint="Сайтын аяллын жагсаалтын картанд гарах 1-2 өгүүлбэр: үзэх газрууд, онцлог. Огноо, үнэ бичихгүй.">
             <TextArea value={text(extra.website_summary)} disabled={disabled} placeholder="ж: Далайн эрэг, усан парк, шилэн гүүр — гэр бүлээрээ амрах аялал." onChange={(e) => setExtra({ website_summary: e.target.value })} />

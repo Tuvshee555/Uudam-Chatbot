@@ -1,6 +1,6 @@
 ﻿import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Icons, Logo, useToast } from "@/components/ui";
+import { Alert, Badge, Button, Icons, Logo, cx, useToast } from "@/components/ui";
 import { useAssistantChat } from "@/components/admin/useAssistantChat";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
 import { NewVersionBanner } from "@/components/admin/NewVersionBanner";
@@ -823,6 +823,7 @@ export default function AdminPage() {
       window.location.hash = nextTab;
     }
   }
+  const fullBleed = tab === "assistant";
   if (authState !== "signed_in") {
     return (
       <AdminLoginGate
@@ -902,8 +903,11 @@ export default function AdminPage() {
         </div>
       </header>
         {/* Content */}
-        <main id="admin-content" tabIndex={-1} className="scroll-area min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-          <div className="mx-auto w-full max-w-6xl">
+        {/* The assistant fills the content area edge to edge and scrolls inside itself (one scrollbar);
+            every other tab is a centered page that scrolls here. */}
+        <main id="admin-content" tabIndex={-1} className={cx("min-w-0 flex-1", fullBleed ? "flex min-h-0 flex-col overflow-hidden" : "scroll-area overflow-y-auto p-4 sm:p-6 lg:p-8")}>
+          <div className={cx("w-full", fullBleed ? "flex min-h-0 flex-1 flex-col" : "mx-auto max-w-6xl")}>
+          <div className={cx(fullBleed && "shrink-0 px-4 pt-4 empty:hidden sm:px-6")}>
           {botPaused && (
             <div className="mb-4 rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -947,7 +951,8 @@ export default function AdminPage() {
               </Alert>
             </details>
           )}
-          <div key={tab} className="animate-fade-up">
+          </div>
+          <div key={tab} className={cx("animate-fade-up", fullBleed && "flex min-h-0 flex-1 flex-col")}>
           {tab === "assistant" && (
             <AssistantTab
               messages={assistant.messages}
