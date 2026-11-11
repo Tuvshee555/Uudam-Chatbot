@@ -11,7 +11,8 @@
  * text followed by one Mongolian case ending from a CLOSED list (genitive, dative,
  * accusative, ablative, instrumental, comitative, plural), with or without the linking
  * consonant. An alias word shorter than five letters never matches inside a longer word:
- * it matches only as the whole word. The check runs in both spellings the matcher already
+ * it matches only as the whole word. An alias of six letters or more may also follow a
+ * two- or three-letter case ending of the previous word typed without a space. The check runs in both spellings the matcher already
  * uses (Cyrillic/normalised and phonetic Latin), so Latin typing of the same endings is
  * covered.
  */
@@ -20,10 +21,18 @@ import { MIN_AFFIXED_WORD_LETTERS, isMongolianCaseEnding, normText, phoneticLati
 /** Below this many letters an alias word matches only as a whole word, never inside a longer one. */
 export const MIN_AFFIXED_ALIAS_LETTERS = MIN_AFFIXED_WORD_LETTERS;
 
+/** A long alias may follow the previous word's ending typed without a space ("11-ны<alias>ы" as "ны<alias>ы"). */
+const MIN_GLUED_ALIAS_LETTERS = 6;
+
 function wordCarriesAlias(word: string, alias: string): boolean {
   if (word === alias) return true;
-  if (alias.length < MIN_AFFIXED_ALIAS_LETTERS || word.length <= alias.length || !word.startsWith(alias)) return false;
-  return isMongolianCaseEnding(word.slice(alias.length));
+  if (alias.length < MIN_AFFIXED_ALIAS_LETTERS || word.length <= alias.length) return false;
+  const at = word.startsWith(alias) ? 0 : alias.length >= MIN_GLUED_ALIAS_LETTERS ? word.indexOf(alias) : -1;
+  if (at < 0) return false;
+  // Glued: only a 2-3 letter case ending of the word before may stand in front of the alias.
+  if (at > 0 && (at < 2 || at > 3 || !isMongolianCaseEnding(word.slice(0, at)))) return false;
+  const rest = word.slice(at + alias.length);
+  return rest === "" || isMongolianCaseEnding(rest);
 }
 
 function occursAsWords(aliasText: string, queryText: string): boolean {

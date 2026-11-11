@@ -32,6 +32,12 @@ test("alias occurrence is token-aligned, with a closed list of case endings", ()
   assert.equal(aliasOccursInText("Талья", "талья руу явмаар байна"), true);
   // A long alias inside an unrelated longer word is not an occurrence either.
   assert.equal(aliasOccursInText("Тарвелия", "тарвелиянарын хүн"), false);
+  // The previous word's ending typed without a space ("11 ны<alias>ы") still leaves a long alias a word;
+  // any other letters in front do not, and a short alias never matches glued.
+  assert.equal(aliasOccursInText("Тарвелия", "11 сарын 11 ныТарвелияы аялал бий юу"), true);
+  assert.equal(aliasOccursInText("Тарвелия", "11 ныТарвелия"), true);
+  for (const text of ["хтарвелия", "абвТарвелия", "ныТарвелиянарын"]) assert.equal(aliasOccursInText("Тарвелия", text), false, text);
+  assert.equal(aliasOccursInText("Сана", "ныСана"), false);
 });
 
 const island = (id: string, name: string, dates: string[]) => trip(id, name, dates, [2_400_000, 2_000_000, null], {
