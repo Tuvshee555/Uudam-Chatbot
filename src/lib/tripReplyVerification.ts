@@ -1,6 +1,6 @@
 import type { TravelTrip } from "./travelTypes";
 import type { TripSelection } from "./tripRequest";
-import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply, replySectionTrips } from "./reply";
+import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply, replySectionTrips, withoutOwnTripWords } from "./reply";
 import { tripDurationDays, tripIdentityName } from "./travelFastPathsSearch";
 import { tripTransport, isTripOfferPrice } from "./tripFacts";
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type PassengerKind } from "./tripOffers";
@@ -10,14 +10,18 @@ import { departureAvailability, departureIsClosed } from "./departureAvailabilit
 
 const AMOUNT = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(?:₮|төгрөг|MNT)(?![\p{L}])/giu;
 
-/** "2-12 нас" / "2 – 12 нас" → "2-12нас"; "" when there is no band. */
+/**
+ * "2-12 нас" / "2 – 12 нас" → "2-12нас"; an open band as the trip writes it ("2 нас хүртэл", "12-оос доош
+ * нас", "12-оос дээш нас", "12+") → "2нас:хүртэл", "12нас:доош", "12нас:дээш"; "" when there is no band.
+ * A card prints the trip's own band text, so the same key means the same fare (2026-11-11: "Нярай /2 нас
+ * хүртэл/: Үнэгүй" was read as a 2-year-old, who is also in the 2-12 child band, and the answer was refused).
+ */
 function bandKey(text: string): string {
   const match = /(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(нас|сар|years?|months?)?/i.exec(text);
   if (match) return `${match[1]}-${match[2]}${/сар|month/i.test(match[3] || "") ? "сар" : "нас"}`;
-  // "2 нас хүртэл" / "up to 2 years" is the band 0-2, as the trip's own fare label writes it.
-  const upTo = /(\d{1,2})\s*(нас|сар|years?|months?)\s*(?:хүртэл|хүртлэх|болтол|доош|and\s+under|or\s+under)/i.exec(text)
-    || /(?:under|up\s+to)\s*(\d{1,2})\s*(years?|months?)/i.exec(text);
-  return upTo ? `0-${upTo[1]}${/сар|month/i.test(upTo[2] || "") ? "сар" : "нас"}` : "";
+  const open = /(\d{1,2})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(нас|сар)?\s*(хүртэл|доош|дээш)|(\d{1,2})\s*\+/i.exec(text);
+  if (!open) return "";
+  return open[4] ? `${open[4]}нас:дээш` : `${open[1]}${/сар/i.test(open[2] || "") ? "сар" : "нас"}:${open[3].toLowerCase()}`;
 }
 
 const FARE_LINE = /том\s*хүн|хүүх(?:эд|дийн)|нярай|adult|child|infant|нийт\s*:/i;
@@ -157,8 +161,11 @@ export function verifyTripReply(input: {
       dateSet = [];
     }
     if (isReferReply(guardInventedBookingTerms(line, "", active))) return "REFER";
-    const dates = parseDepartureDateText(numbersLine, now);
+    const dates = parseDepartureDateText(withoutOwnTripWords(numbersLine, trips), now);
     if (dates.length === 1) { date = dates[0]; dateSet = []; } else if (dates.length > 1) { date = null; dateSet = dates; }
+    // A new date heading starts its own block: a package an earlier block named ("Багц: Шинэ жил" under
+    // 12/25) is not the package of the next dates (2026-11-11: the next block's fares were refused).
+    if (dates.length && packageFromLine) { packageId = selection?.package || null; packageFromLine = false; }
     // Longest name first: "Lotus + Pearl" must not be read as "Lotus" (same rule as mentionedOfferHotel).
     const hotels = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.hotel))
       .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
@@ -189,10 +196,8 @@ export function verifyTripReply(input: {
       // A band printed exactly as one of the trip's own fares ("Хүүхэд /2-12 нас/:
       // 3,250,000₮") is that fare. Turning the band into one age broke wherever a
       // trip's bands touch ("2-12" next to "12+", "0-2" next to "2-8").
-      // "/2 нас хүртэл/" ("up to 2") is a band label too, not a 2-year-old (live 2026-11-11: a free infant
-      // fare written that way silenced the whole price card of a new trip).
-      const upToBand = !ageMatch?.[2] ? bandKey(fragment) : "";
-      const printedBand = ageMatch?.[2] ? bandKey(ageMatch[0]) : upToBand.startsWith("0-") ? upToBand : null;
+      // An open band printed in the label ("Нярай /2 нас хүртэл/") is matched the same way.
+      const printedBand = ageMatch?.[2] ? bandKey(ageMatch[0]) : (bandKey(/[/(][^/)]*[/)]/.exec(fragment)?.[0] || "") || null);
       if ((kind || packageId || amounts.some((amount) => amount < 1_000)) && amounts.length) {
         for (const amount of amounts) {
           // Asked of the resolver, so a hotel row that inherits the trip's infant

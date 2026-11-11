@@ -168,6 +168,43 @@ export function lowerDayStates(fields: Row, now = new Date()): Row {
 }
 
 /**
+ * A price row dated in a past year on the same month and day as an upcoming calendar day is that
+ * departure: the reader took the year from somewhere else on the page (2026-11-11: a partner page's
+ * publish date «2024-10-01» turned every row into 2024/2025 while the calendar had 2026). Only an exact
+ * month-day match with a coming calendar day is moved; a row truly in the past stays as it is.
+ */
+export function withRowYearsOfCalendar(fields: Row, now = new Date()): Row {
+  const extra = record(fields.extra);
+  const key = groupsKey(extra);
+  const groups = records(extra[key]);
+  if (!groups.length) return fields;
+  const today = mongoliaToday(now);
+  const coming = departureDays(fields.departure_dates, now).days.filter((day) => day >= today);
+  const isPast = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date < today;
+  // The reader used one wrong season for the whole table: the year gap the matching days show (2024 → 2026)
+  // moves every past row, also the months the calendar did not list. Several different gaps: nothing moves.
+  const gaps = new Set<number>();
+  for (const group of groups) for (const date of (Array.isArray(group.dates) ? group.dates.map(String) : []).filter(isPast)) {
+    for (const day of coming) if (day.slice(5) === date.slice(5)) gaps.add(Number(day.slice(0, 4)) - Number(date.slice(0, 4)));
+  }
+  if (gaps.size !== 1) return fields;
+  const gap = [...gaps][0];
+  let moved = false;
+  const rows = groups.map((group) => {
+    const dates = Array.isArray(group.dates) ? group.dates.map(String) : [];
+    const next = dates.map((date) => {
+      if (!isPast(date)) return date;
+      const shifted = `${Number(date.slice(0, 4)) + gap}${date.slice(4)}`;
+      return shifted >= today ? shifted : date;
+    });
+    if (next.every((date, index) => date === dates[index])) return group;
+    moved = true;
+    return { ...group, dates: next, date_keys: next, display_dates: next };
+  });
+  return moved ? { ...fields, extra: { ...extra, [key]: rows } } : fields;
+}
+
+/**
  * Every calendar day a price row names is a departure: a partner's schedule table lists each
  * departure once with its price, and the reader sometimes left some of them off the calendar
  * (2026-11-11: the January rows of a December–January table).

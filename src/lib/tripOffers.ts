@@ -274,9 +274,12 @@ function ageBand(text: string): OfferAgeBand | null {
   const factor = /сар|month/.test(value) ? 1 : 12;
   const range = /(?:^|\D)(\d{1,3})\s*[-\u2013\u2014]\s*(\d{1,3})(?!\d)/.exec(value);
   if (range) return Number(range[1]) <= Number(range[2]) ? { unit: "month", min: Number(range[1]) * factor, maxExclusive: (Number(range[2]) + 1) * factor } : null;
-  const plus = /(\d{1,3})\s*\+|(?:over|above)\s*(\d{1,3})|(\d{1,3})\s*(?:нас|сар)?\s*(?:дээш|болон дээш)/.exec(value);
+  // "12 дээш", and the way most partner pages write it, "12-оос дээш нас" / "2-оос доош" (the ablative
+  // ending between the number and the word). Unread, the whole trip's fare card was a contradiction
+  // and the bot quoted nothing (2026-11-11, three partner trips).
+  const plus = /(\d{1,3})\s*\+|(?:over|above)\s*(\d{1,3})|(\d{1,3})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(?:нас|сар)?\s*(?:дээш|болон дээш)/.exec(value);
   if (plus) return { unit: "month", min: Number(plus[1] || plus[2] || plus[3]) * factor, maxExclusive: null };
-  const under = /(?:under|below)\s*(\d{1,3})|(\d{1,3})\s*(?:нас|сар)?\s*(?:доош|хүртэл)/.exec(value);
+  const under = /(?:under|below)\s*(\d{1,3})|(\d{1,3})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(?:нас|сар)?\s*(?:доош|хүртэл)/.exec(value);
   if (under) return { unit: "month", min: 0, maxExclusive: (Number(under[1] || under[2]) + (value.includes("хүртэл") ? 1 : 0)) * factor };
   const single = /^(\d{1,3})\s*(?:нас|сар|years?|months?)$/.exec(value);
   return single ? { unit: "month", min: Number(single[1]) * factor, maxExclusive: (Number(single[1]) + 1) * factor } : null;

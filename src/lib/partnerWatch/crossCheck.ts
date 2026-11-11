@@ -16,6 +16,7 @@ import { departureDays } from "../tripReview";
 import { isInfantShapedAge } from "../travelFastPathsSearch";
 import type { AIChangeProposal, ConflictItem } from "../travelTypes";
 import { parseScheduleTables, type ScheduleRow } from "./scheduleTable";
+import { withRowYearsOfCalendar } from "../tripDayStates";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => (value && typeof value === "object" && !Array.isArray(value) ? (value as Row) : {});
@@ -25,11 +26,19 @@ const money = (value: number) => `${value.toLocaleString("en-US")}₮`;
 
 /** "Citadines Bayfront Nha Trang *****" → "citadines bayfront nha trang". */
 const hotelKey = (value: unknown) => text(value).toLowerCase().replace(/[*★]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-const sameHotel = (a: unknown, b: unknown) => {
-  const x = hotelKey(a);
-  const y = hotelKey(b);
-  return Boolean(x && y) && (x.includes(y) || y.includes(x));
-};
+/** The hotels a cell names: "1 A ****, 2. B" / "A / B" / "A эсвэл B" → ["a", "b"] (list numbers and stars dropped). */
+export function hotelParts(value: unknown): string[] {
+  return text(value).split(/\s*(?:,|\/|;|\n|\s+эсвэл\s+|\s+or\s+)\s*/i)
+    .map((part) => hotelKey(part.replace(/^\s*\d{1,2}\s*[.)]?\s+/, ""))).filter(Boolean);
+}
+/** Two cells name the same hotel(s): every hotel of each is in the other ("A, B" = "B / A"; "A" ≈ "A Hotel"). */
+export function sameHotel(a: unknown, b: unknown): boolean {
+  const x = hotelParts(a);
+  const y = hotelParts(b);
+  if (!x.length || !y.length) return false;
+  const found = (part: string, list: string[]) => list.some((other) => part.includes(other) || other.includes(part));
+  return x.every((part) => found(part, y)) && y.every((part) => found(part, x));
+}
 
 function isoOf(row: ScheduleRow, now: Date): string | null {
   if (/^\d{4}-\d{2}-\d{2}$/.test(row.date)) return row.date;
@@ -65,18 +74,35 @@ export function completeFromSchedule(fields: Row, pageText: string, now = new Da
   if (!parsed.ok || !parsed.rows.length) return { fields, notes: [] };
   const extra = record(fields.extra);
   const key = records(extra.price_groups).length ? "price_groups" : "departure_date_groups";
-  const rows = records(extra[key]);
-  if (!rows.length || !rows.some((row) => text(row.hotel))) return { fields, notes: [] };
+  // Copies: a row whose name is moved to its note is changed here, never the caller's object.
+  const rows = records(extra[key]).map((row) => ({ ...row }));
+  if (!rows.length) return { fields, notes: [] };
+  // Adding a hotel option needs the reader's rows to name hotels; moving a note does not.
+  const hotelRows = rows.some((row) => text(row.hotel));
   const dayOf = (row: Row) => departureDays(pricingDates(row, now), now).days;
   const added: Row[] = [];
   const addedText: string[] = [];
   const skipped: string[] = [];
   const differ: string[] = [];
+  const relabelled: string[] = [];
   for (const entry of parsed.rows) {
     const day = isoOf(entry, now);
-    if (!day || !entry.hotel) continue;
+    if (!day) continue;
     const sameDay = rows.filter((row) => dayOf(row).includes(day));
     if (!sameDay.length) continue;
+    // The page's note for this date («Шинэ жил», «Нэг талдаа дамжих нислэг») written as the row's name is read
+    // as a PACKAGE by the fare card («Багц: Шинэ жил»): it is the row's note.
+    if (entry.note) {
+      for (const row of sameDay) {
+        const label = text(row.label);
+        if (label && (entry.note.includes(label) || label.includes(entry.note))) {
+          row.note = [text(row.note), label].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index).join("; ");
+          row.label = "";
+          relabelled.push(`${entry.date} «${label}»`);
+        }
+      }
+    }
+    if (!entry.hotel || !hotelRows) continue;
     const match = sameDay.find((row) => sameHotel(row.hotel, entry.hotel));
     const adult = entry.prices.find((price) => ADULT.test(price.column))?.amount;
     if (match) {
@@ -85,8 +111,11 @@ export function completeFromSchedule(fields: Row, pageText: string, now = new Da
       }
       continue;
     }
-    // A row naming several hotels («A, B») already stands for both: not a missing option.
-    if (sameDay.some((row) => text(row.hotel).includes(",") && sameHotel(row.hotel, entry.hotel))) continue;
+    // The same prices as a row of that day: the same option named differently, not a missing hotel.
+    const amounts = entry.prices.map((price) => price.amount).sort((a, b) => a - b).join(",");
+    const rowAmounts = (row: Row) => [row.adult_price, ...records(row.passenger_prices).map((band) => band.price)]
+      .filter((value): value is number => typeof value === "number" && value > 0).sort((a, b) => a - b).join(",");
+    if (sameDay.some((row) => rowAmounts(row) === amounts)) continue;
     const built = rowFor(sameDay[0], entry, day);
     if (typeof built === "string") { skipped.push(`${entry.date} ${entry.hotel}: ${built}`); continue; }
     added.push(built);
@@ -96,7 +125,8 @@ export function completeFromSchedule(fields: Row, pageText: string, now = new Da
   if (addedText.length) notes.push({ text: `Хуудасны хүснэгтээс нэмсэн буудлын үнэ (AI уншаагүй): ${addedText.join("; ")}.`, severity: "info", type: "schedule_rows_added" });
   if (skipped.length) notes.push({ text: `Хүснэгтэд байгаа ч нэмж чадаагүй: ${skipped.join("; ")} — гараар шалгана уу.`, severity: "warning", type: "schedule_rows_skipped" });
   if (differ.length) notes.push({ text: `Хүснэгтийн үнэ AI уншсанаас өөр: ${differ.join("; ")} — хуудастай тулгаж шалгана уу.`, severity: "warning", type: "schedule_price_differs" });
-  if (!added.length) return { fields, notes };
+  if (relabelled.length) notes.push({ text: `Огнооны тэмдэглэлийг багцын нэр биш, тэмдэглэл болгосон: ${relabelled.join("; ")}.`, severity: "info", type: "schedule_notes_moved" });
+  if (!added.length && !relabelled.length) return { fields, notes };
   return { fields: { ...fields, extra: { ...extra, [key]: [...rows, ...added] } }, notes };
 }
 
@@ -105,7 +135,8 @@ export function crossCheckProposal(proposal: AIChangeProposal, pageText: string,
   if (!pageText.trim()) return proposal;
   for (const action of proposal.actions) {
     if (action.action !== "upsert" || text(action.trip_id) || !action.fields) continue;
-    const checked = completeFromSchedule(action.fields as Row, pageText, now);
+    // Rows the reader dated in another year are put on their calendar day first, or no page row would match them.
+    const checked = completeFromSchedule(withRowYearsOfCalendar(action.fields as Row, now), pageText, now);
     action.fields = checked.fields as typeof action.fields;
     for (const note of checked.notes) {
       proposal.conflict_items = [...(proposal.conflict_items || []), note];

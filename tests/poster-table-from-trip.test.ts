@@ -92,3 +92,14 @@ test("a save that changed a price rewrites the poster table and keeps its note; 
   assert.equal(await followedPosterPriceTable(before, poster, before, NOW), null);
   assert.deepEqual(rebuiltPosterTable(after, poster, NOW)?.note, "Нислэг ороогүй.");
 });
+
+test("a full date keeps its prices on the poster, and an infant fare kept on the row is a column", () => {
+  const priced = trip({ price_groups: [
+    { dates: ["2099-02-10"], status: "sold_out", adult_price: 1_000_000, infant_price: 700_000, passenger_prices: [{ label: "Хүүхэд", age_range: "2-11 нас", price: 800_000 }] },
+    { dates: ["2099-02-17"], adult_price: 1_100_000, infant_price: 700_000, passenger_prices: [{ label: "Хүүхэд", age_range: "2-11 нас", price: 800_000 }] },
+  ] });
+  const built = posterTableFromTrip(priced, NOW);
+  assert.ok(built.table);
+  assert.deepEqual(built.table.columns, ["Том хүн", "Хүүхэд 2-11 нас", "Нярай 0-2 нас"]);
+  assert.deepEqual((built.table.rows as Array<{ dates: string }>).map((row) => row.dates), ["2099 оны 2 сарын 10", "2099 оны 2 сарын 17"]);
+});
