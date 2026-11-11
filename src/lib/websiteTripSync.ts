@@ -18,6 +18,7 @@ import type { WebsiteSyncRow } from "./websiteSyncStatus";
 import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
+import { newWebsiteTripSlug } from "./websiteTripSlug";
 import { logWarn } from "./observability";
 import { safeFetch, SafeFetchError } from "./safeFetch";
 import { isHostedPhotoUrl } from "./tripPhotoEdit";
@@ -303,12 +304,24 @@ export function heldWebsiteFields(sourceMetadata: unknown): Set<string> {
   return held;
 }
 
+/**
+ * The website slug each trip's last delivered sync stored, and whether a later save is
+ * still on its way there. A trip the sync never reached is missing from the answer.
+ */
+export async function websiteSlugsFor(tripIds: string[]): Promise<Record<string, { slug: string | null; pending: boolean }>> {
+  const ids = [...new Set(tripIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const result = await queryNeon<{ trip_id: string; website_slug: string | null; pending: boolean }>(
+    "SELECT trip_id, website_slug, revision > synced_revision AS pending FROM trip_website_sync WHERE trip_id = ANY($1::text[])", [ids]);
+  return Object.fromEntries((result?.rows || []).map((row) => [row.trip_id, { slug: row.website_slug ? String(row.website_slug) : null, pending: row.pending === true }]));
+}
+
 async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster: Record<string, unknown>) {
   // Stable source IDs, not titles, are the identity across both databases.
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [source.id]);
   const prior = (await client.query(`SELECT * FROM "Trip" WHERE "sourceTripId"=$1 FOR UPDATE`, [source.id])).rows[0];
   const id = prior?.id || randomUUID();
-  const slug = prior?.slug || `trip-${createHash("sha256").update(source.id).digest("hex").slice(0, 20)}`;
+  const slug = prior?.slug || newWebsiteTripSlug(source.id);
   const d = duration(source.duration_text);
   // Only photos the website can draw: a source photo that could not be copied to
   // Cloudinary would be a broken image on every page showing the trip.

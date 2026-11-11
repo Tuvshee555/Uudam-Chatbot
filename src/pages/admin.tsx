@@ -23,6 +23,7 @@ import { TripCalendarTab } from "@/components/admin/TripCalendarTab";
 import { TripEditModal } from "@/components/admin/TripEditModal";
 import { useTripEditor } from "@/components/admin/tripEditor/useTripEditor";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
+import { CatalogueTab } from "@/components/admin/CatalogueTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
 import type { ControlState, DriveSyncDiagnostics, LeadCrmStatus, LeadStats, PageControlState, PauseRow, ReadinessReport, RecentRow, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
@@ -1134,6 +1135,7 @@ export default function AdminPage() {
               onAskAi={askAiAboutTrip}
             />
           )}
+          {tab === "catalogue" && <CatalogueTab apiFetch={fetchWithAdmin} />}
           {tab === "json" && (
             <JsonEditorTab
               apiFetch={fetchWithAdmin}

@@ -69,6 +69,15 @@ in, or with `Authorization: Bearer <ADMIN_API_TOKEN>`) reports this under `readi
 | `npm run lint` | ESLint |
 | `npm run build` | Production build (runs preflight config check first) |
 
+## Corporate catalogue
+
+Admin tab «Аяллын каталог» builds one PDF catalogue of the live trips (Generate, Preview, Publish,
+Rollback) that the bot sends to companies and groups on Messenger as ONE file attachment plus one
+short text. Architecture, rules, safeguards and the checklist before the first real send:
+[docs/corporate-catalogue.md](docs/corporate-catalogue.md). Quick looks without touching anything:
+`npm run catalogue:sample -- <outDir>` (render live trips to a folder) and
+`npm run catalogue:dry-run` (the exact payloads a customer would receive; nothing stored or sent).
+
 ## Key routes
 
 - `POST /api/webhook` — Meta webhook (messages in, replies out)

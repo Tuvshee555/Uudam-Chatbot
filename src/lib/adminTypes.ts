@@ -4,6 +4,7 @@
    ---------------------------------------------------------------- */
 
 import type { PriceRange } from "./priceRange";
+import type { SavedTripLink } from "./savedTripLinks";
 
 /**
  * "paused" = staff pulled bookings without cancelling the trip (schedule
@@ -380,6 +381,8 @@ export type ProposalMsg = {
   reviewed?: boolean;
   /** How a reviewed new trip was saved: a draft stays off the website and out of the bot. */
   savedAs?: "draft" | "publish";
+  /** The public website page of each trip the save wrote (null for a draft or a hidden trip), from the server. */
+  savedLinks?: SavedTripLink[];
   /** Why the last save was refused; the proposal stays open so it can be corrected and saved again. */
   saveError?: string;
   clarifications: ClarificationQuestion[];
@@ -455,6 +458,7 @@ export type TabKey =
   | "poster"
   | "documents"
   | "errors"
+  | "catalogue"
   | "json";
 
 export type FlowRule = {

@@ -208,7 +208,7 @@ test("a lock is ended only by its own timer; a newer save keeps its own lock", (
 test("save: a long save is waited for past the route's limit, and every answer reads plainly", () => {
   assert.ok(APPLY_WAIT_MS > 180_000, "the client waits longer than the route's 180 s maxDuration");
   assert.equal(applyOutcome(200, { ok: true, results: ["«A»: 12/2: Дүүрсэн"] }).kind, "saved");
-  assert.deepEqual(applyOutcome(200, { ok: true, message: "Request already applied.", results: [] }), { kind: "saved", text: "Өмнө нь хадгалагдсан байна." });
+  assert.deepEqual(applyOutcome(200, { ok: true, message: "Request already applied.", results: [] }), { kind: "saved", text: "Өмнө нь хадгалагдсан байна.", links: [] });
   const expired = applyOutcome(409, { ok: false, error: "proposal_expired", message: "Энэ санал 24 цагаас хуучирсан тул хадгалахгүй. Зааврыг дахин илгээнэ үү." });
   assert.equal(expired.kind, "expired");
   assert.match(expired.text, /24 цагаас хуучирсан/);

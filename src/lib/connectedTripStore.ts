@@ -3,6 +3,7 @@ import { queryNeon, withNeonClient } from "./neonDb";
 import { tripToPoster } from "./connectedTripMapping";
 import type { TravelTrip } from "./travelTypes";
 import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
+import { followedPosterPriceTable } from "./poster/posterTableFollow";
 
 let ready: Promise<void> | undefined;
 export type PosterWrite = { id: string; title: string; data: unknown; source_file?: string | null; note?: string | null };
@@ -63,6 +64,15 @@ export async function syncTripPoster(client: PoolClient, trip: TravelTrip, befor
   const posterId = String(trip.extra.poster_trip_id || `poster-for-${trip.id}`);
   const existing = await client.query(`SELECT data FROM poster_trips WHERE id = $1 FOR UPDATE`, [posterId]);
   const data = tripToPoster(trip, existing.rows[0]?.data, before);
+  // The poster price table follows the trip's prices (the PDF prints it; a Poster-tab save reads it back).
+  const followed = await followedPosterPriceTable(trip, data, before);
+  if (followed) {
+    data.price_table = followed;
+    // tripToPoster's "fares changed but rows kept" note is not needed once the rows follow.
+    const priorNote = (existing.rows[0]?.data as Record<string, unknown> | undefined)?.price_note;
+    if (priorNote === undefined) delete data.price_note;
+    else data.price_note = priorNote;
+  }
   await client.query(`INSERT INTO poster_trips (id, title, source_file, data)
     VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (id) DO UPDATE SET
     title = EXCLUDED.title, data = EXCLUDED.data, updated_at = NOW()`,

@@ -1,4 +1,6 @@
-import { getEnv } from "./env";
+import { createHmac } from "node:crypto";
+import { appSecretForToken, getEnv } from "./env";
+import { GRAPH_API_BASE } from "./metaGraph";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { BOT_MESSAGE_METADATA } from "./messenger";
 import { assertBotMaySend } from "./takeoverGuard";
@@ -475,4 +477,129 @@ export async function sendFbImageAsPdfByUrl(
     return false;
   }
   return sendFbFileAttachment(recipientId, attachmentId, pageToken);
+}
+
+// ── Detailed variants (corporate catalogue, src/lib/catalogue/send.ts) ───────────────────────────
+// The functions above answer "did it work". A catalogue send must also know WHY it did not (Meta
+// refused a cached attachment id, the 24-hour window closed, the token lacks permission) and which
+// message id Meta gave the file, so each failure is logged machine-readably and a rejected id is
+// uploaded again once. Additive: nothing above changed.
+
+/** What one Meta call returned. `errorCode`/`errorSubcode` are Meta's own numbers. */
+export type FbCallDetail = {
+  ok: boolean;
+  status: number | null;
+  errorCode: number | null;
+  errorSubcode: number | null;
+  errorMessage: string | null;
+  /** Outbound sends are switched off (kill switch / Vercel preview): nothing was sent. */
+  suppressed?: boolean;
+};
+export type FbUploadDetail = FbCallDetail & { attachmentId: string | null };
+export type FbSendDetail = FbCallDetail & { messageId: string | null; recipientId: string | null };
+
+/** Why a file call failed, in the few classes a caller acts on differently. */
+export type FbFailureClass = "attachment_rejected" | "window_closed" | "permission" | "rate_limited" | "transient" | "suppressed" | "other";
+
+function graphUrl(path: string, token: string): string {
+  const params = new URLSearchParams({ access_token: token });
+  // The proof is only valid with the secret of the app that issued the token (env.ts).
+  const secret = appSecretForToken(token);
+  if (secret) params.set("appsecret_proof", createHmac("sha256", secret).update(token).digest("hex"));
+  return `${GRAPH_API_BASE}${path}?${params.toString()}`;
+}
+
+async function readFbError(resp: Response): Promise<Pick<FbCallDetail, "errorCode" | "errorSubcode" | "errorMessage">> {
+  const body = await resp.json().catch(() => null) as { error?: { message?: unknown; code?: unknown; error_subcode?: unknown } } | null;
+  const error = body?.error;
+  return {
+    errorCode: typeof error?.code === "number" ? error.code : null,
+    errorSubcode: typeof error?.error_subcode === "number" ? error.error_subcode : null,
+    errorMessage: typeof error?.message === "string" ? error.message.slice(0, 300) : null,
+  };
+}
+
+export function classifyFbFailure(detail: FbCallDetail): FbFailureClass {
+  if (detail.suppressed) return "suppressed";
+  const message = (detail.errorMessage || "").toLowerCase();
+  // 10 / 2018278 and #551 are Meta's "outside the allowed window" and "person unavailable" answers.
+  if (detail.errorCode === 10 || detail.errorSubcode === 2018278 || detail.errorCode === 551 || /outside of allowed window|allowed window/.test(message)) return "window_closed";
+  if (detail.errorCode === 200 || detail.errorCode === 190 || detail.status === 401 || detail.status === 403) return "permission";
+  if (detail.errorCode === 4 || detail.errorCode === 17 || detail.errorCode === 32 || detail.errorCode === 613 || detail.status === 429) return "rate_limited";
+  if (detail.status === null || detail.status >= 500 || detail.errorCode === 1 || detail.errorCode === 2) return "transient";
+  // A bad, expired or other-page attachment id: Meta says 100 (invalid parameter) with a message about the attachment.
+  if (detail.errorCode === 100 || detail.status === 400) return /attachment|payload|media|file|url/.test(message) || detail.errorCode === 100 ? "attachment_rejected" : "other";
+  return "other";
+}
+
+/** Upload PDF bytes as a reusable attachment. `ok` with an `attachmentId` is the only success. */
+export async function uploadPdfBufferDetailed(buffer: Buffer, filename: string, pageToken: string): Promise<FbUploadDetail> {
+  const none = { status: null, errorCode: null, errorSubcode: null, errorMessage: null };
+  if (isMetaOutboundDisabled()) {
+    logMetaOutboundSuppressed("fbAttachmentUpload.uploadPdfBufferDetailed");
+    return { ok: false, attachmentId: null, suppressed: true, ...none };
+  }
+  try {
+    const pdfFilename = filename.toLowerCase().endsWith(".pdf") ? filename : `${filename}.pdf`;
+    const formData = new FormData();
+    formData.append("message", JSON.stringify({ attachment: { type: "file", payload: { is_reusable: true } } }));
+    const arrayBuf: ArrayBuffer = buffer.buffer instanceof ArrayBuffer
+      ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
+      : new Uint8Array(buffer).buffer;
+    formData.append("filedata", new Blob([arrayBuf], { type: "application/pdf" }), pdfFilename);
+    const resp = await fetch(graphUrl("/me/message_attachments", pageToken), { method: "POST", body: formData });
+    if (!resp.ok) {
+      const error = await readFbError(resp);
+      logError("fbAttachmentUpload.catalogue_upload_failed", { status: resp.status, errorCode: error.errorCode, errorSubcode: error.errorSubcode, sizeBytes: buffer.length });
+      return { ok: false, attachmentId: null, status: resp.status, ...error };
+    }
+    const json = await resp.json().catch(() => null) as { attachment_id?: unknown } | null;
+    const attachmentId = typeof json?.attachment_id === "string" && json.attachment_id ? json.attachment_id : null;
+    return { ok: attachmentId !== null, attachmentId, status: resp.status, errorCode: null, errorSubcode: null, errorMessage: attachmentId ? null : "no attachment_id in response" };
+  } catch (err) {
+    logError("fbAttachmentUpload.catalogue_upload_error", { message: err instanceof Error ? err.name : "unknown", sizeBytes: buffer.length });
+    return { ok: false, attachmentId: null, ...none, errorMessage: err instanceof Error ? err.name : "unknown" };
+  }
+}
+
+/** The JSON body of a file send, exactly as it goes to Meta: tagged as the bot's own message (see sendFbFileAttachment). */
+export function buildFbFileMessageBody(recipientId: string, source: { attachmentId: string } | { url: string }): Record<string, unknown> {
+  return {
+    recipient: { id: recipientId },
+    messaging_type: "RESPONSE",
+    message: {
+      attachment: { type: "file", payload: "attachmentId" in source ? { attachment_id: source.attachmentId } : { url: source.url, is_reusable: false } },
+      metadata: BOT_MESSAGE_METADATA,
+    },
+  };
+}
+
+/** Send an uploaded attachment; returns Meta's message id so the send can be logged and recognised as the bot's own. */
+export async function sendFbFileAttachmentDetailed(recipientId: string, attachmentId: string, pageToken: string): Promise<FbSendDetail> {
+  const none = { status: null, errorCode: null, errorSubcode: null, errorMessage: null, messageId: null, recipientId: null };
+  if (isMetaOutboundDisabled()) {
+    logMetaOutboundSuppressed("fbAttachmentUpload.sendFbFileAttachmentDetailed");
+    return { ok: false, suppressed: true, ...none };
+  }
+  try {
+    const resp = await fetch(graphUrl("/me/messages", pageToken), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildFbFileMessageBody(recipientId, { attachmentId })),
+    });
+    if (!resp.ok) {
+      const error = await readFbError(resp);
+      logError("fbAttachmentUpload.catalogue_send_failed", { status: resp.status, errorCode: error.errorCode, errorSubcode: error.errorSubcode });
+      return { ok: false, status: resp.status, messageId: null, recipientId: null, ...error };
+    }
+    const json = await resp.json().catch(() => null) as { message_id?: unknown; recipient_id?: unknown } | null;
+    return {
+      ok: true, status: resp.status, errorCode: null, errorSubcode: null, errorMessage: null,
+      messageId: typeof json?.message_id === "string" ? json.message_id : null,
+      recipientId: typeof json?.recipient_id === "string" ? json.recipient_id : null,
+    };
+  } catch (err) {
+    logError("fbAttachmentUpload.catalogue_send_error", { message: err instanceof Error ? err.name : "unknown" });
+    return { ok: false, ...none, errorMessage: err instanceof Error ? err.name : "unknown" };
+  }
 }

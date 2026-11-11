@@ -60,6 +60,50 @@ type CommonsPage = { title?: string; imageinfo?: Array<{ url?: string; thumburl?
 
 const plain = (html: string) => html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 
+// Camera and file words that say nothing about what a photo shows ("IMG_2041", "DSC 5531", "photo 3").
+const FILE_WORDS = new Set(["file", "img", "image", "images", "dsc", "dscn", "dscf", "dcim", "cimg", "pxl", "mvimg", "photo", "photos", "pic", "pics", "pict", "picture",
+  "jpg", "jpeg", "png", "tif", "tiff", "webp", "heic", "edit", "edited", "crop", "cropped", "hdr", "copy", "version", "ver", "rev", "wp"]);
+
+function titleWords(title: string): string[] {
+  return title.normalize("NFKC").toLowerCase()
+    .replace(/^file:/, "")
+    .replace(/\.(jpe?g|png|tiff?|webp|heic)$/, "")
+    // Dates and every other number: the same view shot twice on one day differs only there.
+    .replace(/\p{N}+/gu, " ")
+    .split(/[^\p{L}]+/u)
+    .filter((word) => word.length > 1 && !FILE_WORDS.has(word));
+}
+
+/**
+ * True when two candidates are the same picture for a trip page: their titles match once
+ * digits, dates, the file extension, punctuation and camera words are gone, or — found
+ * for the same sight — the titles differ by at most a word in four. "Hall of the People
+ * 20240721" and "Hall of the People 20240721 13" were both picked for one trip (2026-11-06).
+ * A title with no words left (only "IMG 2041") says nothing, so it matches only itself.
+ */
+export function samePicture(a: Pick<FoundPhoto, "url" | "title" | "query">, b: Pick<FoundPhoto, "url" | "title" | "query">): boolean {
+  if (a.url && a.url === b.url) return true;
+  const left = titleWords(a.title);
+  const right = titleWords(b.title);
+  if (!left.length || !right.length) return false;
+  if (left.join("") === right.join("")) return true;
+  if (!a.query || a.query.trim().toLowerCase() !== b.query.trim().toLowerCase()) return false;
+  const one = new Set(left);
+  const two = new Set(right);
+  const shared = [...one].filter((word) => two.has(word)).length;
+  return shared / new Set([...one, ...two]).size >= 0.75;
+}
+
+/** The photos in order with every later copy of an earlier picture dropped (the earlier one ranks higher). */
+export function withoutSamePictures<T extends Pick<FoundPhoto, "url" | "title" | "query">>(photos: T[], already: Array<Pick<FoundPhoto, "url" | "title" | "query">> = []): T[] {
+  const kept: T[] = [];
+  for (const photo of photos) {
+    if (already.some((other) => samePicture(other, photo)) || kept.some((other) => samePicture(other, photo))) continue;
+    kept.push(photo);
+  }
+  return kept;
+}
+
 /** The same Commons rendition at another width (its thumbnail URLs carry the width in the path). */
 export function commonsRendition(url: string, width: number): string {
   return url.replace(/\?.*$/, "").replace(/\/\d+px-/, `/${width}px-`);
@@ -145,13 +189,18 @@ export async function collectPhotoCandidates(queries: string[], options: { perQu
  * small previews (a few hundred tokens per photo). The model also rejects, so it
  * runs even on a small pool. Falls back to the largest ones when it cannot answer.
  */
-export async function rankPhotos(candidates: FoundPhoto[], input: { subject: string; count?: number; fetchImpl?: FetchLike;
+export async function rankPhotos(candidates: FoundPhoto[], input: { subject: string; count?: number;
+  /** Extra different pictures kept after the wanted count, for the caller to fall back on (a download that fails, a copy found only in the bytes). */
+  reserve?: number; fetchImpl?: FetchLike;
   ask?: typeof askOpenAIChatParts; trace?: { requestId?: string; correlationId?: string } }): Promise<FoundPhoto[]> {
   const count = input.count ?? PHOTOS_PER_TRIP;
   if (!candidates.length) return [];
   const fetchImpl = input.fetchImpl || fetch;
   const ask = input.ask || askOpenAIChatParts;
-  const previews = await Promise.all(candidates.slice(0, Math.min(30, Math.max(18, count * 3))).map(async (photo) => {
+  // Different pictures take the preview slots first; a second copy of one is shown only when slots are left.
+  const distinct = withoutSamePictures(candidates);
+  const pool = [...distinct, ...candidates.filter((photo) => !distinct.includes(photo))];
+  const previews = await Promise.all(pool.slice(0, Math.min(30, Math.max(18, count * 3))).map(async (photo) => {
     try {
       const response = await fetchImpl(commonsRendition(photo.url, PREVIEW_WIDTH), { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(10_000) });
       if (!response.ok) return null;
@@ -165,9 +214,12 @@ export async function rankPhotos(candidates: FoundPhoto[], input: { subject: str
     logWarn("trip_photos.no_previews", { candidates: candidates.length });
     return [];
   }
+  // A few reserves after the wanted number: a pick that turns out to be another copy of an
+  // earlier one is replaced by the next different picture, not left as a gap.
+  const spare = Math.min(4, Math.max(0, usable.length - count));
   const instruction = `You choose photographs for a travel agency's web page about: ${input.subject}.
-Each photo below is labelled with the place it was searched for. Pick up to ${count} of the ${usable.length} photos, best first. A photo qualifies only when a traveller would recognise in it the PLACE it is labelled with: that landmark, skyline or night view, beach, old town, famous street, bridge, park or natural scenery; sharp, well lit, inviting.
-Aim for ${count} photos: cover as many different places from the list as you can, then add more views of the best places. Never pick a photo that fails the rules below just to reach the number, and never two photos of the same view.
+Each photo below is labelled with the place it was searched for. Pick up to ${count + spare} of the ${usable.length} photos, best first. A photo qualifies only when a traveller would recognise in it the PLACE it is labelled with: that landmark, skyline or night view, beach, old town, famous street, bridge, park or natural scenery; sharp, well lit, inviting.
+Aim for ${count} photos: cover as many different places from the list as you can, then add more views of the best places${spare ? `; then list up to ${spare} more qualifying photos as reserves` : ""}. Never pick a photo that fails the rules below just to reach the number, and never two photos of the same view.
 Reject every one of these, however good the picture: food, dishes, drinks, ingredients, spices, tables, menus and restaurant interiors; objects, products and souvenirs; maps, satellite or aerial survey images; text overlays, logos, gates and signs; zoo animals; museum or shop interiors; plain buildings; close-ups of people, portraits and selfies; derelict or under-construction places; bad weather, blurry or dark images; another company's branding; border towns, railway and airport scenes; and any photo that shows a different city or country, or where you cannot tell that it is the labelled place.
 Answer with JSON only: {"picks":[photo numbers, best first]}.`;
   const parts: Parameters<typeof askOpenAIChatParts>[0] = [{ text: instruction }];
@@ -177,8 +229,10 @@ Answer with JSON only: {"picks":[photo numbers, best first]}.`;
     const result = await ask(parts, { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 200, timeoutMs: 30_000, imageDetail: "low",
       source: "trip_photos.rank", requestId: input.trace?.requestId, correlationId: input.trace?.correlationId });
     const picks = (JSON.parse(result?.text || "{}") as { picks?: unknown }).picks;
-    const chosen = (Array.isArray(picks) ? picks : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= usable.length)
-      .filter((n, i, all) => all.indexOf(n) === i).slice(0, count).map((n) => usable[n - 1].photo);
+    const picked = (Array.isArray(picks) ? picks : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= usable.length)
+      .filter((n, i, all) => all.indexOf(n) === i).map((n) => usable[n - 1].photo);
+    // Two files of one view (same landmark, same day): the better-ranked stays, the next different pick fills in.
+    const chosen = withoutSamePictures(picked).slice(0, count + Math.max(0, input.reserve ?? 0));
     // Fewer good photos beat a full set with a weak one; the model's rejections stand.
     if (chosen.length) return chosen;
   } catch (error) {

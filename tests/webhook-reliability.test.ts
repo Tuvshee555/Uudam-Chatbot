@@ -760,7 +760,8 @@ test("redis disconnect in replay/conversation mode fails closed with 503", async
     {
       cwd: process.cwd(),
       env: { ...process.env },
-      timeout: 20_000,
+      // The child process loads the whole webhook (tsx compile); that alone takes ~20 s on a loaded PC.
+      timeout: 90_000,
     },
   );
 

@@ -453,3 +453,13 @@ export function isSocialMessage(text: string): boolean {
 export function socialKindOfText(text: string): SocialKind {
   return socialKind(prepare(text)) ?? (isThanksOnly(text) ? "thanks" : "ack");
 }
+
+/**
+ * Does the message ask about a commercial term (barter, invoice, contract, instalments, card payment, a group
+ * discount), whatever need it is classified as? An organisation asking "can we pay by barter" is a group inquiry
+ * for the need gate, but it is never a request for the trip catalogue (webhook.ts catalogue step).
+ */
+export function asksCommercialTerm(text: string): boolean {
+  const p = prepare(text);
+  return Boolean(p.norm) && (commercialPolicy(p, headcountIn(text)) !== null || DISCOUNT_CUE.test(p.norm));
+}

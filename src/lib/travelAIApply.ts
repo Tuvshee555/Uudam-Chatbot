@@ -17,13 +17,13 @@
  * re-activates the trip, which reopens every closed date in the website projection, so each date
  * is then put back to what it was before the change (unless someone changed it in between).
  */
-import { logError } from "./observability";
+import { logError, logWarn } from "./observability";
 import { queryNeon } from "./neonDb";
 import type { AIChangeProposal, AITripAction, DateSeatState, DepartureDateState, TravelTrip, TripMutationFields } from "./travelTypes";
 import { ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, isDateSeatState } from "./travelDb";
 import { instructionForbidsTripCreation, validateAIChangeProposal } from "./travelAIValidation";
 import { attachPersistedPhotoSources, changeRequestId } from "./travelAI";
-import { withoutReviewOnly } from "./tripReview";
+import { PUBLISH_PRICE_TEXT, publishPriceGap, withoutReviewOnly } from "./tripReview";
 import { validateTripDataChange } from "./tripDataValidation";
 import { DATE_STATE_WORDS, WEBSITE_STATUS_WORDS, dateStateProblem, dateStatusOf, isDepartureDateState, isTripEditVerb, partnerSourceUrl, planTripEdit, ulaanbaatarToday } from "./tripActionPlan";
 import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
@@ -33,6 +33,8 @@ import { normalizeExtra } from "./tripExtraSchema";
 import { shortDay } from "./tripDatePrice";
 import type { PosterWrite } from "./connectedTripStore";
 import type { DepartureRowState, DepartureStateChange, DepartureStateRow } from "./websiteTripSync";
+import { savedTripLinks, type SavedTripInput, type SavedTripLink } from "./savedTripLinks";
+import { newWebsiteTripSlug } from "./websiteTripSlug";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => (value && typeof value === "object" && !Array.isArray(value) ? (value as Row) : {});
@@ -57,6 +59,8 @@ export type AIApplyDeps = {
   /** True while the trip's latest save has not reached the website (its projection is queued). */
   websiteSyncPending: (tripId: string) => Promise<boolean>;
   notifyWebsite: (slugs: string[]) => Promise<void>;
+  /** The website slug the sync stored for each trip, and whether a later save is still on its way. */
+  readWebsiteSlugs: (tripIds: string[]) => Promise<Record<string, { slug: string | null; pending: boolean }>>;
   now: () => Date;
 };
 
@@ -72,6 +76,7 @@ const defaultDeps: AIApplyDeps = {
   readDepartureRows: async (tripId) => (await import("./websiteTripSync")).readDepartureRows(tripId),
   websiteSyncPending: async (tripId) => (await import("./websiteTripSync")).websiteSyncPending(tripId),
   notifyWebsite: async (slugs) => (await import("./websiteTripSync")).notifyWebsiteTripsChanged(slugs),
+  readWebsiteSlugs: async (tripIds) => (await import("./websiteTripSync")).websiteSlugsFor(tripIds),
   now: () => new Date(),
 };
 let deps: AIApplyDeps = defaultDeps;
@@ -94,8 +99,19 @@ export function newTripSaveProblems(proposal: AIChangeProposal): string[] {
     const fields = withoutReviewOnly(action.fields as Record<string, unknown>);
     const name = String(fields.route_name || "").trim();
     for (const issue of validateTripDataChange(fields).introducedErrors) problems.push(name ? `«${name}»: ${issue.message}` : issue.message);
+    // Owner's rule (2026-11-06): published only with the adult and the child fare; a draft may wait.
+    // Checked here too, so no page or script can publish a new trip without them.
+    if (publishesNewTrip(fields)) {
+      const gap = publishPriceGap(fields, deps.now());
+      if (gap.adult || gap.child) problems.push(name ? `«${name}»: ${PUBLISH_PRICE_TEXT}` : PUBLISH_PRICE_TEXT);
+    }
   }
   return problems;
+}
+
+/** A new trip saved visible (no or an unknown status is saved as active: travelDb coerceTripStatus); a draft, archived or cancelled one is not. */
+function publishesNewTrip(fields: Row): boolean {
+  return !["draft", "archived", "cancelled"].includes(text(fields.status).toLowerCase());
 }
 
 type ActionResult = { ok: boolean; message: string; snapshot?: AIActionSnapshot };
@@ -494,6 +510,32 @@ async function runActions(actions: AITripAction[]) {
   return { results, snapshots, failed };
 }
 
+/**
+ * The public page of every trip the save wrote, read after the save and its website sync
+ * (savedTripLinks.ts), for the admin's "saved" bar. Never fails a save: without the website
+ * connection there are simply no links.
+ */
+export async function linksForSnapshots(snapshots: AIActionSnapshot[]): Promise<SavedTripLink[]> {
+  try {
+    const saved: SavedTripInput[] = [];
+    const read = new Map<string, TravelTrip | null>();
+    for (const snapshot of snapshots) {
+      let trip = snapshot.after;
+      if (!trip) {
+        if (!read.has(snapshot.trip_id)) read.set(snapshot.trip_id, await deps.getTripById(snapshot.trip_id));
+        trip = read.get(snapshot.trip_id) ?? null;
+      }
+      if (trip) saved.push({ trip, created: snapshot.created, slugHint: snapshot.website_slug });
+    }
+    if (!saved.length) return [];
+    const synced = await deps.readWebsiteSlugs(saved.map((entry) => entry.trip.id)).catch(() => ({}));
+    return savedTripLinks(saved, synced, newWebsiteTripSlug);
+  } catch (error) {
+    logWarn("travel.ai.saved_links_failed", { message: error instanceof Error ? error.message : String(error) });
+    return [];
+  }
+}
+
 /** Exported for the apply/rollback tests: a whole proposal's actions in order, as a save runs them. */
 export const runActionsForTests = runActions;
 
@@ -633,6 +675,7 @@ export async function applyAIRequest(requestId: number, reviewed?: AIChangePropo
     // A half-saved request keeps the snapshots of what was saved: rollback can undo that part.
     saved: snapshots.length,
     undo_available: snapshots.length > 0,
+    links: await linksForSnapshots(snapshots),
   };
 }
 
@@ -703,6 +746,7 @@ export async function applyAIProposalDirect(
     request_id: insertedRequestId,
     saved: snapshots.length,
     undo_available: snapshots.length > 0 && insertedRequestId !== null,
+    links: await linksForSnapshots(snapshots),
   };
 }
 

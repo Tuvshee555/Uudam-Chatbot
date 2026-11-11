@@ -11,8 +11,9 @@ import { Icons, cx } from "@/components/ui";
 export const controlCls =
   "w-full rounded-md border bg-surface text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand focus:outline-none focus:ring-3 focus:ring-brand/10 disabled:bg-surface-sunken/60 disabled:text-ink-subtle";
 
-export function borderFor(missing?: boolean) {
-  return missing ? "border-warning/70" : "border-line-strong";
+/** `danger`: a value that is required to publish and still empty is red, not the editor's calm amber. */
+export function borderFor(missing?: boolean, danger?: boolean) {
+  return missing ? (danger ? "border-danger" : "border-warning/70") : "border-line-strong";
 }
 
 export type Audience = "bot" | "website" | "poster";
@@ -64,14 +65,16 @@ export function Group({ title, hint, action, children, className }: { title?: st
 
 /**
  * Label, control and help text. `required` shows a quiet marker; `missing` (a required
- * value still empty after a save attempt) turns the help text amber. Never red: an empty
- * field is unfinished work, not a mistake.
+ * value still empty after a save attempt) turns the help text amber: an empty field is
+ * unfinished work, not a mistake. Only what the owner decided must be there to publish
+ * (the adult and child fare) asks for `danger`, which is red.
  */
 export function Field({
   id,
   label,
   required,
   missing,
+  danger,
   hint,
   anchor,
   className,
@@ -81,6 +84,8 @@ export function Field({
   label: React.ReactNode;
   required?: boolean;
   missing?: boolean;
+  /** With `missing`: red instead of amber (needed to publish). */
+  danger?: boolean;
   hint?: React.ReactNode;
   /** The completeness key this field answers; the header's "missing" list jumps here. */
   anchor?: string;
@@ -92,7 +97,7 @@ export function Field({
       <label htmlFor={id} className="mb-1.5 flex items-baseline justify-between gap-2 text-sm font-medium text-ink">
         <span className="min-w-0">{label}</span>
         {required && (
-          <span className={cx("shrink-0 text-[11px] font-medium", missing ? "text-warning" : "text-ink-subtle")}>
+          <span className={cx("shrink-0 text-[11px] font-medium", missing ? (danger ? "text-danger" : "text-warning") : "text-ink-subtle")}>
             {missing ? "Дутуу" : "Заавал"}
           </span>
         )}
@@ -103,8 +108,8 @@ export function Field({
   );
 }
 
-export function TextInput({ missing, className, ...rest }: React.InputHTMLAttributes<HTMLInputElement> & { missing?: boolean }) {
-  return <input {...rest} className={cx(controlCls, "h-10 px-3", borderFor(missing), className)} />;
+export function TextInput({ missing, danger, className, ...rest }: React.InputHTMLAttributes<HTMLInputElement> & { missing?: boolean; danger?: boolean }) {
+  return <input {...rest} aria-invalid={missing && danger ? true : rest["aria-invalid"]} className={cx(controlCls, "h-10 px-3", borderFor(missing, danger), className)} />;
 }
 
 export function TextArea({ className, ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -178,6 +183,7 @@ export function MoneyField({
   placeholder,
   disabled,
   missing,
+  danger,
   id,
 }: {
   value: string;
@@ -187,14 +193,17 @@ export function MoneyField({
   placeholder?: string;
   disabled?: boolean;
   missing?: boolean;
+  /** With `missing`: red (a fare needed to publish). */
+  danger?: boolean;
   id?: string;
 }) {
   const number = value.replace(/[^\d]/g, "");
   return (
-    <span className={cx("flex h-10 items-center rounded-md border bg-surface pl-3 pr-2.5 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/10", disabled && "bg-surface-sunken/60", borderFor(missing))}>
+    <span className={cx("flex h-10 items-center rounded-md border bg-surface pl-3 pr-2.5 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/10", disabled && "bg-surface-sunken/60", borderFor(missing, danger))}>
       <input
         id={id}
         aria-label={ariaLabel}
+        aria-invalid={missing && danger ? true : undefined}
         inputMode="numeric"
         disabled={disabled}
         value={number ? Number(number).toLocaleString("en-US") : ""}

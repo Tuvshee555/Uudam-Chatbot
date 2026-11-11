@@ -12,9 +12,11 @@ import type { AIChangeProposal, AITripAction, ConflictItem } from "./travelTypes
 import { askOpenAIChatParts } from "./openaiFallback";
 import { logWarn } from "./observability";
 import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
+import { describeImageBuffer, isSameImage, type ImageMarks } from "./tripPhotoImport/dedupePhotos";
+import { withSuggestedHotelProfiles } from "./tripHotelNames";
 import { MIN_TRIP_PRICE_MNT, PARTNER_PRICE, PRICE_MISSING, PRICE_QUESTION_MARK, mentionsPartnerPrice, parseMntPrices, withoutPartnerPrices } from "./tripPriceRules";
 import {
-  collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, photosWantedFor, rankPhotos, type FoundPhoto,
+  collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, photosWantedFor, rankPhotos, withoutSamePictures, type FoundPhoto,
 } from "./tripPhotoFinder";
 import {
   TRANSPORT_CHOICE, TRANSPORT_LABELS, detectTransportType, durationForDays, isTransitDay, isTransportType,
@@ -237,25 +239,39 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
   const dayOfQuery = new Map(queries.map((query) => [query.query, query.day]));
   const subject = (list: Array<{ query: string }>) => `${route}: ${list.map((query) => query.query).join(", ")}`;
   const candidates = await collectPhotoCandidates(queries.map((query) => query.query), { perQuery: 6, fetchImpl: deps.fetchImpl });
-  const chosen = await rankPhotos(candidates, { subject: subject(queries), count: missing, fetchImpl: deps.fetchImpl, ask: deps.ask, trace: input.trace });
+  const chosen = await rankPhotos(candidates, { subject: subject(queries), count: missing, reserve: 3, fetchImpl: deps.fetchImpl, ask: deps.ask, trace: input.trace });
   // Too few qualified: one broader search of the destination cities themselves.
   if (chosen.length < missing && Date.now() - startedAt < budgetMs / 2) {
     const cities = Array.from(new Set(queries.filter((query) => query.day === null).map((query) => query.query.replace(/\s+(skyline|famous landmark)$/i, "")))).slice(0, 3);
     const broader = cities.flatMap((city) => [`${city} old town`, `${city} park`, `${city} panorama`, `${city} at night`]).map((query) => ({ query, day: null }));
     if (broader.length) {
-      const seen = new Set([...candidates, ...chosen].map((photo) => photo.url));
-      const more = (await collectPhotoCandidates(broader.map((query) => query.query), { perQuery: 4, fetchImpl: deps.fetchImpl })).filter((photo) => !seen.has(photo.url));
-      chosen.push(...await rankPhotos(more, { subject: subject(broader), count: missing - chosen.length, fetchImpl: deps.fetchImpl, ask: deps.ask, trace: input.trace }));
+      const seen = new Set(candidates.map((photo) => photo.url));
+      // Another file of a picture already chosen is no new photo (samePicture).
+      const more = withoutSamePictures((await collectPhotoCandidates(broader.map((query) => query.query), { perQuery: 4, fetchImpl: deps.fetchImpl })).filter((photo) => !seen.has(photo.url)), chosen);
+      chosen.push(...withoutSamePictures(await rankPhotos(more, { subject: subject(broader), count: missing - chosen.length, fetchImpl: deps.fetchImpl, ask: deps.ask, trace: input.trace }), chosen));
     }
   }
   const credits = { ...record(extra.photo_credits) };
   const placed: Array<{ photo: FoundPhoto; url: string }> = [];
-  // Three at a time: nine photos one by one took most of the reading's time budget.
-  for (let index = 0; index < chosen.length; index += 3) {
+  const marks: ImageMarks[] = [];
+  // Three at a time: nine photos one by one took most of the reading's time budget. Only as many
+  // as are still missing are taken; the reserves behind them are used when a file fails to download
+  // or turns out to be the same picture as one already placed (found under another name).
+  for (let index = 0; index < chosen.length && placed.length < missing;) {
     if (Date.now() - startedAt > budgetMs) break;
-    const batch = await Promise.all(chosen.slice(index, index + 3).map(async (photo) => {
+    const take = Math.min(3, missing - placed.length);
+    const batch = chosen.slice(index, index + take);
+    index += take;
+    const files = (await Promise.all(batch.map(async (photo) => {
       const file = await downloadPhoto(photo, deps.fetchImpl);
-      if (!file) return null;
+      return file ? { photo, file, mark: await describeImageBuffer(file.buffer) } : null;
+    }))).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    const fresh = files.filter((entry) => {
+      if (marks.some((other) => isSameImage(other, entry.mark))) return false;
+      marks.push(entry.mark);
+      return true;
+    });
+    const uploaded = await Promise.all(fresh.map(async ({ photo, file }) => {
       try {
         const url = await upload(file.buffer, `${photo.title.replace(/[^\p{L}\p{N}]+/gu, "-").slice(0, 60) || "photo"}.jpg`, file.mimeType);
         return { photo, url };
@@ -264,7 +280,7 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
         return null;
       }
     }));
-    for (const entry of batch) if (entry) placed.push(entry);
+    for (const entry of uploaded) if (entry) placed.push(entry);
   }
   if (!placed.length) return { added: 0, message: null };
   for (const { photo, url } of placed) credits[url] = { title: photo.title, author: photo.author, license: photo.license, page: photo.pageUrl, provider: PHOTO_PROVIDER };
@@ -317,6 +333,10 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Row;
     const route = routeName(action);
+    // The hotels the file names are the trip's hotels from the start (name only): until
+    // 2026-11-06 each was a «+» suggestion the admin had to click, or it was never saved.
+    const withHotels = withSuggestedHotelProfiles(fields);
+    if (withHotels !== fields) fields.extra = withHotels.extra;
     const extra = record(fields.extra);
     const days = (Array.isArray(extra.itinerary_days) ? extra.itinerary_days : []).map((entry) => record(entry) as ItineraryDay);
     if (!days.length || !route) continue;
@@ -358,7 +378,7 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
       if (built.added > 0 || !detected.sure || typeof fields.adult_price !== "number") proposal.needs_confirmation = true;
       // What is still missing is said once, beside the field it belongs to (tripReview.ts).
       if (typeof fields.adult_price !== "number") {
-        setConflictItem(proposal, { text: `«${route}»: файлд төгрөгийн зарах үнэ алга (юань, ландын үнийг үнэ гэж авахгүй). Үнэ оруулаагүй бол сайтад «Үнэ лавлах» гэж гарна.`, severity: "info", type: PRICE_MISSING, data: { route_name: route } }, route);
+        setConflictItem(proposal, { text: `«${route}»: файлд төгрөгийн зарах үнэ алга (юань, ландын үнийг үнэ гэж авахгүй). Нийтлэхийн өмнө том хүн, хүүхдийн үнийг оруулна.`, severity: "info", type: PRICE_MISSING, data: { route_name: route } }, route);
       } else {
         dropConflictItem(proposal, PRICE_MISSING, route);
       }
