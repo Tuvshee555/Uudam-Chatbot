@@ -307,10 +307,12 @@ async function routeFastPathTextInner(input: {
     // Every place the customer names must be in the trip (placeCoverage.ts). A pick by number, or the trip
     // already selected, is the customer's own choice; anything else that leaves a named place out is a
     // trip the bot does not have: staff take it, and no trip is remembered for the next turn.
-    if (!numericChoice && previousSelection?.tripId !== trip.id && (await placesMissingFromTrip(text, trip, trips, input.getEndedTrips)).length) {
+    const offered = (await getClarificationState(senderId))?.candidateTripIds || [];
+    // A trip from the list the bot just offered is the customer's own pick too ("лумиагаас" under a list).
+    if (!numericChoice && previousSelection?.tripId !== trip.id && !offered.includes(trip.id)
+      && (await placesMissingFromTrip(text, trip, trips, input.getEndedTrips)).length) {
       return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
     }
-    const offered = (await getClarificationState(senderId))?.candidateTripIds || [];
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
     // The party belongs to the customer, not to one trip: a switch that states no head count keeps the

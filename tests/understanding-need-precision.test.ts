@@ -133,19 +133,18 @@ const stub = (overrides: Partial<NeedDispatchInput> = {}) => {
   return { input, delivered, leads };
 };
 
-test("dispatch: the 'passed to the consultant' sentence is sent only after the lead was saved", async () => {
+// Owner decision 2026-11-11: a group ask is answered by the corporate catalogue (webhook.ts runs it first); the need
+// gate's own wording reply was removed, so what reaches dispatch is something the bot does not know: silence and a
+// typed lead, never a promise. (This test used to assert the wording reply and its hand-off sentence.)
+test("dispatch: a group the catalogue did not take is silence plus a typed lead", async () => {
   const saved = stub();
   assert.equal(await dispatchNeed(saved.input), true);
-  assert.equal(saved.delivered.length, 1);
-  assert.match(saved.delivered[0].reply, /дамжууллаа/);
-  assert.match(saved.delivered[0].reply, /Аль чиглэлд явахыг хүсэж байна вэ\?$/);
+  assert.deepEqual(saved.delivered, [], "nothing is sent");
   assert.ok(saved.leads[0].context!.startsWith("[need:business_group]"));
-
-  // The lead could not be persisted: no promise, no hand-off sentence; only the one question remains.
+  // The lead could not be persisted: still nothing is promised to the customer.
   const failed = stub({ captureLead: async () => { throw new Error("db down"); } });
   assert.equal(await dispatchNeed(failed.input), true);
-  assert.deepEqual(failed.delivered.map((entry) => entry.reply), ["Аль чиглэлд явахыг хүсэж байна вэ?"]);
-  assert.doesNotMatch(failed.delivered[0].reply, /дамжууллаа|бэлтгэнэ|зөвлөх/);
+  assert.deepEqual(failed.delivered, []);
 });
 
 test("dispatch: commercial policy and a ticket-only wish are silence plus a lead; a lost lead is not swallowed", async () => {

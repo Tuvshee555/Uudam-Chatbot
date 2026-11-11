@@ -311,13 +311,33 @@ export function getTripSearchHaystack(trip: TravelTrip): string {
  * haystack, so comparing "<аялал А> болон <аялал Б>" pulled in a third tour whose only
  * connection to the question was the word "and".
  */
+/**
+ * The part of a trip title that names the trip. Staff sometimes write an instruction into the title
+ * ("<places> - ХАМТ ОЛНЫ ЗАХИАЛГА - 2026-12-15-с өмнөх өдрүүдэд хамт олны захиалга авна", live 2026-11-11):
+ * a dash-separated segment with a date, a sentence verb or a booking label is a note, not the trip's
+ * identity, and its everyday words ("хамт", "өдрүүд", "авна") must not make the trip match "Хоёулаа явна".
+ * The customer still sees the full title; only matching ignores the note.
+ */
+const TITLE_NOTE_SEGMENT = /\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s*(?:сарын|-?р\s+сарын)\s*\d{1,2}|захиалг|booking|(?:^|\s)\p{L}*(?:авна|авахгүй|болно|байна|явна|өгнө)(?=\s|$)/iu;
+export function tripIdentityName(routeName: string): string {
+  const name = String(routeName || "");
+  // Pieces alternate: segment, separator, segment, ... (the separators are kept as typed).
+  const pieces = name.split(/(\s+[-–—]\s+)/u);
+  if (pieces.length < 3) return name;
+  let out = pieces[0];
+  for (let index = 2; index < pieces.length; index += 2) {
+    if (!TITLE_NOTE_SEGMENT.test(pieces[index])) out += pieces[index - 1] + pieces[index];
+  }
+  return out;
+}
+
 export function getTripNameHaystack(trip: TravelTrip): string {
-  return normText([trip.route_name, ...getAliases(trip)].join(" "));
+  return normText([tripIdentityName(trip.route_name), ...getAliases(trip)].join(" "));
 }
 
 function tripSearchTokens(trip: TravelTrip): string[] {
   return unique([
-    ...keywordTokens(trip.route_name),
+    ...keywordTokens(tripIdentityName(trip.route_name)),
     ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
     ...keywordTokens(trip.category || ""),
     ...keywordTokens(trip.source_description || ""),
@@ -865,10 +885,11 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     if (wantsSeaBeach && !tripHasSeaBeach(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;
 
-    const routeNorm = normText(trip.route_name);
-    const routePhonetic = phoneticLatinText(trip.route_name);
-    const routeKeywords = unique(keywordTokens(trip.route_name));
-    const routePhoneticKeywords = unique(phoneticKeywordTokens(trip.route_name));
+    const identityName = tripIdentityName(trip.route_name);
+    const routeNorm = normText(identityName);
+    const routePhonetic = phoneticLatinText(identityName);
+    const routeKeywords = unique(keywordTokens(identityName));
+    const routePhoneticKeywords = unique(phoneticKeywordTokens(identityName));
     if (!routeKeywords.length && !routePhoneticKeywords.length) continue;
 
     // Check aliases — full string OR token-level overlap.
@@ -1491,7 +1512,7 @@ function examFeeIntentScore(query: string, trip: TravelTrip): number {
  * name match for the city the customer asked about.
  */
 function tripIdentityText(trip: TravelTrip): string {
-  return normText([trip.route_name, ...getAliases(trip)].join(" "));
+  return normText([tripIdentityName(trip.route_name), ...getAliases(trip)].join(" "));
 }
 
 /**

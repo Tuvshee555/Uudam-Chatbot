@@ -200,13 +200,9 @@ function namedDestinations(intentText: string, trips: TravelTrip[]): string[] {
   });
 }
 
-/**
- * The trip holds EVERY place the customer named (placeCoverage.ts, live 2026-11-07: "<city A> <city B> 2 hotiin
- * aylal" was listed trips that hold only one of the two). One place named: the trips that go there.
- */
 function nameHasAny(trip: TravelTrip, destinations: string[]): boolean {
   const words = getTripNameHaystack(trip).split(" ");
-  return destinations.length > 0 && destinations.every((token) => words.some((word) => wordMatchesName(token, word)));
+  return destinations.some((token) => words.some((word) => wordMatchesName(token, word)));
 }
 
 function titleCase(word: string): string {
