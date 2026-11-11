@@ -157,18 +157,18 @@ test("chapter openers: quick books open chapters of two or more trips; one-trip 
   assert.equal(planPages({ ...lone, edition: "complete" }).hasOpeners, true);
 });
 
-test("compositions: deterministic rhythm, never the same twice in a row when another fits, type page without a photo", () => {
+test("compositions: one design - the full-page photo wherever it can print, the plate as fallback, type without a photo", () => {
+  // Owner, launch week 2: every trip page is the same full-bleed photo page (no rotating layouts).
   const all = { hasHero: true, cinema: true, plate: true, panorama: true, diptych: true };
   const run = assignCompositions(Array.from({ length: 8 }, () => all));
-  assert.deepEqual(run, ["cinema", "plate", "panorama", "diptych", "cinema", "plate", "panorama", "diptych"]);
+  assert.deepEqual(run, Array.from({ length: 8 }, () => "cinema"));
   assert.deepEqual(assignCompositions(Array.from({ length: 8 }, () => all)), run, "deterministic");
   const plateOnly = { hasHero: true, cinema: false, plate: true, panorama: false, diptych: false };
-  assert.deepEqual(assignCompositions([plateOnly, plateOnly]), ["plate", "plate"], "falls back rather than inventing a fit");
-  const mixed = assignCompositions([all, { ...all, hasHero: false }, { ...plateOnly, panorama: true }]);
-  assert.equal(mixed[1], "type");
-  assert.notEqual(mixed[2], "type");
-  for (let i = 1; i < run.length; i++) assert.notEqual(run[i], run[i - 1]);
+  assert.deepEqual(assignCompositions([plateOnly, plateOnly]), ["plate", "plate"], "a photo too small for the whole page falls back to the plate");
+  const mixed = assignCompositions([all, { ...all, hasHero: false }, plateOnly]);
+  assert.deepEqual(mixed, ["cinema", "type", "plate"]);
 });
+
 
 test("groupDatesByMonth: month lines in Mongolian numeric style; the year shows only when it differs from the issue year; days are two digits", () => {
   const lines = groupDatesByMonth(["2026-11-24", "2026-11-10", "2026-11-17", "2027-01-05", "2027-01-12", "2026-11-10"], "2026");
@@ -491,7 +491,8 @@ test("a baked scrim darkens the lower part of the photo and leaves the top alone
   assert.ok(Math.abs((await mean(plain, 0.02)) - (await mean(scrimmed, 0.02))) < 6, "top untouched");
   assert.ok((await mean(scrimmed, 0.88)) < (await mean(plain, 0.88)) - 70, "bottom darkened");
   assert.ok(scrimStrength(0.9) > scrimStrength(0.1));
-  assert.ok(scrimStrength(0) >= 0.5 && scrimStrength(1) <= 0.9);
+  // stronger since owner feedback (titles over bright photos), still never a solid block
+  assert.ok(scrimStrength(0) >= 0.5 && scrimStrength(1) <= 0.95);
 });
 
 test("big editions get a smaller encode profile", () => {
@@ -572,16 +573,17 @@ test("cover: the dedicated cover photograph is used, no trip page repeats it, an
   }
 });
 
-test("cover: the landscape plate fades into the panel colour, so the photo and the navy panel are one surface", async () => {
+test("cover: the landscape plate fades into the panel colour, so the photo and the dark panel are one surface", async () => {
   const snap = sampleSnapshot({ trips: 3, edition: "quick", coverPhoto: "ok" });
   const art = await prepareArt(snap, planPages(snap), sampleImageFetcher());
   const bytes = Buffer.from(art.cover!.image.dataUri.split(",")[1]!, "base64");
   const { width, height } = await sharp(bytes).metadata();
   const edge = await sharp(bytes).extract({ left: 0, top: height! - 4, width: width!, height: 4 }).resize(1, 1).raw().toBuffer();
   const [r, g, b] = [edge[0]!, edge[1]!, edge[2]!];
-  assert.ok(Math.abs(r - 0x14) <= 6 && Math.abs(g - 0x20) <= 6 && Math.abs(b - 0x2e) <= 6, `bottom edge ${r},${g},${b} should be the panel navy`);
+  // neutral near-black since owner feedback (no brand-blue blocks)
+  assert.ok(Math.abs(r - 0x11) <= 6 && Math.abs(g - 0x11) <= 6 && Math.abs(b - 0x11) <= 6, `bottom edge ${r},${g},${b} should be the neutral panel`);
   const html = buildCatalogueHtml(snap, assetsFor(snap, { cover: art.cover }));
-  assert.ok(html.includes("coverplate") && html.includes('style="top:700pt"'));
+  assert.ok(html.includes("coverplate") && html.includes('style="top:400pt"'));
 });
 
 test("cover: without a dedicated photograph the cover trip's other photograph is preferred over its hero; the hero is the last resort", async () => {

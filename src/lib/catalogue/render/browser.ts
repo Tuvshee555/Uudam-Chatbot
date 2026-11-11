@@ -31,11 +31,13 @@ export function localBrowserPath(): string | undefined {
 async function launch(): Promise<Browser> {
   const local = localBrowserPath();
   try {
-    return await playwright.launch({
+    const browser = await playwright.launch({
       executablePath: local || (await chromium.executablePath()),
       args: local ? [] : chromium.args,
       headless: true,
     });
+    await rememberPid(browser);
+    return browser;
   } catch (error) {
     throw new CatalogueRenderError("browser_unavailable", `Chromium-ийг ажиллуулж чадсангүй: ${(error as Error).message}`, { cause: error });
   }
@@ -49,8 +51,28 @@ const CLOSE_GRACE_MS = 8_000;
  */
 async function closeQuietly(browser: Browser | null): Promise<void> {
   if (!browser) return;
-  const closing = browser.close().catch(() => {});
+  const pid = browserPids.get(browser) ?? null;
+  let closed = false;
+  const closing = browser.close().then(() => { closed = true; }, () => { closed = true; });
   await Promise.race([closing, new Promise<void>(resolve => setTimeout(resolve, CLOSE_GRACE_MS).unref?.())]);
+  // A Chromium that did not exit in time is killed: left running, it keeps this Node process alive
+  // forever (test runs never finish) and piles up as orphan processes that slow the machine down.
+  if (!closed && pid) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  }
+}
+
+/** Chromium's own process id per launched browser, read once over CDP; only used to force-kill. */
+const browserPids = new WeakMap<Browser, number>();
+
+async function rememberPid(browser: Browser): Promise<void> {
+  try {
+    const cdp = await browser.newBrowserCDPSession();
+    const info = (await cdp.send("SystemInfo.getProcessInfo")) as { processInfo?: Array<{ type: string; id: number }> };
+    const main = info.processInfo?.find(p => p.type === "browser");
+    if (main?.id) browserPids.set(browser, main.id);
+    await cdp.detach().catch(() => {});
+  } catch { /* no CDP process info: closing falls back to waiting */ }
 }
 
 let probe: { at: number; result: Promise<boolean> } | null = null;

@@ -61,7 +61,7 @@ export function coverPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: R
   }
   if (cover.mode === "plate") {
     return `<section class="page cover coverplate dark" id="cover" data-page="1">
-  <div class="panelbg" style="top:700pt"></div>
+  <div class="panelbg" style="top:400pt"></div>
   <div class="photo">${imageTag(cover.image, "")}</div>
   ${logo}${block}${caption}
 </section>`;
