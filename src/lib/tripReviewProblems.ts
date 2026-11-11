@@ -109,7 +109,8 @@ export function reviewProblems(fields: Row, notes: string[] = [], now = new Date
   }
 
   const duration = checkDuration(fields);
-  if (duration.kind === "mismatch") {
+  // Only a program LONGER than the stated length is a problem; a shorter one skips free days (shown as a note).
+  if (duration.kind === "mismatch" && duration.programDays > duration.writtenDays) {
     warnings.push({ id: "duration", target: "duration", blocks: null,
       text: `Файлд «${duration.written}» гэж бичсэн ч хөтөлбөрт ${duration.programDays} өдөр байна.` });
   }

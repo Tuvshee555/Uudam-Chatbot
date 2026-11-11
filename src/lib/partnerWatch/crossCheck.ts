@@ -16,6 +16,7 @@ import { departureDays } from "../tripReview";
 import { isInfantShapedAge } from "../travelFastPathsSearch";
 import type { AIChangeProposal, ConflictItem } from "../travelTypes";
 import { parseScheduleTables, type ScheduleRow } from "./scheduleTable";
+import { withRowYearsOfCalendar } from "../tripDayStates";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => (value && typeof value === "object" && !Array.isArray(value) ? (value as Row) : {});
@@ -134,7 +135,8 @@ export function crossCheckProposal(proposal: AIChangeProposal, pageText: string,
   if (!pageText.trim()) return proposal;
   for (const action of proposal.actions) {
     if (action.action !== "upsert" || text(action.trip_id) || !action.fields) continue;
-    const checked = completeFromSchedule(action.fields as Row, pageText, now);
+    // Rows the reader dated in another year are put on their calendar day first, or no page row would match them.
+    const checked = completeFromSchedule(withRowYearsOfCalendar(action.fields as Row, now), pageText, now);
     action.fields = checked.fields as typeof action.fields;
     for (const note of checked.notes) {
       proposal.conflict_items = [...(proposal.conflict_items || []), note];

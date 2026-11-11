@@ -260,7 +260,8 @@ export async function generateAssistantReply(typed: string, options: AssistantRe
   // A link a trip was already made from is not read again as a new trip unless he says so (in code, before the model).
   if (!answering && !attachments.length && !forcesNewTrip(typed)) {
     const known = duplicateLinkAsk(instruction, trips, options.now);
-    if (known) return { kind: "ask", ask: known, source: "brain" };
+    // Answered in code on purpose: marked as the brain, the page said «Энгийн горим — AI түр ажиллахгүй» under it.
+    if (known) return { kind: "ask", ask: known, source: "agent", steps: ["resolve_link"] };
   }
   // Small talk is answered in code; it never costs a model call. A bare link is not small talk.
   if (!answering && !attachments.length && !urlsInText(instruction).length) {

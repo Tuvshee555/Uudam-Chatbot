@@ -82,3 +82,18 @@ test("a day priced by an every-date row (no trip fare) keeps its state: a dated 
     ["pkg-a", "", "", ""], ["pkg-b", "", "", ""], ["pkg-a", "2099-03-08", "almost_full", 2], ["pkg-b", "2099-03-08", "almost_full", 2],
   ]);
 });
+
+test("rows the reader dated in a wrong season move by the gap the calendar shows; a truly past row stays", async () => {
+  const { withRowYearsOfCalendar } = await import("../src/lib/tripDayStates");
+  // Calendar lists only the first month; the rows carry an older season for every month.
+  const read = { route_name: "А", departure_dates: ["2099-02-03", "2099-02-10"], extra: { price_groups: [
+    { dates: ["2097-02-03"], adult_price: 1_000_000 },
+    { dates: ["2097-03-03"], adult_price: 1_100_000 },
+    { dates: ["2098-12-01"], adult_price: 900_000 },
+  ] } };
+  const moved = (withRowYearsOfCalendar(read, NOW).extra as Row).price_groups as Row[];
+  assert.deepEqual(moved.map((row) => (row.dates as string[])[0]), ["2099-02-03", "2099-03-03", "2100-12-01"]);
+  // Two different gaps: nothing is guessed.
+  const mixed = { ...read, departure_dates: ["2099-02-03", "2099-03-03"], extra: { price_groups: [{ dates: ["2097-02-03"], adult_price: 1 }, { dates: ["2098-03-03"], adult_price: 1 }] } };
+  assert.equal(withRowYearsOfCalendar(mixed, NOW), mixed);
+});

@@ -190,12 +190,12 @@ test("a band whose age runs backwards («12 – 2 нас») is red on its row, a
 });
 
 test("problems: amber ones — the file's length against the program, a priced day off the calendar, a child fare above the adult's, the assistant's notes", () => {
-  const fields = trip([D1], [row([D1], 2190000, 2490000), row([D3], 2190000, 1890000)], {}, { program_duration_text: "4 өдөр 3 шөнө" });
+  const fields = trip([D1], [row([D1], 2190000, 2490000), row([D3], 2190000, 1890000)], {}, { program_duration_text: "2 өдөр 1 шөнө" });
   const { blocking, warnings } = reviewProblems(fields, ["Хүүхдийн насны хязгаар файлд хоёр янз бичигдсэн."], NOW);
   assert.deepEqual(blocking, []);
   const byId = Object.fromEntries(warnings.map((p) => [p.id.split(":")[0], p]));
   assert.equal(byId.duration?.target, "duration");
-  assert.ok(byId.duration?.text.includes("«4 өдөр 3 шөнө»") && byId.duration.text.includes("3 өдөр"));
+  assert.ok(byId.duration?.text.includes("«2 өдөр 1 шөнө»") && byId.duration.text.includes("3 өдөр"));
   assert.equal(byId.strays?.target, "prices");
   assert.ok(byId.strays?.text.includes("5/22"));
   assert.equal(byId.child_above?.field, "child");
@@ -205,7 +205,7 @@ test("problems: amber ones — the file's length against the program, a priced d
 });
 
 test("the problems bar: red items are links that say «Засах», amber ones «Харах», a note is plain text", () => {
-  const html = review(trip([D1, D2], [row([D1], 2190000, 1890000), row([D2], 2390000, null)], {}, { program_duration_text: "4 өдөр 3 шөнө" }),
+  const html = review(trip([D1, D2], [row([D1], 2190000, 1890000), row([D2], 2390000, null)], {}, { program_duration_text: "2 өдөр 1 шөнө" }),
     { warnings: ["Файлын хоёр хүснэгт өөр үнэтэй."] });
   const text = plain(html);
   assert.ok(text.includes("Нийтлэхийн өмнө 1 зүйл засна"));
@@ -216,4 +216,11 @@ test("the problems bar: red items are links that say «Засах», amber ones 
   assert.equal(/data-problem="note:/.test(html), false, "the note is not a link");
   // The red cell in the table says it too, without opening anything.
   assert.ok(text.includes("Оруулаагүй"));
+});
+
+test("a program shorter than the stated length (a free tour's untold days) is no problem and offers no shrink", async () => {
+  const { reviewProblems } = await import("../src/lib/tripReviewProblems");
+  const fields = trip([D1], [row([D1], 2190000, 1890000)], {}, { program_duration_text: "8 өдөр 7 шөнө" });
+  const problems = reviewProblems(fields, [], NOW);
+  assert.equal([...problems.blocking, ...problems.warnings].some((item) => item.id === "duration"), false);
 });

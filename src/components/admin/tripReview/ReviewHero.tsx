@@ -145,12 +145,19 @@ export function ReviewHero({ fields, onChange, open, onOpen, onReveal, show, dis
         </EditPanel>
       )}
 
-      {duration.kind === "mismatch" && (
+      {duration.kind === "mismatch" && duration.programDays > duration.writtenDays && (
         <Notice>
           Файлд <b>«{duration.written}»</b> гэж бичсэн ч хөтөлбөрт <b>{duration.programDays} өдөр</b> байна.
           <button type="button" disabled={disabled} onClick={() => onChange(withProgramDuration(fields))} className={cx(primarySmall, "ml-2")}>
             Хөтөлбөрөөр: {duration.byProgram}
           </button>
+        </Notice>
+      )}
+      {/* A program shorter than the stated length usually skips the free days (a free tour writes 3 of 8):
+          shrinking the trip to the written days would be wrong, so there is no button for it. */}
+      {duration.kind === "mismatch" && duration.programDays < duration.writtenDays && (
+        <Notice>
+          Хөтөлбөрт <b>{duration.programDays} өдөр</b> бичсэн — чөлөөт өдрүүд бичигдээгүй байж болно. Хугацаа файлын <b>«{duration.written}»</b> хэвээр.
         </Notice>
       )}
 
