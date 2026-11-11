@@ -31,6 +31,9 @@ export const ASPECT = {
   diptych: 500 / 540,
   inset: 270 / 200,
   closing: 300 / 540,
+  /** Band across the top of a section page (roomy list / compact list). */
+  section: 250 / 540,
+  sectionCompact: 180 / 540,
   thumb: 1,
 } as const;
 
@@ -41,7 +44,7 @@ export const MIN_PRINT_CROP_PX = 560;
 const CINEMA_MIN_CROP_PX = 700;
 const PANORAMA_MIN_CROP_PX = 880;
 const INSET_MIN_CROP_PX = 480;
-const OPENER_MIN_CROP_PX = 640;
+const SECTION_MIN_CROP_PX = 700;
 
 const WORK_LONG_EDGE = 2400;
 const FETCH_CONCURRENCY = 4;
@@ -423,34 +426,35 @@ export async function prepareArt(
     }
   }
 
-  // 3. chapter openers: a gallery photograph no other page uses, so an opener never repeats a trip
-  //    page's picture. A chapter without one gets the typographic opener.
+  // 3. section bands: the strongest photograph of the section across the top of its list page, fading
+  //    into the dark page. An unused gallery photograph first; else the hero of a trip that is not the
+  //    section's first page (so the same picture rarely sits on two facing pages); never the cover's.
+  //    A section with no such photograph gets the tinted dark page without a band.
   const chapters: PreparedArt["chapters"] = {};
   const openerUsedHero = new Set<string>();
-  if (plan.hasOpeners) {
-    for (const chapter of plan.chapters) {
-      if (chapter.openerPage == null) continue;
-      type Cand = { tripId: string; work: Work; photo: CataloguePhoto; isGallery: boolean; rank: number; pos: number };
-      const cands: Cand[] = [];
-      chapter.trips.forEach((t, pos) => {
-        const l = loaded.get(t.card.tripId);
-        if (!l) return;
-        if ((l.card.heroQuality ?? "good") !== "weak" && (l.card.heroQuality ?? "good") !== "missing") {
-          for (const g of l.gallery) cands.push({ tripId: t.card.tripId, work: g.work, photo: g.photo, isGallery: true, rank: 2, pos });
-        }
-      });
-      const scored = cands
-        .filter(c => !sourceUrls.has(c.photo.url) && !heroUrls.has(c.photo.url) && cropPixels(c.work, ASPECT.page, c.photo.zoom) >= OPENER_MIN_CROP_PX)
-        .map(c => ({ c, score: c.rank * 10_000 + (c.isGallery ? 6_000 : Math.min(c.pos, 3) * 700) + Math.min(cropPixels(c.work, ASPECT.page, c.photo.zoom), 1400) }))
-        .sort((a, b) => b.score - a.score);
-      const pick = scored[0]?.c;
-      if (!pick) continue;
-      const image = await cropImage(pick.work, { aspect: ASPECT.page, outWidth: profile.fullWidth, quality: profile.quality, focal: pick.photo.focal, zoom: pick.photo.zoom, scrim: { from: 0.4 } });
-      if (image) {
-        chapters[chapter.index] = { tripId: pick.tripId, image, credit: pick.photo.credit?.trim() || null };
-        claim(pick.photo.url, `chapter-${chapter.index}`);
-      }
-    }
+  const QUALITY: Record<string, number> = { excellent: 3, good: 2 };
+  for (const chapter of plan.chapters) {
+    const aspect = chapter.density === "roomy" ? ASPECT.section : ASPECT.sectionCompact;
+    type Cand = { tripId: string; work: Work; photo: CataloguePhoto; score: number };
+    const cands: Cand[] = [];
+    chapter.trips.forEach((t, pos) => {
+      const l = loaded.get(t.card.tripId);
+      if (!l) return;
+      const q = QUALITY[l.card.heroQuality ?? "good"] ?? 0;
+      if (q === 0) return;
+      for (const g of l.gallery) cands.push({ tripId: t.card.tripId, work: g.work, photo: g.photo, score: 20_000 + q * 5_000 + Math.min(cropPixels(g.work, aspect, g.photo.zoom), 1400) });
+      // The section's first trip (the very next page) only when nothing else is there, e.g. a one-trip section.
+      if (printable(l) && l.card.photo) cands.push({ tripId: t.card.tripId, work: l.hero, photo: l.card.photo, score: q * 5_000 + Math.min(cropPixels(l.hero, aspect, l.card.photo.zoom), 1400) - (pos === 0 ? 20_000 : 0) });
+    });
+    const pick = cands
+      .filter(c => !sourceUrls.has(c.photo.url) && cropPixels(c.work, aspect, c.photo.zoom) >= SECTION_MIN_CROP_PX)
+      .sort((a, b) => b.score - a.score)[0];
+    if (!pick) continue;
+    const image = await cropImage(pick.work, { aspect, outWidth: profile.fullWidth, quality: profile.quality, focal: pick.photo.focal, zoom: pick.photo.zoom, scrim: { from: 0.3, solid: true } });
+    if (!image) continue;
+    chapters[chapter.index] = { tripId: pick.tripId, image, credit: pick.photo.credit?.trim() || null };
+    // A gallery photograph is claimed (no second use); a hero is a deliberate echo of its own trip page.
+    if (!heroUrls.has(pick.photo.url)) claim(pick.photo.url, `section-${chapter.index}`);
   }
   if (cover?.source === "hero" && cover.tripId) openerUsedHero.add(cover.tripId);
   // A gallery photograph already printed (cover, opener) must not come back as a trip's inset.

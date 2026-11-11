@@ -1,29 +1,20 @@
 /**
- * The pages around the trips: cover, chapter openers, the chapter navigation guide (contents), the
- * schedule and index appendices and the closing page. Same system as the trip pages: ivory paper,
- * deep navy, one teal, serif display type, generous space, the approved UUDAM logo flush in a corner
- * (never inside a tile or container).
+ * The pages around the trips: the cover, the dark category section pages that list each section's
+ * trips, and the closing page. The approved UUDAM logo sits flush in a corner (never inside a tile).
  */
-import { transportLegendHtml } from "./transport";
 import type { CatalogueSnapshot } from "../types";
 import {
   DISCLAIMER,
   GROUP_PRICE_NOTE,
-  INDEX_ANCHOR,
-  SCHEDULE_ANCHOR,
   anchorId,
   cardTitle,
   chapterAnchorId,
   pad2,
-  scheduleBlockId,
   ulaanbaatarStamp,
   type ChapterPlan,
-  type GuideEntry,
   type OrderedTrip,
   type PagePlan,
-  type SchedBlock,
 } from "./layout";
-import { moneyMnt, type MonthLine } from "./dates";
 import { escapeHtml, footHtml, imageTag, logoCorner, px, safeHref, safeImageSrc } from "./htmlParts";
 import type { RenderAssets } from "./renderTypes";
 import { displayTitle } from "./titleCase";
@@ -72,157 +63,70 @@ export function coverPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: R
 </section>`;
 }
 
-// --- chapter openers -------------------------------------------------------------------------------
-
-/** The chapter's destinations as one editorial line: "Бали · Данан · Египет". */
-export function chapterLine(chapter: ChapterPlan, maxChars = 64): string {
-  const titles: string[] = [];
-  let used = 0;
-  for (const t of chapter.trips) {
-    const title = dispTitle(t);
-    const next = used + (titles.length ? 3 : 0) + title.length;
-    if (titles.length > 0 && next > maxChars) break;
-    titles.push(title);
-    used = next;
-  }
-  return titles.join(" · ");
-}
-
-export function openerPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: RenderAssets, chapter: ChapterPlan): string {
-  const art = assets.chapters[chapter.index];
-  const num = `${pad2(chapter.index + 1)} / ${pad2(plan.chapters.length)}`;
-  const count = chapter.trips.length;
-  const body = `<div class="block">
-    <div class="num">${num}</div>
-    <h2 data-fit-min="${px(30)}" data-fit-maxh="${px(52 * 1.08 * 3)}">${escapeHtml(chapter.label)}</h2>
-    <div class="rule"></div>
-    <p class="line">${escapeHtml(chapterLine(chapter))}</p>
-    <div class="count">${count} аяллын санал</div>
-  </div>`;
-  const foot = footHtml({ page: chapter.openerPage ?? chapter.firstPage, total: plan.totalPages, back: true, credit: art?.credit ?? "" });
-  return `<section class="page opener on-dark dark${art ? "" : " bare"}" id="${chapterAnchorId(chapter.index)}" data-page="${chapter.openerPage ?? chapter.firstPage}">
-  ${art ? imageTag(art.image, "", "bg") : ""}
-  ${body}
-  ${foot}
-</section>`;
-}
-
-// --- contents: the chapter navigation guide ----------------------------------------------------------
-
-/** Where a chapter link lands: its opener when it has one, else its first trip page. */
-function chapterTarget(entry: GuideEntry): string {
-  return entry.openerPage != null ? `#${chapterAnchorId(entry.chapter)}` : entry.codes[0] ? `#${anchorId(entry.codes[0])}` : `#${GUIDE_ID}`;
-}
+// --- sections: one dark category page (or two) listing its trips ---------------------------------
 
 const GUIDE_ID = "contents";
 
-const QUALITY_RANK: Record<string, number> = { excellent: 3, good: 2, weak: 0, missing: 0 };
-
-/**
- * The one photograph that stands for a chapter in the guide: the strongest approved hero among the
- * chapter's own trips (a small square crop of it, so it never repeats a full page that follows).
- */
-export function guidePhotoFor(plan: PagePlan, assets: RenderAssets, entry: GuideEntry) {
-  const byCode = new Map(plan.trips.map(t => [t.card.code, t] as const));
-  let best: { thumb: NonNullable<RenderAssets["trips"][string]["thumb"]>; rank: number; pos: number } | null = null;
-  entry.codes.forEach((code, pos) => {
-    const t = byCode.get(code);
-    const art = t ? assets.trips[t.card.tripId] : undefined;
-    const thumb = art?.thumb;
-    if (!t || !thumb || !safeImageSrc(thumb.dataUri) || art?.composition === "type") return;
-    const rank = QUALITY_RANK[t.card.heroQuality] ?? 1;
-    if (!best || rank > best.rank) best = { thumb, rank, pos };
-  });
-  return (best as { thumb: NonNullable<RenderAssets["trips"][string]["thumb"]> } | null)?.thumb ?? null;
+/** The categories as a row of links, the current one marked: every section page is also the contents. */
+function sectionNav(plan: PagePlan, current: number): string {
+  if (plan.chapters.length < 2) return "";
+  const items = plan.chapters
+    .map(c => `<a class="sn t-${c.kind}${c.index === current ? " on" : ""}" href="#${chapterAnchorId(c.index)}"><i class="tdot"></i>${escapeHtml(c.label)}<b>${c.trips.length}</b></a>`)
+    .join("");
+  return `<nav class="snav" aria-label="Ангилал">${items}</nav>`;
 }
 
-function guideRow(plan: PagePlan, assets: RenderAssets, entry: GuideEntry): string {
-  const target = chapterTarget(entry);
-  const thumb = guidePhotoFor(plan, assets, entry);
-  const photo = thumb
-    ? `<a class="gth" href="${target}">${imageTag(thumb, "")}</a>`
-    : `<a class="gth mono" href="${target}">${pad2(entry.chapter + 1)}</a>`;
-  const names = entry.names
-    .map(n => `<a href="#${anchorId(n.code)}">${escapeHtml(n.title)}</a>`)
-    .join(`<i>·</i>`);
-  const more = entry.more > 0 ? `<span class="gmore">+ ${entry.more}</span>` : "";
-  return `<div class="grow" style="height:${plan.guideRowHeightPt}pt;--rh:${plan.guideRowHeightPt}pt">${photo}<div class="gbody"><div class="gtitle"><a class="gname" href="${target}"><span class="gnum">${pad2(entry.chapter + 1)}</span>${escapeHtml(entry.label)}</a><span class="gmeta">${entry.count} аялал · ${pad2(entry.page)}-р хуудас</span></div><p class="gnames">${names}${more ? ` ${more}` : ""}</p></div></div>`;
+/** Characters a card title may take before it is shortened at a word (the full title is on the trip page). */
+const CARD_TITLE_MAX: Record<ChapterPlan["density"], number> = { large: 50, roomy: 32, compact: 40 };
+
+/** The title as one or two lines of a list card: cut at the last word that fits, never mid-word unless it must. */
+export function cardTitleShort(title: string, max: number): string {
+  const chars = [...title];
+  if (chars.length <= max) return title;
+  const cut = chars.slice(0, max - 1).join("");
+  const at = Math.max(cut.lastIndexOf(" "), cut.lastIndexOf("–"), cut.lastIndexOf("("));
+  return `${(at >= max * 0.55 ? cut.slice(0, at) : cut).replace(/[\s,–—(-]+$/u, "")}…`;
 }
 
-export function guidePage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: RenderAssets, index: number): string {
-  const entries = plan.guidePages[index] ?? [];
-  const pageNo = plan.firstGuidePage + index;
-  const first = index === 0;
-  const exampleCode = plan.trips[0]?.card.code ?? "A01";
-  const appendix: string[] = [];
-  if (plan.firstSchedulePage != null) appendix.push(`<a href="#${SCHEDULE_ANCHOR}">Бүх огноо · ${pad2(plan.firstSchedulePage)}-р хуудас</a>`);
-  if (plan.firstIndexPage != null) appendix.push(`<a href="#${INDEX_ANCHOR}">Кодын жагсаалт · ${pad2(plan.firstIndexPage)}-р хуудас</a>`);
-  const head = first
-    ? `<div class="gtop">${logoCorner(assets, "guide")}<span class="kick">Агуулга</span></div>
-  <div class="ghead"><h2>Хаашаа аялах вэ?</h2><p class="csub">Бүлэг эсвэл аяллын нэр дээр дарж хуудас руу очоорой. Сонирхсон аяллынхаа кодыг бидэнд бичээрэй, жишээ нь <b>“${escapeHtml(exampleCode)}, ${SAMPLE_SIZE_AND_MONTH}”</b>.</p>${transportLegendHtml("light")}${
-        appendix.length ? `<p class="glinks">${appendix.join("<i>·</i>")}</p>` : ""
-      }</div>`
-    : `<div class="gtop"><span class="kick">Агуулга · үргэлжлэл</span></div><div class="ghead small"><h2>Хаашаа аялах вэ?</h2></div>`;
-  const body = entries.length === 0
-    ? `<p class="csub gnone">Одоогоор санал болгох аялал алга. Манай ажилтнаас лавлана уу.</p>`
-    : entries.map(entry => guideRow(plan, assets, entry)).join("\n");
-  return `<section class="page guide"${first ? ` id="${GUIDE_ID}"` : ""} data-page="${pageNo}">
-  ${head}
-  <nav class="glist" aria-label="Агуулга">${body}</nav>
-  ${footHtml({ page: pageNo, total: plan.totalPages, back: false, brand: true })}
-</section>`;
-}
-
-// --- appendix: schedule ----------------------------------------------------------------------------
-
-function monthLineHtml(line: MonthLine, fares: boolean): string {
-  const text = `${line.label}: ${line.days.join(" · ")}`;
-  const fare = fares ? ` <span class="sf">— ${line.fare != null ? escapeHtml(moneyMnt(line.fare)) : "үнэ лавлах"}</span>` : "";
-  return `<div class="sl">${escapeHtml(text)}${fare}</div>`;
-}
-
-function scheduleBlockHtml(block: SchedBlock): string {
-  const { card } = block.trip;
-  return `<div class="sblock" id="${scheduleBlockId(card.code)}"><a class="sh" href="#${anchorId(card.code)}"><span class="sc">${escapeHtml(card.code)}</span><span class="st">${escapeHtml(dispTitle(block.trip))}</span><span class="sp">${block.trip.page}</span></a>${block.lines.map(l => monthLineHtml(l, block.priceVaries)).join("")}</div>`;
-}
-
-export function schedulePage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: RenderAssets, index: number): string {
-  const sp = plan.schedulePages[index];
-  const pageNo = (plan.firstSchedulePage ?? 0) + index;
-  const first = index === 0;
-  const head = first
-    ? `<div class="ahead"><span class="kick">Хавсралт · Хөдөлгөөний товлол</span><h2>Бүх огноо</h2><p class="asub">Одооноос хойших бүх хөдөлгөөн, 90 хоногоос цаашхи огноо ч орно. Аяллын нэр дээр дарж хуудас руу очно. Үнэ нь нэг том хүнд ногдох хэмжээ бөгөөд огнооноос хамаарах үнийг огноо бүрийн хажууд бичсэн.</p>${transportLegendHtml("light")}</div>`
-    : `<div class="ahead small"><span class="kick">Хавсралт · Хөдөлгөөний товлол · үргэлжлэл</span></div>`;
-  const cols = (sp?.columns ?? [[], []]).map(col => `<div class="acol">${col.map(scheduleBlockHtml).join("")}</div>`).join("");
-  return `<section class="page appendix schedule"${first ? ` id="${SCHEDULE_ANCHOR}"` : ""} data-page="${pageNo}">
-  ${head}
-  <div class="acols">${cols}</div>
-  ${footHtml({ page: pageNo, total: plan.totalPages, back: true })}
-</section>`;
-}
-
-// --- appendix: index -------------------------------------------------------------------------------
-
-function indexRowHtml(t: OrderedTrip): string {
+function sectionCard(t: OrderedTrip, assets: RenderAssets, density: ChapterPlan["density"]): string {
   const { card } = t;
+  const art = assets.trips[card.tripId];
+  const thumb = art?.thumb && safeImageSrc(art.thumb.dataUri) ? art.thumb : null;
+  const photo = thumb ? `<span class="sth">${imageTag(thumb, "")}</span>` : `<span class="sth mono">${escapeHtml(card.code)}</span>`;
   const inq = card.price.kind === "inquire";
-  return `<a class="irow" href="#${anchorId(card.code)}"><span class="ic">${escapeHtml(card.code)}</span><span class="it">${escapeHtml(dispTitle(t))}</span><span class="ip${inq ? " inq" : ""}">${escapeHtml(card.price.display)}</span><span class="ipg">${t.page}</span></a>`;
+  const dur = card.durationText.trim();
+  const title = escapeHtml(cardTitleShort(dispTitle(t), CARD_TITLE_MAX[density]));
+  const code = `<span class="sc">${escapeHtml(card.code)}</span>`;
+  const price = `<span class="spr${inq ? " inq" : ""}">${escapeHtml(card.price.display)}</span>`;
+  // A compact card has no room for the duration line: the code moves next to the price.
+  const top = density === "compact" ? "" : `<span class="stop">${code}${dur ? `<span class="sdur">${escapeHtml(dur)}</span>` : ""}</span>`;
+  const bottom = density === "compact" ? `<span class="sbot"><span class="sleft">${code}${price}</span><span class="spg">${pad2(t.page)}</span></span>` : `<span class="sbot">${price}<span class="spg">${pad2(t.page)}</span></span>`;
+  return `<a class="scard" href="#${anchorId(card.code)}">${photo}<span class="sbody">${top}<span class="stt">${title}</span>${bottom}</span></a>`;
 }
 
-export function indexPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: RenderAssets, index: number): string {
-  const rows = plan.indexPages[index] ?? [];
-  const pageNo = (plan.firstIndexPage ?? 0) + index;
-  const first = index === 0;
+export function sectionPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: RenderAssets, chapter: ChapterPlan, part: number): string {
+  const trips = chapter.listPages[part] ?? [];
+  const pageNo = chapter.sectionPage + part;
+  const first = part === 0;
+  const contents = first && chapter.index === 0;
+  const band = first ? assets.chapters[chapter.index] : undefined;
+  const num = `${pad2(chapter.index + 1)} / ${pad2(plan.chapters.length)}`;
+  const count = chapter.trips.length;
   const head = first
-    ? `<div class="ahead"><span class="kick">Хавсралт · Кодын жагсаалт</span><h2>Бүх аялал</h2><p class="asub">Аяллын код, нэр, нэг том хүнд ногдох эхлэх үнэ, хуудас. Мөр дээр дарж аяллын хуудас руу очно.</p></div>`
-    : `<div class="ahead small"><span class="kick">Хавсралт · Кодын жагсаалт · үргэлжлэл</span></div>`;
-  return `<section class="page appendix index"${first ? ` id="${INDEX_ANCHOR}"` : ""} data-page="${pageNo}">
+    ? `<div class="shead"><div class="snum">${num}</div><h2 data-fit-min="${px(26)}" data-fit-maxh="${px(40 * 1.08 * 2)}">${escapeHtml(chapter.label)}</h2><div class="srule"></div><p class="sline">${count} аялал${chapter.line ? `<i>·</i>${escapeHtml(chapter.line)}` : ""}</p></div>`
+    : `<div class="shead small"><div class="snum">${num} · үргэлжлэл</div><h2>${escapeHtml(chapter.label)}</h2><div class="srule"></div></div>`;
+  const ids = [contents ? GUIDE_ID : "", first ? chapterAnchorId(chapter.index) : ""].filter(Boolean);
+  // Two anchors on one page: the outer wrapper carries the chapter anchor.
+  const idAttr = ids[0] ? ` id="${ids[0]}"` : "";
+  const inner = ids[1] ? `<span class="anchor" id="${ids[1]}"></span>` : "";
+  const cls = ["page", "section", "dark", chapter.density, band ? "photo" : "bare", first ? "" : "cont"].filter(Boolean).join(" ");
+  return `<section class="${cls}"${idAttr} data-page="${pageNo}" data-transport="${chapter.kind}">
+  ${inner}
+  ${band ? `<div class="sband">${imageTag(band.image, "")}</div>` : ""}
+  ${first ? sectionNav(plan, chapter.index) : ""}
   ${head}
-  <nav class="ilist" aria-label="Кодын жагсаалт">
-    <div class="ihead"><span class="ic">Код</span><span class="it">Аялал</span><span class="ip">Эхлэх үнэ</span><span class="ipg">Хуудас</span></div>
-    ${rows.map(indexRowHtml).join("\n")}
-  </nav>
-  ${footHtml({ page: pageNo, total: plan.totalPages, back: true })}
+  <nav class="slist" aria-label="${escapeHtml(chapter.label)}">${trips.map(t => sectionCard(t, assets, chapter.density)).join("")}</nav>
+  ${footHtml({ page: pageNo, total: plan.totalPages, back: !contents, brand: contents, credit: band?.credit ?? "" })}
 </section>`;
 }
 
@@ -258,12 +162,16 @@ export function closingPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets:
   const notesHtml = notes.length
     ? `<div class="corp"><span class="kick">Байгууллага, хамт олонд</span><ul>${notes.map(n => `<li>${escapeHtml(n)}</li>`).join("")}</ul></div>`
     : "";
+  // A book with no trips has no section page: the cover's contents link lands here, with a plain notice.
+  const empty = plan.chapters.length === 0;
   return `<section class="page closing${notes.length || !band ? " compact" : ""}" id="closing" data-page="${plan.closingPage}">
+  ${empty ? `<span class="anchor" id="${GUIDE_ID}"></span>` : ""}
   <div class="band${band ? "" : " plain"}">${band ? imageTag(assets.closing, "") : `<span class="bk">UUDAM Travel · Байгууллагын аялал</span>`}</div>
   ${logoCorner(assets, "closing")}
   <div class="body">
     <span class="kick">Хамт олондоо зориулсан санал</span>
     <h2 data-fit-min="${px(28)}" data-fit-maxh="${px(40 * 1.08 * 2)}">Үнийн санал авах</h2>
+    ${empty ? `<p class="intro">Одоогоор санал болгох аялал алга. Манай ажилтнаас лавлана уу.</p>` : ""}
     <p class="intro">Сонирхсон аяллынхаа код, хүний тоо, хүссэн сараа бидэнд бичээрэй. Манай ажилтан таны багийн хэмжээ, сард тохирсон үнийн санал бэлтгэж хариулна.</p>
     <div class="steps">${steps.map(([n, t, s]) => `<div class="step"><span class="n">${n}</span><div class="t">${escapeHtml(t)}<span>${escapeHtml(s)}</span></div></div>`).join("")}</div>
     <div class="reply"><span class="rl">Мессежийн жишээ</span><span class="sample">${escapeHtml(exampleCode)}, ${SAMPLE_SIZE_AND_MONTH}</span></div>

@@ -1,6 +1,6 @@
 /**
- * CatalogueSnapshot -> one self-contained HTML document: cover, chapter guide, chapter
- * openers, one page per trip (five compositions), the schedule and index appendices and the closing page. Pure and browser-free, so
+ * CatalogueSnapshot -> one self-contained HTML document: cover, then per transport section its
+ * list page(s) and one page per trip, and the closing page. Pure and browser-free, so
  * it is unit-testable; the browser only prints it.
  *
  * Everything dynamic is HTML-escaped, every URL is checked, and the document carries a CSP that
@@ -8,7 +8,7 @@
  */
 import type { CatalogueSnapshot } from "../types";
 import { planPages } from "./layout";
-import { CATALOGUE_TITLE, closingPage, coverPage, guidePage, indexPage, openerPage, schedulePage } from "./pages";
+import { CATALOGUE_TITLE, closingPage, coverPage, sectionPage } from "./pages";
 import { tripPage } from "./tripPages";
 import { escapeHtml, safeHref } from "./htmlParts";
 import type { RenderAssets } from "./renderTypes";
@@ -22,13 +22,11 @@ export function catalogueDocumentTitle(snapshot: CatalogueSnapshot): string {
 
 export function buildCatalogueHtml(snapshot: CatalogueSnapshot, assets: RenderAssets): string {
   const plan = planPages(snapshot);
-  const pages: string[] = [coverPage(snapshot, plan, assets), ...plan.guidePages.map((_, i) => guidePage(snapshot, plan, assets, i))];
+  const pages: string[] = [coverPage(snapshot, plan, assets)];
   for (const chapter of plan.chapters) {
-    if (chapter.openerPage != null) pages.push(openerPage(snapshot, plan, assets, chapter));
+    chapter.listPages.forEach((_, part) => pages.push(sectionPage(snapshot, plan, assets, chapter, part)));
     for (const t of chapter.trips) pages.push(tripPage(snapshot, plan, assets, t));
   }
-  plan.schedulePages.forEach((_, i) => pages.push(schedulePage(snapshot, plan, assets, i)));
-  plan.indexPages.forEach((_, i) => pages.push(indexPage(snapshot, plan, assets, i)));
   pages.push(closingPage(snapshot, plan, assets));
   return `<!doctype html>
 <html lang="mn">

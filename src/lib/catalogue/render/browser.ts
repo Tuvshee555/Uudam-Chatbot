@@ -157,7 +157,7 @@ const FIT_AND_AUDIT = `(() => {
       while ((node = walker.nextNode())) {
         if (!node.textContent || !node.textContent.trim()) continue;
         const el = node.parentElement;
-        if (!el || el.closest('.ph')) continue;
+        if (!el || el.closest('.ph,.wmbox')) continue;
         const inFoot = !!el.closest('.foot,.caption');
         const range = document.createRange();
         range.selectNodeContents(node);

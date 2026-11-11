@@ -1,25 +1,37 @@
 /**
- * Pure layout decisions for the catalogue: page order (cover, chapter guide, chapter openers, trip
- * pages, schedule appendix, index appendix, closing), type sizes, price wording, and which composition
- * each trip page gets. No DOM, no clock, no I/O, so the page plan (and therefore every page number
- * printed in the guide, the appendices and the trip pages) is identical in the HTML builder, the
- * tests and the admin.
+ * Pure layout decisions for the catalogue: page order (cover, then one section per transport
+ * category - its list page(s) followed by its trip pages - and the closing page), type sizes, price
+ * wording, and which composition each trip page gets. No DOM, no clock, no I/O, so the page plan
+ * (and therefore every page number printed in the lists and on the trip pages) is identical in the
+ * HTML builder, the tests and the admin.
  */
 import type { CatalogueSnapshot, CatalogueTripCard } from "../types";
-import { scheduleLines, type MonthLine } from "./dates";
 import type { TripComposition } from "./renderTypes";
 import { displayTitle } from "./titleCase";
+import { transportKindOf, type TransportKind } from "./transport";
 
 export const PAGE_WIDTH_PT = 540;
 export const PAGE_HEIGHT_PT = 675;
 
-/** Group label used for trips that no group lists (never dropped from the book). */
+/** Section for trips whose transport is not known (never guessed, never dropped from the book). */
 export const UNGROUPED_LABEL = "Бусад аялал";
+
+/**
+ * The book's sections, in reading order: how the group travels. A trip goes to the section of its
+ * printed transport label; a trip without one goes to «Бусад аялал».
+ */
+export const TRANSPORT_CHAPTERS: ReadonlyArray<{ kind: TransportKind; label: string; line: string }> = [
+  { kind: "direct", label: "Шууд нислэгтэй аялал", line: "Улаанбаатараас шууд нислэгээр" },
+  { kind: "combo", label: "Газар + нислэг хосолсон аялал", line: "Газрын болон агаарын замыг хослуулсан" },
+  { kind: "ground", label: "Газрын аялал", line: "Газрын замаар зорчих аялал" },
+  { kind: "cruise", label: "Усан онгоцны аялал", line: "Усан онгоцоор аялах" },
+  { kind: "none", label: UNGROUPED_LABEL, line: "" },
+];
 
 export type OrderedTrip = {
   card: CatalogueTripCard;
   groupLabel: string;
-  /** 0-based chapter (group) the trip sits in. */
+  /** 0-based chapter (section) the trip sits in. */
   chapter: number;
   /** 0-based position in the whole book (drives the composition rhythm). */
   index: number;
@@ -27,12 +39,21 @@ export type OrderedTrip = {
   page: number;
 };
 
+/** How densely a section page lists its trips. */
+export type SectionDensity = "large" | "roomy" | "compact";
+
 export type ChapterPlan = {
   index: number;
+  kind: TransportKind;
   label: string;
-  /** Page of the full-bleed opener, or null when this book has no openers. */
-  openerPage: number | null;
-  /** First page of the chapter (opener when present, else its first trip). */
+  /** One neutral line under the section title (may be empty). */
+  line: string;
+  /** Page of the section's (first) list page: the chapter's first page. */
+  sectionPage: number;
+  /** Trips printed on each list page, in order; continuation pages follow the first. */
+  listPages: OrderedTrip[][];
+  density: SectionDensity;
+  /** First page of the chapter (= sectionPage). */
   firstPage: number;
   trips: OrderedTrip[];
 };
@@ -70,28 +91,36 @@ export function chapterAnchorId(index: number): string {
 }
 
 /**
- * Trips in book order: group by group (the order the snapshot lists them), codes in each group's
- * order. Trips no group lists follow in snapshot order. A code listed twice prints once.
+ * Trips in book order: section by section (TRANSPORT_CHAPTERS order); inside a section, the theme
+ * groups' order (similar destinations stay together), then snapshot order. A code listed twice prints once.
  */
 export function orderTrips(snapshot: CatalogueSnapshot): { card: CatalogueTripCard; groupLabel: string }[] {
   const byCode = new Map<string, CatalogueTripCard>();
   for (const card of snapshot.trips) if (!byCode.has(card.code)) byCode.set(card.code, card);
   const placed = new Set<string>();
-  const out: { card: CatalogueTripCard; groupLabel: string }[] = [];
+  const themed: CatalogueTripCard[] = [];
   for (const group of snapshot.groups) {
     for (const code of group.codes) {
       const card = byCode.get(code);
       if (!card || placed.has(code)) continue;
       placed.add(code);
-      out.push({ card, groupLabel: group.label });
+      themed.push(card);
     }
   }
   for (const card of snapshot.trips) {
     if (placed.has(card.code)) continue;
     placed.add(card.code);
-    out.push({ card, groupLabel: UNGROUPED_LABEL });
+    themed.push(card);
   }
-  return out;
+  const rank = (card: CatalogueTripCard) => {
+    const kind = transportKindOf(card.transportLabel);
+    const i = TRANSPORT_CHAPTERS.findIndex(c => c.kind === kind);
+    return i < 0 ? TRANSPORT_CHAPTERS.length - 1 : i;
+  };
+  return themed
+    .map((card, pos) => ({ card, pos, r: rank(card) }))
+    .sort((a, b) => a.r - b.r || a.pos - b.pos)
+    .map(({ card, r }) => ({ card, groupLabel: TRANSPORT_CHAPTERS[r]!.label }));
 }
 
 // --- copy shaping (display only, facts never change) -----------------------------------------
@@ -210,288 +239,78 @@ export function assignCompositions(fits: CompositionFit[]): TripComposition[] {
   return out;
 }
 
-// --- navigation guide, schedule appendix, index ---------------------------------------------------
+// --- sections: the category list pages ---------------------------------------------------------
 
+/** Where every "Агуулга" link lands: the first section page. */
 export const GUIDE_ANCHOR = "contents";
-export const SCHEDULE_ANCHOR = "schedule";
-export const INDEX_ANCHOR = "index";
 
-/** Letters and digits only, so a trip's schedule block is always a safe HTML id / anchor. */
-export function scheduleBlockId(code: string): string {
-  return `sched-${code.replace(/[^A-Za-z0-9]/g, "") || "x"}`;
-}
+/** Up to this many trips: one column of large cards. Then two columns of six (roomy), then compact. */
+export const SECTION_LARGE_MAX = 4;
+export const SECTION_ROOMY_MAX = 12;
+export const SECTION_COMPACT_FIRST = 18;
+export const SECTION_COMPACT_NEXT = 22;
 
-export type GuideName = { code: string; title: string; page: number };
-export type GuideEntry = {
-  chapter: number;
-  label: string;
-  count: number;
-  /** First page of the chapter (opener when it has one, else its first trip). */
-  page: number;
-  /** Page of the opener, or null. */
-  openerPage: number | null;
-  /** A few destination names, each linking to its own page. */
-  names: GuideName[];
-  /** Destinations in the chapter not named above. */
-  more: number;
-  /** Trip codes of the chapter in book order (the photo for the entry is chosen among them). */
-  codes: string[];
-};
-
-const GUIDE_ROW_MIN_PT = 72;
-const GUIDE_ROW_MAX_PT = 104;
-const GUIDE_ROW_MULTI_PT = 84;
-const GUIDE_FIRST_BUDGET_PT = 345;
-const GUIDE_NEXT_BUDGET_PT = 500;
-
-/** How many chapter blocks go on each guide page and how tall a block is: one page whenever it can be. */
-export function planGuide(chapterCount: number): { perPage: number[]; rowHeightPt: number } {
-  if (chapterCount <= 0) return { perPage: [0], rowHeightPt: GUIDE_ROW_MAX_PT };
-  const single = Math.floor(GUIDE_FIRST_BUDGET_PT / GUIDE_ROW_MIN_PT);
-  if (chapterCount <= single) {
-    return { perPage: [chapterCount], rowHeightPt: Math.min(GUIDE_ROW_MAX_PT, Math.floor(GUIDE_FIRST_BUDGET_PT / chapterCount)) };
-  }
-  const cap1 = Math.floor(GUIDE_FIRST_BUDGET_PT / GUIDE_ROW_MULTI_PT);
-  const capN = Math.floor(GUIDE_NEXT_BUDGET_PT / GUIDE_ROW_MULTI_PT);
-  let pages = 2;
-  while (cap1 + (pages - 1) * capN < chapterCount) pages += 1;
-  const first = Math.min(cap1, Math.ceil(chapterCount / pages));
-  const perPage = [first];
-  let left = chapterCount - first;
-  for (let p = 1; p < pages; p++) {
-    const take = Math.ceil(left / (pages - p));
-    perPage.push(take);
+/** How a section's list is split over its pages: one page whenever it can be. */
+export function sectionChunks(count: number): { density: SectionDensity; sizes: number[] } {
+  if (count <= SECTION_LARGE_MAX) return { density: "large", sizes: [count] };
+  if (count <= SECTION_ROOMY_MAX) return { density: "roomy", sizes: [count] };
+  const sizes = [Math.min(count, SECTION_COMPACT_FIRST)];
+  let left = count - sizes[0]!;
+  while (left > 0) {
+    const take = Math.min(left, SECTION_COMPACT_NEXT);
+    sizes.push(take);
     left -= take;
   }
-  return { perPage, rowHeightPt: GUIDE_ROW_MULTI_PT };
-}
-
-/** Destination names that fit the chapter block (two lines when the block is tall and the heading short). */
-export function guideNames(trips: OrderedTrip[], rowHeightPt: number, label: string): { names: GuideName[]; more: number } {
-  const lines = rowHeightPt >= GUIDE_ROW_MIN_PT && [...label].length <= 24 ? 2 : 1;
-  const maxChars = lines === 2 ? 108 : 54;
-  const names: GuideName[] = [];
-  let used = 0;
-  for (const t of trips) {
-    const title = displayTitle(cardTitle(t.card));
-    const next = used + (names.length ? 3 : 0) + [...title].length;
-    if (names.length > 0 && (next > maxChars || names.length >= 6)) break;
-    names.push({ code: t.card.code, title, page: t.page });
-    used = next;
-  }
-  return { names, more: trips.length - names.length };
-}
-
-export type SchedBlock = {
-  trip: OrderedTrip;
-  lines: MonthLine[];
-  priceVaries: boolean;
-  heightPt: number;
-  /** Page the block is printed on (set once the appendix is paginated). */
-  page: number;
-};
-export type SchedPage = { columns: [SchedBlock[], SchedBlock[]] };
-
-const SCHED_LINE_PT = 12.5;
-const SCHED_LINE_CHARS = 36;
-const SCHED_HEAD_CHARS = 26;
-const SCHED_HEAD_LINE_PT = 13.5;
-const SCHED_FIRST_BUDGET_PT = 385;
-const SCHED_NEXT_BUDGET_PT = 485;
-
-/** Rough printed height of one schedule block (header + month lines + gap), used only for pagination. */
-export function scheduleBlockHeightPt(title: string, lines: MonthLine[]): number {
-  const head = Math.max(1, Math.ceil([...title].length / SCHED_HEAD_CHARS));
-  const body = lines.reduce((sum, l) => sum + Math.max(1, Math.ceil([...l.text].length / SCHED_LINE_CHARS)), 0);
-  return 8 + head * SCHED_HEAD_LINE_PT + 4 + body * SCHED_LINE_PT + 10;
-}
-
-/** Natural order of trip codes: A02 before A10, A99 before B01. */
-export function compareCodes(a: string, b: string): number {
-  return a.localeCompare(b, "en", { numeric: true, sensitivity: "base" });
-}
-
-function paginateSchedule(blocks: SchedBlock[]): SchedPage[] {
-  const pages: SchedPage[] = [];
-  let page: SchedPage = { columns: [[], []] };
-  let col = 0;
-  let used = 0;
-  let budget = SCHED_FIRST_BUDGET_PT;
-  for (const block of blocks) {
-    if (used > 0 && used + block.heightPt > budget) {
-      if (col === 0) {
-        col = 1;
-      } else {
-        pages.push(page);
-        page = { columns: [[], []] };
-        col = 0;
-        budget = SCHED_NEXT_BUDGET_PT;
-      }
-      used = 0;
-    }
-    page.columns[col]!.push(block);
-    used += block.heightPt;
-  }
-  if (page.columns[0].length || page.columns[1].length) pages.push(page);
-  // A last page whose second column is empty reads better balanced: move the tail of column one across.
-  const last = pages[pages.length - 1];
-  if (last && last.columns[1].length === 0 && last.columns[0].length > 1) {
-    const total = last.columns[0].reduce((s, b) => s + b.heightPt, 0);
-    let acc = 0;
-    let cut = last.columns[0].length;
-    for (let i = 0; i < last.columns[0].length; i++) {
-      acc += last.columns[0][i]!.heightPt;
-      if (acc >= total / 2) {
-        cut = i + 1;
-        break;
-      }
-    }
-    if (cut < last.columns[0].length) last.columns[1] = last.columns[0].splice(cut);
-  }
-  return pages;
-}
-
-const INDEX_ROW_PT = 21;
-const INDEX_EXTRA_LINE_PT = 14;
-const INDEX_TITLE_CHARS = 44;
-const INDEX_FIRST_BUDGET_PT = 345;
-const INDEX_NEXT_BUDGET_PT = 470;
-
-export function indexRowHeightPt(card: CatalogueTripCard): number {
-  return INDEX_ROW_PT + (estimateLines(displayTitle(cardTitle(card)), INDEX_TITLE_CHARS) - 1) * INDEX_EXTRA_LINE_PT;
-}
-
-function paginateIndex(rows: OrderedTrip[]): OrderedTrip[][] {
-  const pages: OrderedTrip[][] = [[]];
-  let used = 0;
-  let budget = INDEX_FIRST_BUDGET_PT;
-  for (const row of rows) {
-    const h = indexRowHeightPt(row.card);
-    if (used > 0 && used + h > budget) {
-      pages.push([]);
-      used = 0;
-      budget = INDEX_NEXT_BUDGET_PT;
-    }
-    pages[pages.length - 1]!.push(row);
-    used += h;
-  }
-  return pages;
-}
-
-/** Chapter openers: always in the complete book, in the others when there are at least two chapters. */
-export function wantsOpeners(snapshot: CatalogueSnapshot, chapterCount: number): boolean {
-  if (chapterCount < 1) return false;
-  // An opener needs a photo no trip page already shows. Without a vetted secondary photo it would repeat a
-  // hero one page later, which reads as a mistake, so the book simply has no openers then.
-  if (!snapshot.trips.some(trip => trip.gallery.length > 0)) return false;
-  return snapshot.edition === "complete" ? true : chapterCount >= 2;
+  return { density: "compact", sizes };
 }
 
 export type PagePlan = {
-  /** Guide (chapter navigation) pages in order; each is the list of chapter blocks printed on it. */
-  guidePages: GuideEntry[][];
-  guideRowHeightPt: number;
   chapters: ChapterPlan[];
-  /** True when every chapter opens with a full-bleed photo page. */
-  hasOpeners: boolean;
   trips: OrderedTrip[];
   coverPage: 1;
-  /** First guide page; the "contents" destination every back link goes to. */
+  /** The first section page; the "contents" destination every back link goes to. */
   firstGuidePage: number;
   firstTripPage: number;
-  /** Schedule appendix: pages in order (empty when no trip has a future departure). */
-  schedulePages: SchedPage[];
-  firstSchedulePage: number | null;
-  /** Page of each trip's schedule block, by code. */
-  schedulePageByCode: Record<string, number>;
-  /** Index appendix: rows in code order, paginated. */
-  indexPages: OrderedTrip[][];
-  firstIndexPage: number | null;
   closingPage: number;
   totalPages: number;
 };
 
 export function planPages(snapshot: CatalogueSnapshot): PagePlan {
   const ordered = orderTrips(snapshot);
-  const chapterOfLabel: string[] = [];
-  const withChapter = ordered.map(o => {
-    if (chapterOfLabel[chapterOfLabel.length - 1] !== o.groupLabel) chapterOfLabel.push(o.groupLabel);
-    return { ...o, chapter: chapterOfLabel.length - 1 };
-  });
-  const hasOpeners = wantsOpeners(snapshot, chapterOfLabel.length);
-  const guide = planGuide(chapterOfLabel.length);
-
-  const firstGuidePage = 2;
-  const firstTripPage = firstGuidePage + guide.perPage.length;
-  let page = firstTripPage;
-  const complete = snapshot.edition === "complete";
+  const groups: { label: string; cards: CatalogueTripCard[] }[] = [];
+  for (const o of ordered) {
+    const last = groups[groups.length - 1];
+    if (last && last.label === o.groupLabel) last.cards.push(o.card);
+    else groups.push({ label: o.groupLabel, cards: [o.card] });
+  }
+  let page = 2;
+  let index = 0;
   const trips: OrderedTrip[] = [];
-  const chapters: ChapterPlan[] = chapterOfLabel.map((label, index) => ({ index, label, openerPage: null, firstPage: 0, trips: [] }));
-  withChapter.forEach((o, i) => {
-    const chapter = chapters[o.chapter]!;
-    if (chapter.trips.length === 0) {
-      chapter.firstPage = page;
-      const count = withChapter.filter(w => w.chapter === o.chapter).length;
-      if (hasOpeners && (complete || count >= 2)) {
-        chapter.openerPage = page;
-        page += 1;
-      }
+  const chapters: ChapterPlan[] = groups.map((g, ci) => {
+    const def = TRANSPORT_CHAPTERS.find(c => c.label === g.label) ?? TRANSPORT_CHAPTERS[TRANSPORT_CHAPTERS.length - 1]!;
+    const { density, sizes } = sectionChunks(g.cards.length);
+    const sectionPage = page;
+    page += sizes.length;
+    const chapterTrips = g.cards.map(card => {
+      const trip: OrderedTrip = { card, groupLabel: g.label, chapter: ci, index: index++, page: page++ };
+      trips.push(trip);
+      return trip;
+    });
+    const listPages: OrderedTrip[][] = [];
+    let at = 0;
+    for (const n of sizes) {
+      listPages.push(chapterTrips.slice(at, at + n));
+      at += n;
     }
-    const trip: OrderedTrip = { card: o.card, groupLabel: o.groupLabel, chapter: o.chapter, index: i, page };
-    page += 1;
-    trips.push(trip);
-    chapter.trips.push(trip);
+    return { index: ci, kind: def.kind, label: def.label, line: def.line, sectionPage, listPages, density, firstPage: sectionPage, trips: chapterTrips };
   });
-
-  const entries: GuideEntry[] = chapters.map(c => {
-    const { names, more } = guideNames(c.trips, guide.rowHeightPt, c.label);
-    return { chapter: c.index, label: c.label, count: c.trips.length, page: c.firstPage, openerPage: c.openerPage, names, more, codes: c.trips.map(t => t.card.code) };
-  });
-  const guidePages: GuideEntry[][] = [];
-  let at = 0;
-  for (const n of guide.perPage) {
-    guidePages.push(entries.slice(at, at + n));
-    at += n;
-  }
-
-  // Schedule appendix: every trip with a future departure, code order, two columns per page.
-  const byCode = [...trips].sort((a, b) => compareCodes(a.card.code, b.card.code));
-  const blocks: SchedBlock[] = [];
-  for (const t of byCode) {
-    const { lines, priceVaries } = scheduleLines(t.card, snapshot.asOfDay);
-    if (lines.length === 0) continue;
-    blocks.push({ trip: t, lines, priceVaries, heightPt: scheduleBlockHeightPt(displayTitle(cardTitle(t.card)), lines), page: 0 });
-  }
-  const schedulePages = paginateSchedule(blocks);
-  const firstSchedulePage = schedulePages.length ? page : null;
-  const schedulePageByCode: Record<string, number> = {};
-  schedulePages.forEach((sp, i) => {
-    for (const block of sp.columns.flat()) {
-      block.page = page + i;
-      schedulePageByCode[block.trip.card.code] = block.page;
-    }
-  });
-  page += schedulePages.length;
-
-  const indexPages = trips.length ? paginateIndex(byCode) : [];
-  const firstIndexPage = indexPages.length ? page : null;
-  page += indexPages.length;
-
   const closingPage = page;
   return {
-    guidePages,
-    guideRowHeightPt: guide.rowHeightPt,
     chapters,
-    hasOpeners,
     trips,
     coverPage: 1,
-    firstGuidePage,
-    firstTripPage,
-    schedulePages,
-    firstSchedulePage,
-    schedulePageByCode,
-    indexPages,
-    firstIndexPage,
+    firstGuidePage: 2,
+    firstTripPage: trips[0]?.page ?? closingPage,
     closingPage,
     totalPages: closingPage,
   };

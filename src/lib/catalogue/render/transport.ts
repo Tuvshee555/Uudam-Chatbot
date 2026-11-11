@@ -41,7 +41,7 @@ export function transportKindOf(label: string | null | undefined): TransportKind
 /** CSS custom properties for the colour tones, used by theme.ts. */
 export function transportCss(): string {
   return (Object.keys(TRANSPORT_TONES) as Array<keyof typeof TRANSPORT_TONES>)
-    .map(kind => `.trip[data-transport=${kind}]{--tc:${TRANSPORT_TONES[kind].dark}}.trip.type[data-transport=${kind}]{--tc:${TRANSPORT_TONES[kind].light}}.tlegend[data-on=light] .t-${kind}{--tc:${TRANSPORT_TONES[kind].light}}.tlegend[data-on=dark] .t-${kind}{--tc:${TRANSPORT_TONES[kind].dark}}`)
+    .map(kind => `.trip[data-transport=${kind}],.section[data-transport=${kind}],.snav .t-${kind}{--tc:${TRANSPORT_TONES[kind].dark}}.tlegend[data-on=light] .t-${kind}{--tc:${TRANSPORT_TONES[kind].light}}.tlegend[data-on=dark] .t-${kind}{--tc:${TRANSPORT_TONES[kind].dark}}`)
     .join("\n");
 }
 

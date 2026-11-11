@@ -69,7 +69,6 @@ ${transportCss()}
 .logo img{display:block;width:100%;height:100%}
 .logo.cover{width:112pt;height:112pt}
 .logo.closing{width:80pt;height:80pt}
-.logo.guide{width:64pt;height:64pt}
 .foot{position:absolute;left:var(--m);right:var(--m);bottom:26pt;min-height:14pt;display:flex;align-items:flex-end;justify-content:space-between;gap:16pt;font-size:8.5pt;line-height:1.2;letter-spacing:0.1em;color:var(--ink-3)}
 .foot a.back{font-weight:500;text-transform:uppercase;letter-spacing:0.16em;color:var(--teal)}
 .foot .credit{flex:1;text-align:center;letter-spacing:0.03em;line-height:1.35;min-width:0;padding:0 8pt}
@@ -93,64 +92,61 @@ ${transportCss()}
 .cover .caption .go{font-weight:500;letter-spacing:0.18em;text-transform:uppercase;color:var(--on-2)}
 .cover.bare .block{bottom:auto;top:200pt}
 
-/* chapter opener ----------------------------------------------------------------------------- */
-.opener .block{position:absolute;left:var(--m);right:var(--m);bottom:66pt;color:var(--on)}
-.opener .num{font-family:'${SERIF}',serif;font-weight:300;font-size:15pt;letter-spacing:0.22em;color:var(--on)}
-.opener h2{margin-top:14pt;font-size:52pt;line-height:1.08;color:var(--on)}
-.opener .rule{width:44pt;margin:20pt 0 16pt;border-top:1pt solid var(--gold)}
-.opener .line{font-family:'${SERIF}',serif;font-style:italic;font-weight:300;font-size:17pt;line-height:1.45;color:var(--on);max-width:430pt;text-wrap:pretty}
-.opener .count{margin-top:14pt;font-weight:500;font-size:9.5pt;letter-spacing:0.18em;text-transform:uppercase;color:var(--on-3)}
-.opener.bare .block{bottom:auto;top:330pt}
-
-/* contents: the chapter navigation guide ------------------------------------------------------------ */
-.guide .gtop{position:relative;height:64pt;display:flex;align-items:center;padding-left:84pt}
-.guide .ghead{margin:30pt var(--m) 0}
-.guide h2{font-size:42pt;line-height:1.08;color:var(--ink)}
-.guide .ghead.small{margin-top:22pt}
-.guide .ghead.small h2{font-size:30pt}
-.guide .csub{margin-top:12pt;font-size:12.5pt;line-height:1.5;color:var(--ink-2);max-width:430pt;text-wrap:pretty}
-.guide .csub b{font-weight:500;color:var(--ink);white-space:nowrap}
-.guide .glinks{margin-top:8pt;font-size:12pt;line-height:1.4;font-weight:500;color:var(--teal)}
-.guide .glinks i{font-style:normal;color:var(--gold);padding:0 8pt}
-.guide .glist{margin:16pt var(--m) 0}
-.grow{display:flex;gap:16pt;padding:7pt 0;border-top:0.6pt solid var(--rule);align-items:stretch}
-.guide .gth{flex:none;width:calc(var(--rh) - 14pt);height:calc(var(--rh) - 14pt);background:var(--sand);overflow:hidden;display:block}
-.guide .gth img{width:100%;height:100%;object-fit:cover}
-.guide .gth.mono{display:flex;align-items:center;justify-content:center;font-family:'${SERIF}',serif;font-style:italic;font-weight:300;font-size:28pt;color:var(--ink-3);background:var(--paper-deep)}
-.guide .gbody{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:5pt}
-.guide .gtitle{display:flex;justify-content:space-between;align-items:baseline;gap:12pt}
-.guide .gname{display:flex;align-items:baseline;gap:10pt;min-width:0;font-family:'${SERIF}',serif;font-weight:400;font-size:18pt;line-height:1.15;color:var(--ink);overflow-wrap:anywhere}
-.guide .gnum{flex:none;font-weight:300;font-size:11pt;letter-spacing:0.2em;color:var(--teal)}
-.guide .gmeta{flex:none;font-size:10pt;line-height:1.3;color:var(--ink-3);white-space:nowrap}
-.guide .gnames{font-family:'${SERIF}',serif;font-style:italic;font-weight:400;font-size:12pt;line-height:1.4;color:var(--ink-2)}
-.guide .gnames i{font-style:normal;color:var(--gold);padding:0 5pt}
-.guide .gmore{font-family:'${SANS}',sans-serif;font-style:normal;font-size:10.5pt;color:var(--ink-3)}
-.guide .gnone{margin:30pt var(--m) 0}
-
-/* appendices: schedule and index ----------------------------------------------------------------------- */
-.appendix .ahead{margin:54pt var(--m) 0}
-.appendix .ahead.small{margin-top:50pt}
-.appendix .ahead h2{margin-top:10pt;font-size:38pt;line-height:1.08;color:var(--ink)}
-.appendix .asub{margin-top:10pt;font-size:11.5pt;line-height:1.5;color:var(--ink-2);max-width:440pt;text-wrap:pretty}
-.schedule .acols{display:flex;gap:18pt;margin:16pt var(--m) 0;align-items:flex-start}
-.schedule .acol{flex:1 1 0;min-width:0}
-.sblock{padding-top:7pt;margin-bottom:10pt;border-top:0.6pt solid var(--rule)}
-.sblock .sh{display:flex;align-items:baseline;gap:7pt;margin-bottom:4pt}
-.sblock .sc{flex:none;font-weight:500;font-size:9pt;line-height:1.5;letter-spacing:0.1em;color:var(--teal)}
-.sblock .st{flex:1;min-width:0;font-family:'${SERIF}',serif;font-weight:400;font-size:10.5pt;line-height:1.28;color:var(--ink)}
-.sblock .sp{flex:none;font-size:9pt;color:var(--ink-3);font-variant-numeric:tabular-nums}
-.sblock .sl{font-size:9pt;line-height:12.5pt;color:var(--ink-2);font-variant-numeric:tabular-nums}
-.sblock .sf{font-weight:500;color:var(--ink)}
-.index .ilist{margin:16pt var(--m) 0}
-.index .ihead,.index .irow{display:grid;grid-template-columns:40pt minmax(0,1fr) 96pt 34pt;column-gap:10pt;align-items:baseline}
-.index .ihead{padding-bottom:5pt;border-bottom:0.6pt solid var(--ink-3);font-size:8.5pt;line-height:1.4;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-3)}
-.index .irow{padding:3.5pt 0;border-bottom:0.6pt solid var(--rule)}
-.index .irow .ic{font-weight:500;font-size:10pt;line-height:1.4;letter-spacing:0.1em;color:var(--teal)}
-.index .irow .it{font-family:'${SERIF}',serif;font-weight:400;font-size:11pt;line-height:1.3;color:var(--ink);overflow-wrap:anywhere}
-.index .irow .ip{font-family:'${SERIF}',serif;font-size:10.5pt;line-height:1.4;text-align:right;color:var(--ink);white-space:nowrap}
-.index .irow .ip.inq{font-style:italic;color:var(--ink-2)}
-.index .ihead .ip,.index .ihead .ipg{text-align:right;margin-right:-0.14em}
-.index .irow .ipg{font-size:10pt;line-height:1.4;text-align:right;color:var(--ink-3);font-variant-numeric:tabular-nums}
+/* sections: dark category pages that list their trips ----------------------------------------------
+   Near-black page, the section's transport colour as a soft glow and as every accent; the strongest
+   photograph of the section across the top, fading into the page. */
+.section{background:radial-gradient(120% 55% at 0% 100%,color-mix(in srgb,var(--tc,#888) 24%,transparent) 0,transparent 70%),radial-gradient(90% 40% at 100% 0%,color-mix(in srgb,var(--tc,#888) 16%,transparent) 0,transparent 70%),#111;color:var(--on)}
+.anchor{position:absolute;left:0;top:0;width:1pt;height:1pt}
+.section .sband{position:absolute;left:0;top:0;width:100%;height:250pt;overflow:hidden}
+.section.compact .sband{height:180pt}
+.section .sband img{width:100%;height:100%;object-fit:cover}
+.section .snav{position:absolute;z-index:2;left:var(--m);right:var(--m);top:26pt;display:flex;flex-wrap:wrap;gap:6pt 6pt}
+.section .sn{display:inline-flex;align-items:center;gap:0;padding:0 9pt;height:21pt;border:0.6pt solid #5E5A53;background:#111;font-size:9.5pt;line-height:1;letter-spacing:0.04em;color:var(--on-2);white-space:nowrap}
+.section .sn .tdot{width:6pt;height:6pt;margin-right:6pt;background:var(--tc)}
+.section .sn b{font-weight:500;margin-left:7pt;color:var(--on-3)}
+.section .sn.on{border-color:var(--tc);background:color-mix(in srgb,var(--tc) 30%,#111);color:var(--on)}
+.section .sn.on b{color:var(--on)}
+.section .shead{position:relative;z-index:2;margin:150pt var(--m) 0}
+.section.compact .shead{margin-top:96pt}
+.section.bare .shead{margin-top:118pt}
+.section.compact.bare .shead{margin-top:84pt}
+.section.cont .shead{margin-top:44pt}
+.section .snum{font-family:'${SERIF}',serif;font-weight:300;font-size:12pt;letter-spacing:0.22em;color:var(--tc)}
+.section h2{margin-top:6pt;font-size:40pt;line-height:1.08;color:var(--on)}
+.section.compact h2{font-size:34pt}
+.section.cont h2{font-size:28pt}
+.section .srule{width:56pt;margin:12pt 0 0;border-top:2pt solid var(--tc)}
+.section .sline{margin-top:10pt;font-size:11pt;line-height:1.4;letter-spacing:0.06em;color:var(--on-2)}
+.section .sline i{font-style:normal;color:var(--tc);padding:0 7pt}
+.section .slist{position:relative;z-index:2;margin:18pt var(--m) 0;display:grid;grid-template-columns:1fr 1fr;gap:7pt 14pt}
+.section.compact .slist{gap:5pt 14pt;margin-top:14pt}
+.section.cont .slist{margin-top:18pt}
+.scard{display:flex;gap:10pt;height:52pt;min-width:0;background:color-mix(in srgb,#FFFFFF 5%,#111);border-left:2pt solid var(--tc);overflow:hidden}
+.compact .scard{height:40pt;gap:8pt}
+.scard .sth{flex:none;width:52pt;height:52pt;overflow:hidden;background:#222}
+.compact .scard .sth{width:40pt;height:40pt}
+.section.large .slist{grid-template-columns:1fr;gap:10pt}
+.large .scard{height:80pt;gap:16pt}
+.large .scard .sth{width:106pt;height:80pt}
+.large .scard .sbody{gap:3pt;padding-right:14pt}
+.large .scard .stop{font-size:9.5pt}
+.large .scard .stt{font-size:17pt;line-height:1.15}
+.large .scard .spr{font-size:13pt}
+.large .scard .spg{font-size:10pt}
+.scard .sth img{width:100%;height:100%;object-fit:cover}
+.scard .sth.mono{display:flex;align-items:center;justify-content:center;font-weight:500;font-size:10pt;letter-spacing:0.08em;color:var(--tc);background:color-mix(in srgb,var(--tc) 18%,#111)}
+.scard .sbody{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1.5pt;padding-right:8pt}
+.scard .stop{display:flex;justify-content:space-between;gap:6pt;font-size:8.5pt;line-height:1.2;letter-spacing:0.1em}
+.scard .sc{font-weight:500;color:var(--tc)}
+.scard .sdur{color:var(--on-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scard .stt{font-family:'${SERIF}',serif;font-weight:400;font-size:11.5pt;line-height:1.18;max-height:2.36em;overflow:hidden;color:var(--on)}
+.compact .scard .stt{font-size:10pt;line-height:1.12;max-height:2.24em}
+.scard .sleft{display:flex;gap:7pt;align-items:baseline}
+.scard .sbot{display:flex;justify-content:space-between;align-items:baseline;gap:6pt}
+.scard .spr{font-family:'${SERIF}',serif;font-size:10.5pt;line-height:1.2;color:var(--on-2);white-space:nowrap}
+.compact .scard .spr{font-size:9.5pt}
+.scard .spr.inq{font-style:italic}
+.scard .spg{font-size:8.5pt;line-height:1.2;color:var(--on-3);font-variant-numeric:tabular-nums;letter-spacing:0.08em}
 
 /* trip pages: shared type -------------------------------------------------------------------- */
 .trip .eyebrow{display:flex;justify-content:space-between;align-items:baseline;gap:16pt}
@@ -252,14 +248,20 @@ ${transportCss()}
 .diptych .notes{margin-top:6pt}
 .diptych .pd{margin-top:22pt}
 
-/* composition: typographic -------------------------------------------------------------------- */
-.type .over{position:absolute;left:var(--m);right:var(--m);top:70pt;bottom:62pt;display:flex;flex-direction:column}
-.type .mid{margin:auto 0;border-left:1pt solid var(--gold);padding-left:24pt}
+/* composition: typographic (no usable photo) ------------------------------------------------------
+   Dark like every other trip page: the transport colour as a glow and the trip's code set huge and
+   quiet in the corner, so the page reads as designed, never as a missing picture. */
+.trip.type{background:radial-gradient(110% 60% at 100% 0%,color-mix(in srgb,var(--tc,#888) 30%,transparent) 0,transparent 72%),radial-gradient(80% 45% at 0% 100%,color-mix(in srgb,var(--tc,#888) 14%,transparent) 0,transparent 70%),#111}
+.type .wmbox{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden}
+.type .wm{position:absolute;right:var(--m);top:34pt;font-family:'${SERIF}',serif;font-weight:300;font-size:150pt;line-height:1;letter-spacing:-0.02em;color:color-mix(in srgb,var(--tc,#888) 30%,#111);white-space:nowrap}
+.type .over{position:absolute;left:var(--m);right:var(--m);top:70pt;bottom:50pt;display:flex;flex-direction:column}
+.type .mid{margin:auto 0 0;border-left:2pt solid var(--tc,var(--gold));padding-left:22pt}
 .type h2.headline{margin-top:0}
 .type .rule{display:none}
-.type .meta{margin-top:20pt}
-.type .lede{margin-top:22pt;max-width:440pt}
-.type .notes{margin-top:8pt;max-width:440pt}
+.type .meta{margin-top:14pt}
+.type .lede{margin-top:14pt;max-width:440pt;font-size:14pt}
+.type .notes{margin-top:6pt;max-width:440pt;font-size:11.5pt}
+.type .pd{margin-top:18pt}
 
 /* closing ------------------------------------------------------------------------------------ */
 .closing .band{position:absolute;left:0;top:0;width:100%;height:80pt;overflow:hidden;background:var(--paper-deep)}

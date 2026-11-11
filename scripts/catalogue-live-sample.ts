@@ -115,7 +115,7 @@ async function main() {
   }
   console.log(JSON.stringify({
     ...summary, pages: rendered.pageCount, pdfMB: Math.round((rendered.pdf.length / 1024 / 1024) * 100) / 100, ms: Date.now() - started,
-    warnings: [...snapshot.warnings, ...rendered.warnings].map((w) => `${w.severity} ${w.code}${w.tripId ? ` ${w.tripId.slice(0, 8)}` : ""}`),
+    warnings: [...snapshot.warnings, ...rendered.warnings].map((w) => `${w.severity} ${w.code}${w.tripId ? ` ${w.tripId.slice(0, 8)}` : ""}${w.severity !== "info" && !w.tripId ? `: ${w.message}` : ""}`),
   }, null, 2));
 }
 

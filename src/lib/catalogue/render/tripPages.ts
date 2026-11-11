@@ -10,7 +10,6 @@ import {
   HEADLINE_MIN_PT,
   PRICE_LABEL,
   anchorId,
-  scheduleBlockId,
   cardTitle,
   clipHighlight,
   headlineSizePt,
@@ -69,7 +68,7 @@ function monthRowHtml(line: MonthLine, chips: boolean): string {
 }
 
 /** Price (starting fare, never implied for every date) and the departures of the next 90 days. */
-function priceAndDates(card: CatalogueTripCard, asOfDay: string, plan: PagePlan): string {
+function priceAndDates(card: CatalogueTripCard, asOfDay: string): string {
   const inq = card.price.kind === "inquire";
   const parts = priceParts(card.price.display);
   const priceHtml = inq ? `<span class="price inq">${escapeHtml(card.price.display)}</span>` : `<span class="price">${escapeHtml(parts.amount)}${parts.suffix ? `<small>${escapeHtml(parts.suffix)}</small>` : ""}</span>`;
@@ -77,17 +76,15 @@ function priceAndDates(card: CatalogueTripCard, asOfDay: string, plan: PagePlan)
   const note = d.priceVaries && !inq ? `<span class="pnote">${escapeHtml(PRICE_VARIES_NOTE)}</span>` : "";
   const pricerow = `<div class="pricerow"><div class="pl"><span class="plab">${escapeHtml(PRICE_LABEL)}</span>${priceHtml}</div>${note}</div>`;
 
-  const blockPage = plan.schedulePageByCode[card.code];
-  const all = blockPage != null ? `<a class="dall" href="#${scheduleBlockId(card.code)}">Бүх огноо · ${blockPage}-р хуудас</a>` : "";
   let label: string;
   let body: string;
   if (d.kind === "lines" || d.kind === "grid") {
     const chips = true; // owner: boxed day chips everywhere, tinted by transport
     const dense = d.windowCount > TRIP_GRID_DENSE_DATES;
     const rows = dense ? d.lines.slice(0, TRIP_GRID_MAX_ROWS - 1) : d.lines;
-    label = d.windowCount === 1 && !all ? "Хөдлөх огноо" : "Ойрын 90 хоногийн огноо";
+    label = d.windowCount === 1 ? "Хөдлөх огноо" : "Ойрын 90 хоногийн огноо";
     body = rows.map(l => monthRowHtml(l, chips)).join("");
-    if (dense) body += `<div class="ml more"><span class="mn">Цаашид:</span><span class="md">${all ? "бүх огноог товлолоос харна уу" : "огноог ажилтнаас лавлана"}</span></div>`;
+    if (dense) body += `<div class="ml more"><span class="mn">Цаашид:</span><span class="md">бусад огноог ажилтнаас лавлана</span></div>`;
   } else if (d.kind === "next") {
     label = `${NEXT_DEPARTURE_LABEL}:`;
     body = `<div class="ml next"><span class="md">${escapeHtml(d.nextFull ?? "")}</span></div>`;
@@ -96,7 +93,7 @@ function priceAndDates(card: CatalogueTripCard, asOfDay: string, plan: PagePlan)
     body = `<div class="ml plain"><span class="md">${escapeHtml(d.plain)}</span></div>`;
   }
   const rec = d.recurring ? `<p class="drec">${escapeHtml(d.recurring)}</p>` : "";
-  const dates = `<div class="dates"><div class="dhead"><span class="dlab">${escapeHtml(label)}</span>${all}</div>${body}${rec}</div>`;
+  const dates = `<div class="dates"><div class="dhead"><span class="dlab">${escapeHtml(label)}</span></div>${body}${rec}</div>`;
   return `<div class="pd">${pricerow}${dates}</div>`;
 }
 
@@ -114,9 +111,9 @@ export function tripPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: Re
   const eye = eyebrow(card, t.groupLabel, title);
   const meta = metaLine(card);
   const { lede, notes } = highlightsHtml(card);
-  const price = priceAndDates(card, snapshot.asOfDay, plan);
+  const price = priceAndDates(card, snapshot.asOfDay);
   const foot = footHtml({ page: t.page, total: plan.totalPages, back: true, credit: credits(card, art) });
-  const open = `<section class="page trip ${composition}${composition === "type" ? "" : " on-dark"}${composition === "plate" ? " dark" : ""}" id="${anchorId(card.code)}" data-page="${t.page}" data-code="${escapeHtml(card.code)}" data-composition="${composition}" data-transport="${transportKindOf(card.transportLabel)}"${art.tone && /^#[0-9a-f]{6}$/i.test(art.tone) ? ` style="--panel:${art.tone}"` : ""}>`;
+  const open = `<section class="page trip ${composition} on-dark${composition === "plate" || composition === "type" ? " dark" : ""}" id="${anchorId(card.code)}" data-page="${t.page}" data-code="${escapeHtml(card.code)}" data-composition="${composition}" data-transport="${transportKindOf(card.transportLabel)}"${art.tone && /^#[0-9a-f]{6}$/i.test(art.tone) ? ` style="--panel:${art.tone}"` : ""}>`;
 
   switch (composition) {
     case "cinema":
@@ -146,6 +143,7 @@ export function tripPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: Re
 </section>`;
     default:
       return `${open}
+  <div class="wmbox" aria-hidden="true"><div class="wm">${escapeHtml(card.code)}</div></div>
   <div class="over">${eye}<div class="mid">${head}<div class="rule"></div>${meta}${lede}${notes}</div>${price}</div>
   ${foot}
 </section>`;
