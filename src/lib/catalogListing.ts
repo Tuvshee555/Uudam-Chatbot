@@ -93,6 +93,28 @@ function soonestKey(trip: TravelTrip, now: Date): string {
   return nextDepartures(trip, now)[0] || "9999";
 }
 
+/**
+ * "Хамгийн хямд" (cheapest) asks for the list in price order (live 2026-11-07: "Хамгийн хямд аялалыг санал
+ * болгооч шинэ жилийн" got the New Year list in date order, the dearest first). Set for one synchronous
+ * buildCatalogListingReply call; every listing sort below puts the lowest adult fare first while it is on.
+ */
+const CHEAPEST_RE = /хамгийн\s+хямд|хямдхан|хямд\s+(?:нь|аялал|аяллыг|аялалыг)|hamgiin\s+hya?md|hyamdhan|cheapest|cheap/u;
+let cheapestFirst = false;
+
+/** The lowest adult fare the trip is sold at (per-date fares, as the cards print them). Unknown = last. */
+function lowestAdultFare(trip: TravelTrip, now: Date): number {
+  const result = summarizeTripOfferPrices(trip, {}, now);
+  if (result.status !== "ready") return Number.POSITIVE_INFINITY;
+  const fare = result.summary.prices.adult;
+  if (!fare || fare.kind === "unknown") return Number.POSITIVE_INFINITY;
+  return fare.kind === "free" ? 0 : fare.kind === "range" ? fare.min : fare.amount;
+}
+
+/** 0 when no price order is asked; otherwise the cheaper trip first. */
+function byPrice(a: TravelTrip, b: TravelTrip, now: Date): number {
+  return cheapestFirst ? lowestAdultFare(a, now) - lowestAdultFare(b, now) : 0;
+}
+
 function priceDetail(trip: TravelTrip, now: Date, date?: string): string {
   if (!nextDepartures(trip, now).length) return "";
   const result = date ? resolveTripOfferFareCard(trip, { date, passengers: [] }, now) : summarizeTripOfferPrices(trip, {}, now);
@@ -178,9 +200,13 @@ function namedDestinations(intentText: string, trips: TravelTrip[]): string[] {
   });
 }
 
+/**
+ * The trip holds EVERY place the customer named (placeCoverage.ts, live 2026-11-07: "<city A> <city B> 2 hotiin
+ * aylal" was listed trips that hold only one of the two). One place named: the trips that go there.
+ */
 function nameHasAny(trip: TravelTrip, destinations: string[]): boolean {
   const words = getTripNameHaystack(trip).split(" ");
-  return destinations.some((token) => words.some((word) => wordMatchesName(token, word)));
+  return destinations.length > 0 && destinations.every((token) => words.some((word) => wordMatchesName(token, word)));
 }
 
 function titleCase(word: string): string {
@@ -313,7 +339,7 @@ function whenListing(pool: TravelTrip[], when: When, now: Date, limit = MAX_COMP
     const dates = when.scope ? all.filter(date => departureMatchesScope(date, when.scope!))
       : when.span ? all.filter((date) => date >= when.span![0] && date <= when.span![1]) : when.soonest ? all : inMonths(all, when.months, now);
     return { trip, dates };
-  }).filter((row) => row.dates.length > 0).sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
+  }).filter((row) => row.dates.length > 0).sort((a, b) => byPrice(a.trip, b.trip, now) || a.dates[0].localeCompare(b.dates[0]));
   if (!rows.length) {
     if (when.scope && when.scope.kind !== "month") return { reply: "REFER", listed: [], authoritative: true };
     if (when.newYear) {
@@ -421,7 +447,7 @@ export function holidayWindowListing(input: { pool: TravelTrip[]; resolution: Re
   // the others; then the trips that only leave near it; each group by its first shown date.
   const tier = (row: typeof rows[number]) => (row.hits.length ? 0 : row.namedFor && row.ranked.length ? 1 : 2) * 2 + (row.namedFor ? 0 : 1);
   const matching = rows.filter((row) => row.ranked.length > 0)
-    .sort((a, b) => tier(a) - tier(b) || a.shown[0].localeCompare(b.shown[0]) || a.trip.route_name.localeCompare(b.trip.route_name, "mn"));
+    .sort((a, b) => byPrice(a.trip, b.trip, now) || tier(a) - tier(b) || a.shown[0].localeCompare(b.shown[0]) || a.trip.route_name.localeCompare(b.trip.route_name, "mn"));
   const note = (row: typeof rows[number]): string => {
     if (!around) return "";
     if (row.hits.length) return `✅ ${genitive} өдрүүдийг хамарна`;
@@ -581,6 +607,15 @@ function withFlightIntent(text: string): string {
  * identify one trip ("шууд нислэгтэй юу?" after a trip card asks about THAT trip).
  */
 export function buildCatalogListingReply(rawIntentText: string, trips: TravelTrip[], now = new Date()): Listing | null {
+  cheapestFirst = CHEAPEST_RE.test(normText(rawIntentText || ""));
+  try {
+    return catalogListingReply(rawIntentText, trips, now);
+  } finally {
+    cheapestFirst = false;
+  }
+}
+
+function catalogListingReply(rawIntentText: string, trips: TravelTrip[], now: Date): Listing | null {
   if (hasCalendarWeekWindow(rawIntentText)) return null;
   const intentText = withFlightIntent(rawIntentText);
   const normalized = normText(intentText);
@@ -667,7 +702,7 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
   const pool = destinations.length === 0
     ? categoryPool
     : destinationCategoryPool;
-  const listed = [...pool].sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
+  const listed = [...pool].sort((a, b) => byPrice(a, b, now) || soonestKey(a, now).localeCompare(soonestKey(b, now)));
   if (listed.length === 0 && wantsCruise && destinations.length === 0) {
     return { reply: `Одоогоор усан онгоцны (круз) аялал нээлттэй байхгүй байна. Бусад аяллыг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
   }

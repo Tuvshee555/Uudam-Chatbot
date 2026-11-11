@@ -54,6 +54,7 @@ import { asksWhatExists } from "./catalogListing";
 import { DATE_FOLLOWUP_WORDS } from "./dateWords";
 import { getInheritedDateScope } from "./inheritedDateScope";
 import { unknownPlaceTokens } from "./placeLikeTokens";
+import { placesMissingFromTrip } from "./placeCoverage";
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -237,7 +238,27 @@ function isTripChoiceQuestion(reply: string): boolean {
   return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply) || reply.startsWith(DATE_NOT_SCHEDULED_HEADING);
 }
 
-export async function routeFastPathText(input: {
+/**
+ * Every place the customer names must be in what the bot shows (placeCoverage.ts): a scoped list made
+ * from this message keeps only the trips that hold all of them, and none left means the bot does not
+ * know (staff take it). Live 2026-11-07: a two-city ask got a list of one trip that held neither city.
+ */
+export async function routeFastPathText(input: Parameters<typeof routeFastPathTextInner>[0]): Promise<FastPathRoute> {
+  const route = await routeFastPathTextInner(input);
+  if (!route.scopedClarify?.length || parseNumberedChoice(input.text)) return route;
+  const kept: TravelTrip[] = [];
+  for (const trip of route.scopedClarify) {
+    if (!(await placesMissingFromTrip(input.text, trip, input.trips, input.getEndedTrips)).length) kept.push(trip);
+  }
+  if (kept.length === route.scopedClarify.length) return route;
+  if (!kept.length) {
+    await clearClarificationState(input.senderId);
+    return { matchText: markNoTrip(input.text), scopedClarify: null, unsupportedRequest: true };
+  }
+  return { ...route, scopedClarify: kept };
+}
+
+async function routeFastPathTextInner(input: {
   senderId: string;
   text: string;
   contextualUserText: string;
@@ -251,6 +272,8 @@ export async function routeFastPathText(input: {
    * tell (model down, bad output) and the keyword routing below decides.
    */
   understand?: (pendingTripIds: string[], selection?: TripSelection | null, recentTripIds?: string[]) => Promise<Understanding | null>;
+  /** Ended (archived) trips, loaded only when a word of the message names no active trip (placeCoverage.ts). */
+  getEndedTrips?: () => Promise<TravelTrip[]>;
 }): Promise<FastPathRoute> {
   const { senderId, text, contextualUserText, trips } = input;
   const now = input.now || new Date();
@@ -284,6 +307,12 @@ export async function routeFastPathText(input: {
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
   const chose = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> => {
+    // Every place the customer names must be in the trip (placeCoverage.ts). A pick by number, or the trip
+    // already selected, is the customer's own choice; anything else that leaves a named place out is a
+    // trip the bot does not have: staff take it, and no trip is remembered for the next turn.
+    if (!numericChoice && previousSelection?.tripId !== trip.id && (await placesMissingFromTrip(text, trip, trips, input.getEndedTrips)).length) {
+      return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
+    }
     const offered = (await getClarificationState(senderId))?.candidateTripIds || [];
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);

@@ -3,7 +3,7 @@
  * looked up. No model call is made here, so a billing outage cannot reach it.
  *
  *  social              thanks / praise: one warm line. A bare acknowledgement or farewell: silence, no lead.
- *  business_group      a typed staff lead and ONE reply of the company's own wording plus one question.
+ *  business_group      the corporate catalogue file (webhook catalogue step); otherwise a typed lead and silence.
  *  commercial_policy   a typed staff lead and silence (no data, no answer).
  *  transport_only      the same.
  *  existing_booking    the lead's real status when a booking lead exists, otherwise a typed lead and silence;
@@ -177,13 +177,11 @@ export async function dispatchNeed(input: NeedDispatchInput): Promise<boolean> {
     const catalogWords = await input.trips().then((trips) => catalogPlaceWordsIn(text, trips)).catch(() => [] as string[]);
     const constraints: NeedConstraints = { ...hit.constraints, destinationWords: [...new Set([...(hit.constraints.destinationWords ?? []), ...catalogWords])].slice(0, 4) };
     if (!constraints.destinationWords?.length) delete constraints.destinationWords;
-    const leadSaved = await holdForStaff({ ...input, hit: { ...hit, constraints } }, constraints, { catchFailure: true });
-    const reply = buildGroupInquiryReply({ leadSaved, constraints });
-    if (!reply) {
-      silent(input, "need:business_group_no_reply");
-      return true;
-    }
-    await input.deliver({ reply, failTag: "need_business_group", rememberSource: "api.webhook.need_business_group", counter: "webhook.need_business_group_total" });
+    // Owner decision 2026-11-11: a group ask is answered with the corporate catalogue file (webhook.ts runs the
+    // catalogue step first, with groupNeed). One the catalogue does not take (a named trip, a trip under
+    // discussion) is something the bot does not know: silence, and a typed lead carrying the group's details.
+    await holdForStaff({ ...input, hit: { ...hit, constraints } }, constraints, { catchFailure: true });
+    silent(input, "need:business_group");
     return true;
   }
 

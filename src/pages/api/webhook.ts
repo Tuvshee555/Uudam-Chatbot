@@ -999,7 +999,13 @@ async function handleMessageTurn(
   // request, even when it says "компани / хамт олон" (need gate, messageNeed.ts).
   const catalogueMayAnswer = (!needHit || needHit.need === "business_group") && !asksCommercialTerm(text);
   if (catalogueMayAnswer && await handleCatalogueTurn({ platform, senderId, pageId, token, text, trace, history, getTrips: getGroundingTrips, deliver: deliverFastPathReply, captureLead,
-    hasTripContext: Boolean(groundingSelection?.tripId) || Boolean(groundingPending?.candidateTripIds?.length) })) return;
+    hasTripContext: Boolean(groundingSelection?.tripId) || Boolean(groundingPending?.candidateTripIds?.length),
+    groupNeed: needHit?.need === "business_group" })) {
+    // A group the catalogue answered is still a classified need (the observe/enforce comparison counts it).
+    if (needHit) logInfo("webhook.need_classified", { requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
+      senderHash: hashIdentifier(senderId), need: needHit.need, source: "rule", signals: needHit.signals, handledBy: "catalogue" });
+    return;
+  }
   if (
     isContactOperatorTap(text) ||
     (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
@@ -1132,6 +1138,10 @@ async function handleMessageTurn(
     deliver: (input) => deliverFastPathReply(input), captureLead: (input) => captureLead(input),
   });
   if (needHit && (await dispatchFor(needHit, "rule"))) return;
+  // A group staff already hold (an open business-group lead from the last day): the customer's next messages
+  // ("шууд X руу, өөр юу ч үзэхгүй", a head count, a month) belong on that lead, not to a trip answer
+  // (owner 2026-11-11: the bot does not know group terms, so it stays quiet). needDispatch appends it.
+  if (!needHit && (await dispatchFor({ need: "business_group", signals: ["inquiry_answer"], constraints: {} }, "rule"))) return;
   if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
   await appendMessage(senderId, "user", text);
   // Only fetched on the miss path (nothing in the active catalogue matched),
@@ -1160,6 +1170,7 @@ async function handleMessageTurn(
         ? async (pendingTripIds, selection, recentTripIds) =>
             understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, selection, recentTripIds, ask: understandingModel(trace) })
         : undefined,
+      getEndedTrips: getArchivedTrips,
     });
     currentSelection = routedCache.selection || null;
     factualScope = routedCache.chosenTripId

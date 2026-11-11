@@ -96,6 +96,8 @@ function isTypedFunctionWord(word: string): boolean {
 export function isVerbOrFunctionWord(word: string): boolean {
   if (FUNCTION_WORDS.has(word) || CALENDAR_FOLLOWUP_WORDS.has(word)) return true;
   if (isTypedFunctionWord(word)) return true;
+  // A light verb in any form ("болгооч", "өгөөч", "bolgooch") is a verb, never a place.
+  if (LIGHT_VERB.test(word)) return true;
   // "аялал" in any case ("аяллыг", "аялалд") and its Latin spellings: the word for a trip is never a place.
   if (/^(?:аял|ayal|ayl)/u.test(word)) return true;
   if (BARE_VERB_ENDING.test(word) && word.length >= 5) return true;
@@ -136,6 +138,9 @@ function inCatalogue(word: string, words: ReturnType<typeof catalogueWords>): bo
   return words.phonetic.some((known) => known.startsWith(latinPrefix) || latin.startsWith(stem(known)));
 }
 
+/** Light verbs that make a compound verb with the noun before them: болгох / өгөх / хүргэх (any ending, any script). */
+const LIGHT_VERB = /^(?:болго|bolgo|өгө|өгч|өгөөч|ugu|ugch|ugooch|хүргэ|hurge)/iu;
+
 /** A message longer than this is chatter, not a short place question: nothing in it is judged a place. */
 const MAX_WORDS_FOR_PLACE_JUDGEMENT = 9;
 /** Latin typing is far less predictable than Cyrillic: only a very short message is judged. */
@@ -158,7 +163,11 @@ export function unknownPlaceTokens(text: string, trips: TravelTrip[], options: {
     // A token that starts with a digit is a number, a date or a count: "30-нд", "2-р", "990k", "12/30".
     .replace(/(?<![\p{L}\d])\d[\p{L}\d./:-]*/gu, " ");
   const all = cleaned.split(/[^\p{L}]+/u).filter(Boolean);
-  const words = all.filter((word) => word.length >= 4);
+  // A noun right before a light verb is half of a compound verb, never a place: "санал болгооч"
+  // (recommend), "зөвлөгөө өгөөч", "sanal bolgooch" (live 2026-11-07: "Хамгийн хямд аялалыг санал
+  // болгооч шинэ жилийн" went silent as an unknown place).
+  const lightVerbObjects = new Set(all.filter((word, index) => LIGHT_VERB.test(all[index + 1] || "")).map((word) => word.toLowerCase()));
+  const words = all.filter((word) => word.length >= 4 && !lightVerbObjects.has(word.toLowerCase()));
   if (!words.length) return [];
   const known = catalogueWords(trips);
   const found: string[] = [];

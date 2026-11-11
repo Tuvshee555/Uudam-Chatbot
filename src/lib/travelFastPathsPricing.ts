@@ -11,6 +11,7 @@ import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type Re
 import { buildFarePriceLines, displayAgeBand, onSaleDepartureText, shortDate, upcomingDepartures } from "./tripFareBlock";
 import { verifyTripReply } from "./tripReplyVerification";
 import { customerDate } from "./customerDate";
+import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
 import { holidayWindowOf } from "./askedWindow";
 import { holidayDatesFor, holidayDatesToShow, type ResolvedHoliday } from "./holidayDepartures";
 import type { TravelTrip } from "./travelOps";
@@ -1743,8 +1744,13 @@ export function buildDateNotScheduledReply(trips: TravelTrip[], now = new Date()
     DATE_NOT_SCHEDULED_HEADING,
     ...shown.map(({ trip, dates }) => `• ${trip.route_name}: ${dates.slice(0, 3).map((date) => customerDate(date, now)).join(", ")}`),
     ...(scheduled.length > shown.length ? [`Өөр ${scheduled.length - shown.length} сонголт бий.`] : []),
+    // Owner 2026-11-11: point to every other trip too, and let the customer say which one.
+    "", OTHER_TRIPS_LINK_LINE,
   ].join("\n");
 }
+
+/** The closing line of a "not then" reply: the whole catalogue on the website, and an invitation to name a trip. */
+export const OTHER_TRIPS_LINK_LINE = `Бусад аяллуудыг эндээс харж болно: ${BOOKING_WEBSITE_URL} — сонирхсон аяллаа бичээрэй 😊`;
 
 /** Legacy text for integrations that explicitly request contact. */
 export const LEAD_CAPTURE_CTA =

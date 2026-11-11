@@ -59,6 +59,11 @@ export type CatalogueTurnContext = {
   /** webhook.ts captureLead: a durable staff lead (one open lead per kind; see recordLead). */
   captureLead: (input: { kind: "handoff"; context: string; contactPhone?: string }) => Promise<{ created: boolean }>;
   now?: () => Date;
+  /**
+   * The need gate (messageNeed.ts) read an organisation / group / custom-trip ask. Owner decision 2026-11-11:
+   * such an ask gets the catalogue file even when its wording carries none of the catalogue's own words.
+   */
+  groupNeed?: boolean;
 };
 
 export type CatalogueWebDeps = {
@@ -234,6 +239,7 @@ export async function handleCatalogueTurn(ctx: CatalogueTurnContext): Promise<bo
     const edition = lastCatalogueEdition(ctx.history);
     if (edition) intent = { kind: "catalogue", edition, resend: true, matched: "resend" };
   }
+  if (intent.kind === "none" && ctx.groupNeed) intent = { kind: "catalogue", edition: "complete", resend: false, matched: "need_gate" };
   if (intent.kind === "none") return false;
 
   // A specific-trip question keeps the existing flow: a named trip, or a trip already under discussion

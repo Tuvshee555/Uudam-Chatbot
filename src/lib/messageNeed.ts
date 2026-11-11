@@ -132,6 +132,9 @@ function orgHits(p: Prepared): { strong: boolean; weak: boolean } {
   p.tokens.forEach((token, index) => {
     // "Танай байгууллага" is the agency's own organisation and "бусад компани" other agencies, not the customer's.
     if (p.tokens.slice(Math.max(0, index - 2), index).some((prior) => YOUR.has(prior) || OTHER_ORG.has(prior))) return;
+    // "аялал жуулчлалын компани", "travel company": a kind of business (usually the agency itself), not a customer's
+    // organisation that wants to travel (the catalogue's own journey, 2026-11-11).
+    if (/^(?:жуулчл\p{L}*|juulchl\p{L}*|аяллын|ayalliin|aylaliin|travel|tour)$/u.test(p.tokens[index - 1] || "")) return;
     if (ORG_BIGRAM.test(p.tokens.slice(index, index + 3).join(" "))) strong = true;
     if (ORG_STRONG.some((pattern) => pattern.test(token))) strong = true;
     else if (ORG_WEAK.some((pattern) => pattern.test(token))) weak = true;
