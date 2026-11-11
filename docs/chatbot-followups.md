@@ -239,6 +239,28 @@ and to "Шинэ аялал гарсан уу"). **Maintenance:** add each new y
 government announces them (the table ends at 2030). Journeys: `a holiday is a time…`
 (`tests/forensic-regressions.test.ts`), rules in `tests/holiday-calendar.test.ts`; both fail without the fix.
 
+## P2-2e — Calendar group: holiday + place, ordinary-word date follow-ups, unknown place, party fares, quoted price — FIXED (2026-11-07)
+Live 2026-11-01..06 (six conversations). The decision "which window / which place" was made by word lists, so one
+unlisted word flipped the answer. **Now**, one path each: (1) a holiday ask, with or without a place, is answered by
+`holidayWindowListing` (`catalogListing.ts`): the window is named ("Цагаан сарын үеэр (2027 оны 2 сарын 6–9 орчим)"),
+trips on the road over the holiday come first and are marked, the one titled for it before the rest, departures only
+near it are marked "ойролцоо", and with nothing in the window the departures NEAREST TO THE WINDOW are shown (or
+"хуваарь гараагүй" when months away) - never "Тэр хугацаанд гарах аялал алга" followed by earlier dates. The
+catalogue-word gate (`isHolidayCatalogQuestion`) is gone. (2) A message is a NEW destination only when a word nothing
+else explains (not a date, party, verb, filler or catalogue word) is left (`placeLikeTokens.ts`); the whitelist verdict
+(`calendarWordsAreContextOnly`) is gone, so "2027 ионы 2-р сард аялах юмаа" is a date question about the trip on
+screen, and the year the customer states is the year. (3) A place no trip goes to is a constraint: a time-only
+listing says nothing (silence + lead) instead of listing other places' trips; an ended trip named by part of its name
+gets the ended-trip notice. A place typed in Latin letters is matched by sound. (4) A party named by ages under a
+displayed list is priced per trip through each trip's age bands (`buildAmbiguousPassengerTotalReply`). (5) A quoted
+price (990000 / 990k / 990 мянга / 1 сая) matches ADULT fares first, weekday-schedule trips included; a round
+amount no trip sells is read as a budget (a full digit string typed like an advert's price is still not guessed).
+**Seam:** `getInheritedDateScope(history)` (`inheritedDateScope.ts`) is the one place the window of an earlier turn
+is read; a sender-level constraint ledger (month, holiday, passengers, exclusions kept across turns) replaces its body.
+**Open:** a month carried over from an earlier turn that the named place does not leave in stays silent + lead
+(only a carried HOLIDAY window is answered, because that reply names the window it assumed). Journeys:
+`tests/understanding-holiday-journeys.test.ts`, rules `tests/understanding-holiday-units.test.ts`; both fail without the fix.
+
 ## P2-2c — Two trips of one country both stop in the asked city — OPEN
 "<улс> аялал <хот>-д ямар буудалд буудаллах вэ": two tours of that country list the city among their
 aliases, and the score picks one (before 2026-11-04 it asked, but offered a tour that does not visit the

@@ -317,11 +317,14 @@ export function resolveRequestedMonth(
     return buildMonth(month, month < today.month ? today.year + 1 : today.year);
   }
 
-  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сар(?:ынх|ын|ых|д)?|sard|sar(?:iin|in|yn|un)?)(?!\p{L}|\s*\d)/iu.exec(text);
+  // "2027 оны 2 сард" (also typed "2027 ионы 2-р сард"): a year the customer states is the year, whatever
+  // the month's position against today suggests ("2027 оны 11 сард" asked in November 2026).
+  const match = /(?:(20\d{2})\s*(?:\p{L}{0,4})?\s*)?(?:^|[^\d])(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сар(?:ынх|ын|ых|д)?|sard|sar(?:iin|in|yn|un)?)(?!\p{L}|\s*\d)/iu.exec(text);
   if (!match) return null;
-  const month = Number(match[1]);
+  const month = Number(match[2]);
   if (!Number.isInteger(month) || month < 1 || month > 12) return null;
-  const year = month < today.month ? today.year + 1 : today.year;
+  const stated = match[1] ? Number(match[1]) : null;
+  const year = stated !== null && stated >= today.year ? stated : month < today.month ? today.year + 1 : today.year;
   return {
     year,
     month,
