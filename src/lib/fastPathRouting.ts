@@ -246,16 +246,13 @@ function isTripChoiceQuestion(reply: string): boolean {
 export async function routeFastPathText(input: Parameters<typeof routeFastPathTextInner>[0]): Promise<FastPathRoute> {
   const route = await routeFastPathTextInner(input);
   if (!route.scopedClarify?.length || parseNumberedChoice(input.text)) return route;
-  const kept: TravelTrip[] = [];
-  for (const trip of route.scopedClarify) {
-    if (!(await placesMissingFromTrip(input.text, trip, input.trips, input.getEndedTrips)).length) kept.push(trip);
-  }
-  if (kept.length === route.scopedClarify.length) return route;
-  if (!kept.length) {
-    await clearClarificationState(input.senderId);
-    return { matchText: markNoTrip(input.text), scopedClarify: null, unsupportedRequest: true };
-  }
-  return { ...route, scopedClarify: kept };
+  // "A B C аялал" may ask for several trips at once, so a list need not have one trip holding every place;
+  // but a place that NONE of the listed trips holds means the list ignores part of the question.
+  const missingPerTrip = await Promise.all(route.scopedClarify.map((trip) => placesMissingFromTrip(input.text, trip, input.trips, input.getEndedTrips)));
+  const ignored = (missingPerTrip[0] || []).filter((word) => missingPerTrip.every((missing) => missing.includes(word)));
+  if (!ignored.length) return route;
+  await clearClarificationState(input.senderId);
+  return { matchText: markNoTrip(input.text), scopedClarify: null, unsupportedRequest: true };
 }
 
 async function routeFastPathTextInner(input: {
