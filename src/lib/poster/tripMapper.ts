@@ -267,7 +267,10 @@ export type PosterFareColumns = {
 export function posterFareColumns(input: string[] | undefined): PosterFareColumns {
   const columns = input || [];
   const single = columns.findIndex((column) => isSingleTravellerColumn(column));
-  const hotelIdx = findPriceColumnIndex(columns, ["буудал", "hotel"]);
+  // "2-11 нас хүүхэд /буудалд оргүй" is a child fare that mentions the hotel, not the hotel column:
+  // read as the hotel, its prices became hotel names and the child fare was lost.
+  const hotelIdx = columns.findIndex((column) => /буудал|hotel/i.test(column) && !isChildColumn(cleanColumnLabel(column))
+    && !isInfantColumn(cleanColumnLabel(column)) && !isAdultColumn(column));
   const roomLabelIdx = findPriceColumnIndex(columns, ["өрөө", "room"]);
   const adult = columns
     .map((column, index) => ({ column, index }))

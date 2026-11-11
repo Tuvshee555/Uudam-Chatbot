@@ -31,7 +31,11 @@ function packageOptions(extra: Row): PackageOption[] {
 /** "Norvel · Хөтөлбөртэй" → hotel "Norvel", package "Хөтөлбөртэй", only when that package is one of the trip's. */
 export function splitPackagedHotel(hotel: string, packages: PackageOption[]): { hotel: string; packageId: string } | null {
   const at = hotel.lastIndexOf(PACKAGE_SEPARATOR);
-  if (at <= 0) return null;
+  if (at <= 0) {
+    // A trip sold by package only (no hotel choice): the cell is just the package's name.
+    const whole = packages.find((option) => sameKey(option.label, hotel.trim()) || sameKey(option.id, hotel.trim()));
+    return whole ? { hotel: "", packageId: whole.id } : null;
+  }
   const right = hotel.slice(at + PACKAGE_SEPARATOR.length).trim();
   const match = packages.find((option) => sameKey(option.label, right) || sameKey(option.id, right));
   const left = hotel.slice(0, at).trim();
@@ -53,9 +57,15 @@ export function splitPackagedHotelRows<T extends Row>(groups: T[], existingExtra
   return groups.map((group, index) => {
     const split = splits[index];
     if (!split) return group;
-    const link = links.get(split.hotel) ?? { hotelId: null, profileIds: [] };
+    const link = (split.hotel && links.get(split.hotel)) || { hotelId: null, profileIds: [] };
     const before = previous.find((row) => text(row.hotel) === split.hotel && text(row.package_id) === split.packageId && dateList(row.dates) === dateList(group.dates));
     const kept = before ? Object.fromEntries(TRIP_ONLY_ROW_KEYS.filter((key) => key in before).map((key) => [key, before[key]])) : {};
+    if (!split.hotel) {
+      // Package only: the row names no hotel at all (an empty "hotel" would read as a hotel choice).
+      const { hotel: _hotel, ...rest } = group;
+      void _hotel;
+      return { ...rest, package_id: split.packageId, ...kept } as unknown as T;
+    }
     return {
       ...group,
       hotel: split.hotel,
