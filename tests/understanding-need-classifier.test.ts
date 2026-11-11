@@ -43,6 +43,11 @@ const POSITIVE: Record<MessageNeed, string[]> = {
     "Za. Hyamdralin huwi gej bhgui yu? Neg baiguullagin 5 hvn deer",
     "Manai kompani 70 ajiltantai, jil bur aylah gej bn",
     "Баг бүрэлдэхүүн 30 хүнтэй, тусгайлан хөтөлбөр гаргуулах гэсэн юм",
+    // 2026-11-11: a group of 10+ that wants its own route (straight there, only there, skip the other cities).
+    "terqan ruu 20 hun shuud yavmaar bn, busad hotiig uzehgui",
+    "Тэрган руу 15 хүн шууд явна, өөр хот үзэхгүй",
+    "Тэрган хотод 30 хүн зөвхөн Тэрган үзнэ",
+    "terqan ruu 25 hun yavna, holmin shenbar hereggui",
   ],
   commercial_policy: [
     "barter awdag u",
@@ -80,6 +85,13 @@ const POSITIVE: Record<MessageNeed, string[]> = {
     "Хэзээ холбогдох вэ?",
     "Захиалгаа цуцалъя",
     "захиалсан мөнгөө буцаан авч болох уу",
+    // 2026-11-11: a booking already made, in Latin spellings and typos, and "my booked trip ..." questions.
+    "zahialgaa tsutslah uu",
+    "zakhialgaa tsuclax bolomjtoi yu",
+    "zahialgaa tsutsalj boloh uu",
+    "Миний захиалсан аялал хэзээ гарах вэ",
+    "bid zahialsan ayalaa hezee garah ve",
+    "minii zahialsan aylal hezee yavah ve",
   ],
   complaint: [
     "Калдор аялалд явсан чинь хоол муу байсан гомдолтой байна",
@@ -110,7 +122,14 @@ const POSITIVE: Record<MessageNeed, string[]> = {
     "сайхан амраарай",
     "Хөтөлбөр нь их сайхан байсан",
     "Аялал сайхан байлаа",
+    // 2026-11-11: a thank-you that opens with a greeting (live run: silence and a staff lead).
+    "Сайн байна уу. Бид саяхан танай компаниар аялаад ирлээ. Хөтөч маш сайн байсан, хөтөлбөрт нэмэх хасах санал хүсэлт болгоныг маань сонсож тусалсанд маш их баярлалаа. Дараа дахин танайхаар аялна.",
+    "Sain bainuu. Bid saya aylaad irlee, hutuch mash sain baisan, mash ih bayarlalaa",
+    "Сайн уу, баярлалаа",
   ],
+  // Policy (visa, passport, insurance) is read only with no trip under discussion, which this table's context (a fare
+  // reply) is not: its positives are in the travel-document test below.
+  policy: [],
 };
 
 const NEGATIVE: string[] = [
@@ -399,4 +418,60 @@ test("a long thank-you is a thank-you even though it says 'to say' and 'we wish'
   assert.equal(classifyMessageNeed("Өглөөний мэнд, баярлалаа")?.social, "thanks");
   // A long thanks that ends in a real polite request still goes to the pipeline.
   assert.equal(classifyMessageNeed(`${long} Дараагийн аяллын хөтөлбөрийг илгээгээрэй`), null);
+});
+
+// ── 2026-11-11: travel documents, bare discounts, booking-made questions, greeting-led thanks ────────────────────────
+
+test("a visa / passport / insurance question with no trip under discussion is a policy need; a trip question is not", () => {
+  const none = { hasTripContext: false };
+  for (const text of ["Велмара виз хэрэгтэй юу", "viz heregtei yu", "Тэрган руу visa hereg boloh uu", "Паспорт хэрэгтэй юу", "gadaad pasport heregtei yu",
+    "Аяллын даатгал хийлгэх шаардлагатай юу", "daatgal heregtei yu", "Ямар бичиг баримт бүрдүүлэх вэ"]) {
+    const hit = classifyMessageNeed(text, none);
+    assert.equal(hit?.need, "policy", text);
+    assert.ok(hit!.signals.every((signal) => signal.startsWith("policy:")), text);
+  }
+  for (const text of ["Визгүй аялал байна уу", "Калдор аялалд даатгал багтсан уу", "Велмара үнэ хэд вэ, виз хэрэгтэй юу", "Велмара аялал хэзээ гарах вэ"]) {
+    assert.notEqual(classifyMessageNeed(text, none)?.need, "policy", text);
+  }
+  // Under a trip card the question is that trip's booking terms: the pipeline answers or hands off.
+  assert.equal(classifyMessageNeed("Виз хэрэгтэй юу", { hasTripContext: true }), null);
+  assert.equal(classifyMessageNeed("Виз хэрэгтэй юу", { lastBotReply: "Том хүн: 1,791,000₮" }), null);
+  assert.ok(needCueMatches("policy", "виз хэрэгтэй"));
+  assert.ok(!needCueMatches("policy", "үнэ хэд вэ"));
+  assert.deepEqual(parseModelNeed("policy", "виз хэрэгтэй", "Велмара виз хэрэгтэй юу"), { need: "policy", evidence: "виз хэрэгтэй" });
+});
+
+test("a bare discount question is commercial policy only when no trip is under discussion", () => {
+  for (const text of ["Хөнгөлөлт байдаг уу", "hymdral bga yu", "uramshuulal bga uu", "hungulult baidag uu", "Хямдрал байгаа юу"]) {
+    assert.deepEqual(classifyMessageNeed(text, { hasTripContext: false })?.signals, ["discount"], text);
+    assert.equal(classifyMessageNeed(text, { hasTripContext: true }), null, `${text}: under a trip it is that trip's discount`);
+    assert.equal(classifyMessageNeed(text), null, `${text}: unknown context keeps today's path`);
+  }
+  for (const text of ["Хүүхдийн хөнгөлөлт байна уу", "Хямдралтай аялал байна уу", "Оюутан хөнгөлөлт"]) {
+    assert.equal(classifyMessageNeed(text, { hasTripContext: false }), null, text);
+  }
+});
+
+test("a booking already made is an existing-booking need; making one is not a need (isBookingIntent: understanding-fa-need.test.ts)", () => {
+  for (const text of ["zahialgaa tsutslah uu", "Миний захиалсан аялал хэзээ гарах вэ", "bid zahialsan ayalaa hezee garah ve", "zakhialgaa tsuclax bolomjtoi yu"]) {
+    assert.equal(classifyMessageNeed(text)?.need, "existing_booking", text);
+  }
+  for (const text of ["zahialgaa hiie", "Захиалъя", "захиалгаа өгье", "Калдор аялал захиалмаар байна"]) {
+    assert.equal(classifyMessageNeed(text), null, text);
+  }
+  assert.equal(classifyMessageNeed("Захиалсан бол хэзээ төлөх вэ"), null, "a hypothetical booking is not one made");
+});
+
+test("a group of 10+ with its own route is a custom ask; a direct-flight trip or a small party is not", () => {
+  for (const text of ["20 хүн шууд нислэгтэй аялал байна уу", "Тэрган руу 4 хүн шууд явна, өөр хот үзэхгүй", "15 хүн Тэрган аялал үнэ хэд вэ"]) {
+    assert.notEqual(classifyMessageNeed(text, { hasTripContext: false })?.need, "business_group", text);
+  }
+  assert.equal(classifyMessageNeed("terqan ruu 20 hun shuud yavmaar bn, busad hotiig uzehgui")?.constraints.groupSize, 20);
+});
+
+test("a greeting that opens a message does not stop a thank-you, and a real question after it still wins", () => {
+  for (const text of ["Сайн байна уу, Калдор аялал хэзээ гарах вэ", "Sain bnuu, une hed ve", "Сайн байна уу. Баярлалаа, хөтөлбөрөө илгээгээрэй", "Сайн байна уу"]) {
+    assert.notEqual(classifyMessageNeed(text)?.need, "social", text);
+  }
+  assert.ok(needCueMatches("social", "баярлалаа", "Сайн байна уу. Аялал сайхан байлаа, баярлалаа"));
 });

@@ -406,7 +406,8 @@ async function handleMessageTurn(
   const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
   // What the customer needs, read from their own words before any catalogue lookup (messageNeed.ts).
   const lastBotReply = history.findLast((message) => message.role === "assistant")?.text ?? null;
-  const needHit = attachmentReply ? null : classifyMessageNeed(text, { lastBotReply });
+  const hasTripContext = Boolean(groundingSelection?.tripId) || Boolean(groundingPending?.candidateTripIds?.length);
+  const needHit = attachmentReply ? null : classifyMessageNeed(text, { lastBotReply, hasTripContext });
   // Non-blocking: the memory merge continues after the response via waitUntil.
   // It used to be awaited inline while holding the conversation lock, which
   // serialized a long model call behind every reply.
@@ -999,8 +1000,7 @@ async function handleMessageTurn(
   // request, even when it says "компани / хамт олон" (need gate, messageNeed.ts).
   const catalogueMayAnswer = (!needHit || needHit.need === "business_group") && !asksCommercialTerm(text);
   if (catalogueMayAnswer && await handleCatalogueTurn({ platform, senderId, pageId, token, text, trace, history, getTrips: getGroundingTrips, deliver: deliverFastPathReply, captureLead,
-    hasTripContext: Boolean(groundingSelection?.tripId) || Boolean(groundingPending?.candidateTripIds?.length),
-    groupNeed: needHit?.need === "business_group" })) {
+    hasTripContext, groupNeed: needHit?.need === "business_group" })) {
     // A group the catalogue answered is still a classified need (the observe/enforce comparison counts it).
     if (needHit) logInfo("webhook.need_classified", { requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
       senderHash: hashIdentifier(senderId), need: needHit.need, source: "rule", signals: needHit.signals, handledBy: "catalogue" });
@@ -1133,6 +1133,7 @@ async function handleMessageTurn(
   // any trip is looked up; no model call.
   const dispatchFor = (hit: NonNullable<typeof needHit>, source: "rule" | "model") => dispatchNeed({
     hit, source, text, senderId, platform, lastBotReply, trace, trips: getTrips, configuredFacts: commercialFactsText([], knowledge),
+    selectedTripId: groundingSelection?.tripId ?? null, hasTripContext,
     // A complaint about a service already received goes to a person the same way (when hand-off is on).
     handoff: botSettings.handoff_enabled ? performHandoff : undefined,
     deliver: (input) => deliverFastPathReply(input), captureLead: (input) => captureLead(input),
