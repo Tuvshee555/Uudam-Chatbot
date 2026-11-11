@@ -54,7 +54,7 @@ const TSAGAAN_SAR_RE = /цагаан\s*сар(?!аан)|ц\.\s*сар|tsa?gaa?n\
 const NAADAM_RE = /наадам|наадм|naadam|naadm/iu;
 // "жил" must end the word: "шинжилгээ" (a medical test) is not New Year.
 // "шинэ он / оноор / оны", "shine onoor"; never "шинэ онгоц" (a new plane).
-export const NEW_YEAR_RE = /(?:шинэ|шин)\s*жил(?:ийн|ийг|ээрээ|ээр|дээ|д|тэй)?(?!\p{L})|shi?ne?\s*jill?(?:iin|iig|eer|d|tei)?(?![a-z])|new\s*year|шинэ\s*он(?:ы|оор|д|ыг)?(?!\p{L})|shi?ne?\s*on(?:ii|oor|d|iig)?(?![a-z])/iu;
+export const NEW_YEAR_RE = /(?:шинэ|шин)\s*жил(?:ийн|ийг|ээрээ|ээр|дээ|д|тэй)?(?!\p{L})|shi?ne?\s*jill?(?:iin|iig|eer|er|r|d|tei)?(?![a-z])|new\s*year|шинэ\s*он(?:ы|оор|д|ыг)?(?!\p{L})|shi?ne?\s*on(?:ii|oor|d|iig)?(?![a-z])/iu;
 // "Баярын өдрүүдээр", "bayaraar": a holiday, but which one? ("баярлалаа" is a thank-you.)
 const UNSPECIFIED_RE = /(?:^|[^\p{L}])(?:баяр(?:ын|аар)|bayar(?:iin|aar))(?!\p{L})/iu;
 
@@ -88,7 +88,10 @@ export function withoutHolidayNames(text: string): string {
   // Only the holiday words go; every other character stays exactly as typed (the matcher's own
   // normalisation runs later — normalising here changed unrelated text).
   let out = text;
-  for (const holiday of HOLIDAYS) out = out.replace(new RegExp(`(?:${holiday.re.source})\\S*`, "giu"), " ");
+  // "Цагаан сарын амралтаар", "шинэ жилийн амралт": the holiday's days off are the same time, so the
+  // break word goes with the name. Left behind, it matched a trip titled "… ДАЛАЙН АМРАЛТ" and a
+  // family's Tsagaan Sar question was answered about that one trip.
+  for (const holiday of HOLIDAYS) out = out.replace(new RegExp(`(?:${holiday.re.source})\\S*(?:\\s+(?:амралт|amralt)\\S*)?`, "giu"), " ");
   // "Шинэ аялал гарсан уу" (has a NEW trip come out?): "new" on its own names nothing either.
   // Only the customer's words lose it; a trip's own title keeps all its words, or a short title
   // would out-score its siblings on the destination alone.

@@ -125,10 +125,35 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
     conditions: [...card.offer.conditions].sort(),
     fares: card.offer.fares.filter((fare) => !fareKinds.length || fareKinds.includes(fare.kind)).map((fare) => ({ kind: fare.kind, ageRange: fare.ageRange, fare: fare.fare })),
   }) : null;
-  if (!cards.length || !signature(cards[0]) || cards.some((card) => signature(card) !== signature(cards[0]))) return null;
+  if (!cards.length || !signature(cards[0])) return null;
+  if (cards.some((card) => signature(card) !== signature(cards[0]))) return fareKinds.length ? faresByDate(trip, cards, fareKinds) : null;
   const first = cards[0];
   if (first.status !== "ready") return null;
   return renderOfferReplyWithConditions(trip, first, { fareKinds })?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
+}
+
+/** At most this many groups of departures with their own fares; more is a menu, not an answer. */
+const MAX_FARE_DATE_GROUPS = 4;
+
+/**
+ * "хүүхдийн үнэ" for a trip whose fare differs by departure: the asked fare for each departure,
+ * departures with the same fare together ("11 сарын 18, 11 сарын 25" / fare). Asking "which
+ * departure?" again re-sent the same date menu word for word, and the customer never got the price.
+ * Null when a date cannot be priced or there are too many different fares.
+ */
+function faresByDate(trip: TravelTrip, cards: TripOfferResult[], fareKinds: readonly ("adult" | "child" | "infant")[]): string | null {
+  const groups = new Map<string, { dates: string[]; body: string }>();
+  for (const card of cards) {
+    if (card.status !== "ready") return null;
+    const rendered = renderOfferReplyWithConditions(trip, card, { fareKinds: [...fareKinds] });
+    const body = rendered?.split("\n").filter((line) => line !== mnDate(card.offer.date)).join("\n");
+    if (!body) return null;
+    const group = groups.get(body);
+    if (group) group.dates.push(card.offer.date);
+    else groups.set(body, { dates: [card.offer.date], body });
+  }
+  if (groups.size < 2 || groups.size > MAX_FARE_DATE_GROUPS) return null;
+  return [...groups.values()].map((group) => `${group.dates.map((date) => mnDate(date)).join(", ")}\n${group.body}`).join("\n\n");
 }
 
 /**

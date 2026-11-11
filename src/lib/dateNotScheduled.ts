@@ -11,6 +11,7 @@
 import { holidayWindowOf } from "./askedWindow";
 import { holidayWindowListing } from "./catalogListing";
 import { DATE_NOT_SCHEDULED_HEADING, buildDateNotScheduledReply } from "./travelFastPathsPricing";
+import { requestedPassengersFromText } from "./tripRequest";
 import type { TravelTrip } from "./travelTypes";
 
 /**
@@ -20,7 +21,8 @@ import type { TravelTrip } from "./travelTypes";
 export function buildScopedNotScheduledReply(trips: TravelTrip[], askText: string, now = new Date()): string | null {
   const holiday = holidayWindowOf(askText, now);
   if (holiday) {
-    const listing = holidayWindowListing({ pool: trips.filter((trip) => trip.status === "active"), resolution: holiday, now, choice: trips.length > 1 });
+    const listing = holidayWindowListing({ pool: trips.filter((trip) => trip.status === "active"), resolution: holiday, now, choice: trips.length > 1,
+      party: requestedPassengersFromText(askText) });
     if (listing) return listing.reply;
   }
   return buildDateNotScheduledReply(trips, now);

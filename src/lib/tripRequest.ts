@@ -58,17 +58,30 @@ export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
 function parsePassengerText(text: string): { passengers: RequestedPassenger[]; unsupported: boolean } {
   const result: RequestedPassenger[] = [];
   let unsupported = false;
-  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?)/gi)) {
-    const kind = /том|adult|tom/i.test(match[2]) ? "adult" : /нярай|nyarai|infant/i.test(match[2]) ? "infant" : "child";
+  // "2 om" is "2 tom" with its first letter lost (typed on a phone); only right after a count.
+  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|om(?![\p{L}])|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?)/giu)) {
+    const kind = /том|adult|tom|^om/i.test(match[2]) ? "adult" : /нярай|nyarai|infant/i.test(match[2]) ? "infant" : "child";
     const count = Number(match[1]);
     if (!Number.isInteger(count) || count < 1 || count > 100) unsupported = true;
     else result.push({ kind, count });
   }
+  // "том хүн 2, хүүхэд 2": the count after the word. Never an age ("хүүхэд 5 настай", "huuhed 4 ba 7
+  // nastai"), a date ("хүүхэд 12 сарын 30") or the count of the next word ("том 2 хүүхэд").
+  for (const match of text.matchAll(/(?<![\p{L}])(том\s*хүн|tom\s*hun|хүүхэд|huuhed|нярай|nyarai)\s*[:-]?\s*(\d{1,2})(?![\d./:]|,\d|\s*-?\s*(?:р\s|нас|nas|сар|sar|өдөр|udur|хоног|honog|шөнө|shunu|цаг|tsag|хүүх|huuh|том|tom|нярай|nyarai|хүн|hun)|\s*(?:,|ба|ba|болон|bolon|and)\s*\d)/giu)) {
+    const kind = /том|tom/i.test(match[1]) ? "adult" : /нярай|nyarai/i.test(match[1]) ? "infant" : "child";
+    const count = Number(match[2]);
+    if (count >= 1 && !result.some((row) => row.kind === kind)) result.push({ kind, count });
+  }
+  // "2 хүн, 2 хүүхэдтэй": people counted beside the children are the adults ("4 хүн, 2 нь хүүхэд" is not this).
+  const peopleAndChildren = /(?<![\d.,-])(\d{1,2})\s*(?:хүн|hun)\s*,?\s*(?:(?:ба|ba|болон|bolon|and)\s*)?\d{1,2}\s*(?:хүүх|huuh|нярай|nyarai)/iu.exec(text);
+  if (peopleAndChildren && !result.some((row) => row.kind === "adult") && !/(?:том|tom)\s*$/iu.test(text.slice(0, peopleAndChildren.index))) {
+    result.unshift({ kind: "adult", count: Number(peopleAndChildren[1]) });
+  }
   const ages: Array<{ age: number; ageUnit: "year" | "month" }> = [];
   // "6 болон 2 насны 2 хүүхэдтэй" (Oct 24 shape): ages joined by "болон" and given as "насны"
   // were not read, so the family's children lost their ages.
-  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:\s*(?:[,/]|болон|ба|bolon|and)\s*\d+(?:\.\d+)?)*)\s*(настай|насны|нас(?!\p{L})|nas(?:tai|nii|ny)?(?!\p{L})|years?\s*old|сартай|months?\s*old)/giu)) {
-    const parts = match[1].split(/\s*(?:[,/]|болон|ба|bolon|and)\s*/iu);
+  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:\s*(?:[,/]|болон|ба|bolon|ba|and)\s*\d+(?:\.\d+)?)*)\s*(настай|насны|нас(?!\p{L})|nas(?:tai|nii|ny)?(?!\p{L})|years?\s*old|сартай|months?\s*old)/giu)) {
+    const parts = match[1].split(/\s*(?:[,/]|болон|ба|bolon|ba|and)\s*/iu);
     // An unspaced comma may mean a decimal age. Do not guess without a count.
     const childCount = result.filter((row) => row.kind !== "adult").reduce((sum, row) => sum + row.count, 0);
     const hasCountedAdults = result.some(row => row.kind === "adult");

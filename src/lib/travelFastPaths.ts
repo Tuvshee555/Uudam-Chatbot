@@ -19,6 +19,7 @@ import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
 import { buildFareSection, dateIsOnSale, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice, upcomingDepartures } from "./tripFareBlock";
 import { budgetReplyForQuotedPrice, quotedPriceRows, safeDurationText } from "./quotedPriceReply";
 import { buildTripRequest } from "./tripRequest";
+import { isUnknownPartyFareLine, unknownPartyFareLine } from "./partyFareLine";
 import { renderTripOfferReply, resolveTripOffer, type OfferFare, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import { compactReplyOptions, replyPreferences } from "./chatbotReplyPolicy";
 import {
@@ -208,16 +209,16 @@ function formatPassengerTotalLine(trip: TravelTrip, text: string, counts: { adul
     { kind: "infant" as const, count: counts.infantCount },
   ].filter(passenger => passenger.count > 0);
   if (!passengers.length) return null;
-  // A party named by ages and no count word ("4 болон 7 настай хүүхэд төлбөр хэд вэ"): each trip's own
-  // fare for each of them, read through that trip's age bands. Children alone have no "total" (live
-  // 2026-10-30: it read as the family's price), so the fares are listed per person.
+  // A party named by ages, no count word ("4 болон 7 настай хүүхэд төлбөр хэд вэ"): each trip's fare for each, read through its age
+  // bands. Children alone have no "total" (live 2026-10-30: read as the family's price): fares per person.
   const perPerson = !counts && !passengers.some(passenger => passenger.kind === "adult");
   const scope = requestedDepartureScope(turn, now);
   const dates = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope));
   const offers: ResolvedTripOffer[] = [];
   for (const date of dates) {
     const result = resolveTripOffer(trip, { date, hotel: request.hotel, packageId: request.package, passengers }, now);
-    if (result.status !== "ready" || !result.offer.total) return null;
+    // No fare for that age: said per trip ("— энэ насны үнэ бүртгэгдээгүй"), never the trip's bare name.
+    if (result.status !== "ready" || !result.offer.total) return result.status === "ready" ? null : unknownPartyFareLine(trip, result.reason);
     offers.push(result.offer);
   }
   if (!offers.length) return null;
@@ -265,11 +266,10 @@ export function buildAmbiguousPassengerTotalReply(
   }
   const shown = trips.slice(0, replyPreferences(text).full ? 8 : 3);
   const totals = shown.map((trip) => formatPassengerTotalLine(trip, text, counts, now));
-  // One trip whose total the data cannot give alone (no infant fare, or it depends
-  // on a date, hotel or child age) must not throw away the totals the others do
-  // give: that left the customer with the same list again (live 2026-10-26).
-  // That trip keeps its name only — never an estimated total.
-  if (shown.length < 2 || !totals.some(Boolean)) return null;
+  // One trip whose total the data cannot give alone (no infant fare, or it depends on a date, hotel or
+  // child age) must not throw away the totals the others give (live 2026-10-26); never an estimated total.
+  // Every trip unknown is no answer at all (staff take it).
+  if (shown.length < 2 || !totals.some((line) => line && !isUnknownPartyFareLine(line))) return null;
   const lines = totals.map((line, index) => line || `• ${shown[index].route_name}`);
   return [
     ...lines,
@@ -865,7 +865,7 @@ export function isBarePriceMessage(text: string): boolean {
 // юм", "991000 geed bga yum", "… гэсэн үнэтэй аялал байна лээ" (the price from the agency's
 // post). Live 2026-11-04 the Latin one ended in a staff hand-off while the trip at that price was
 // in the catalogue. A word that changes the meaning ("төлсөн", "2 хүн") is still not filler.
-const BARE_PRICE_FILLER = new Set(["аялал", "аяллын", "аяллууд", "үнэ", "үнэтэй", "төгрөг", "төгрөгийн", "мнт", "mnt", "сая", "саяын", "саяд", "саятай", "мянга", "мянгатай", "мянганы", "орчим", "хавьцаа", "aylal", "ayalal", "une", "unetei", "orchim",
+const BARE_PRICE_FILLER = new Set(["аялал", "аяллын", "аяллууд", "үнэ", "үнэтэй", "төгрөг", "төгрөгийн", "мнт", "mnt", "сая", "саяын", "саяд", "саятай", "мянга", "мянгатай", "мянганы", "орчим", "хавьцаа", "багц", "багцын", "багцтай", "bagts", "bagc", "bagtsiin", "package", "aylal", "ayalal", "une", "unetei", "orchim",
   "гээд", "гэсэн", "гэж", "гэдэг", "байгаа", "байна", "байсан", "бга", "бгаа", "бна", "юм", "юмаа", "юу", "уу", "үү", "вэ", "бэ", "лээ", "шүү", "л", "энэ", "тэр", "ийм", "дээр", "зар", "зарын", "зард", "пост", "постон", "бичсэн",
   "geed", "gesen", "gej", "gedeg", "baigaa", "baina", "baisan", "bga", "bgaa", "bna", "bn", "yum", "ym", "yu", "uu", "ve", "be", "lee", "shuu", "l", "ene", "ter", "iim", "deer", "zar", "zariin", "post", "bichsen"]);
 
