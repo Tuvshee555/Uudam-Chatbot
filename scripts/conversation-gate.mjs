@@ -19,7 +19,11 @@ const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test
   "tests/webhook-conversations.test.ts", "tests/demo-conversation-parity.test.ts", "tests/webhook-durable-handoff.test.ts", "tests/website-chat-webhook.test.ts",
   "tests/staff-takeover-journeys.test.ts", "tests/webhook-echo-journeys.test.ts", "tests/webhook-echo-enforce-journeys.test.ts",
   "tests/human-takeover-journeys.test.ts", "tests/sticker-reaction-journeys.test.ts",
-  "tests/meta-next-send-testers.test.ts", "tests/meta-next-send-all.test.ts", "tests/catalogue-journeys.test.ts"],
+  "tests/meta-next-send-testers.test.ts", "tests/meta-next-send-all.test.ts", "tests/catalogue-journeys.test.ts",
+  // Understanding journeys (2026-11-11): need gate, identity/context, calendar/holiday, scenario suite.
+  "tests/understanding-need-journeys.test.ts", "tests/understanding-routing-journeys.test.ts", "tests/understanding-routing-unavailable.test.ts",
+  "tests/understanding-routing-existing-customer.test.ts", "tests/understanding-holiday-journeys.test.ts", "tests/understanding-scenarios.test.ts",
+  "tests/understanding-catalogue-need.test.ts", "tests/understanding-live-2026-11-11.test.ts", "tests/understanding-title-note.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

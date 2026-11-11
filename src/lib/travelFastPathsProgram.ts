@@ -32,6 +32,7 @@ import {
 } from "./travelFastPathsSearch";
 import { buildAmbiguousTripReply, formatExtraFeesLine, hasPriceIntent } from "./travelFastPathsPricing";
 import { replyPreferences } from "./chatbotReplyPolicy";
+import { aliasOccursInText } from "./aliasMatch";
 
 const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "хөтөлбөр",
@@ -224,7 +225,7 @@ export function buildTripProgramReply(
   const wantsFlight = queryWantsFlight(text);
   const exactMentionedTrips = trips.filter((trip) => {
     if (query.includes(normText(trip.route_name))) return true;
-    return getAliases(trip).some((alias) => query.includes(normText(alias)));
+    return getAliases(trip).some((alias) => aliasOccursInText(alias, text));
   });
   // A shared destination word is NOT the same as naming a trip. When several
   // tours visit the destination the customer said, that is precisely when the
@@ -547,13 +548,10 @@ export function buildArchivedTripNotice(
       ),
   );
   if (unavailable.length === 0) return null;
-  const exactNameMatches = unavailable.filter((trip) => {
-    const normalizedText = normText(text);
-    const route = normText(trip.route_name || "");
-    return route.length >= 8 && normalizedText.includes(route);
-  });
-  if (exactNameMatches.length === 0) return null;
-  const resolution = resolveTripFromUserMessage(text, exactNameMatches, {
+  // The trip is named by its full name, an alias or the part of its name the customer uses
+  // ("Манжуурын аялал" for "<ХОТ>-ын … АЯЛАЛ"): the resolver verifies ONE trip, the same strength that
+  // picks an active trip. Several ended trips sharing the word, or a word they only resemble, name none.
+  const resolution = resolveTripFromUserMessage(text, unavailable, {
     allowLooseFallback: false,
     includeArchived: true,
   });

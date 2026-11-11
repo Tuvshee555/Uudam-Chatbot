@@ -11,11 +11,14 @@
 
 // Short generic openers that should trigger the greeting + buttons.
 // Anything more specific (trip names, destinations, questions) skips the greeting.
+// "ok" / "ок" (an acknowledgement), "хэрхэн" (how) and "та нар" (you all) were here: a customer who
+// answered a price with "ok" was greeted back with "Ямар аялал сонирхож байна?" (messageNeed.ts
+// reads them as the acknowledgement they are).
 export const GENERIC_OPENERS = [
   "сайн уу", "сайнуу", "сайн", "hi", "hello", "hey", "сайн байна уу",
   "байна уу", "мэнд", "нүүр", "нүүрх", "хэллоу", "хай", "мэндчилье",
-  "ассалам", "привет", "өдрийн мэнд", "оюу", "ok", "ок", "ок",
-  "👋", "😊", "🙏", "хэрхэн", "юу байна", "та нар",
+  "ассалам", "привет", "өдрийн мэнд", "оюу",
+  "👋", "😊", "🙏", "юу байна",
 ];
 
 /**
@@ -119,8 +122,10 @@ export function isGreetingLike(text: string): boolean {
 }
 
 const THANKS_CORE_WORDS = new Set([
-  "баярлалаа", "баярлаа", "баярлалаа", "ачлалаа", "bayrlalaa", "bayrlaa", "bayrla",
+  "баярлалаа", "баярлаа", "ачлалаа", "bayrlalaa", "bayrlaa", "bayrla",
   "bairlalaa", "thanks", "thank", "thx",
+  // "bayarlalaa" is the most common typed spelling (it came back as "Аль аялал вэ?").
+  "bayarlalaa", "bayarlaa", "bayarla", "bayarlalaaa", "baiarlalaa", "bairlaa", "bayrlalaaa",
 ]);
 const THANKS_FILLER_WORDS = new Set([
   "за", "zaa", "za", "ok", "ок", "okay", "маш", "их", "танд", "танай", "тань", "аа", "you", "very", "much",
@@ -154,6 +159,9 @@ export function isThanksOnly(text: string): boolean {
 
 /** Deterministic reply to a bare thank-you: friendly, asks nothing, no lead-capture push. */
 export const THANKS_REPLY = "Зүгээр ээ 😊 Өөр асуух зүйл байвал чөлөөтэй бичээрэй.";
+
+/** Praise without a thank-you ("Аялал маш сайхан боллоо"): a warm line, no question, no lead. */
+export const PRAISE_REPLY = "Таны сайхан үгэнд баярлалаа 😊 Өөр асуух зүйл байвал чөлөөтэй бичээрэй.";
 
 /**
  * True for the Messenger "Get Started" button tap. Meta localizes the button

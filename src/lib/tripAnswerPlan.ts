@@ -1,3 +1,4 @@
+import { asksClockTime, scheduleTimeSection } from "./scheduleTimes";
 import type { TravelTrip } from "./travelTypes";
 import type { FastPathRoute } from "./fastPathRouting";
 import { buildTripRequest, mergeTripSelection, type TripRequest, type TripSelection, type TripTopic } from "./tripRequest";
@@ -189,6 +190,10 @@ export function buildTripAnswerPlan(input: {
   const intentText = stripTripNamesForIntent(requestText, trips);
   const preferences = replyPreferences(intentText);
   const request = buildTripRequest(requestText, trips, route.understanding, now);
+  // "Хэдэн цагт нисэх вэ" asks for a clock time, whatever topic the reading gave it: the itinerary's
+  // own times answer it, a transport label does not (scheduleTimes.ts).
+  const asksClock = asksClockTime(intentText);
+  if (asksClock && !request.topics.includes("transport")) request.topics = [...request.topics, "transport"];
   // Package identities belong to the selected trip; a sibling's labels cannot
   // make this trip's customer-supplied package ambiguous.
   const packageRequest = buildTripRequest(requestText, [trip], route.understanding, now);
@@ -392,8 +397,14 @@ export function buildTripAnswerPlan(input: {
     if (duration) sections.duration = `Хугацаа: ${duration}.`;
   }
   if (request.topics.includes("transport")) {
-    const transport = tripTransport(trip);
-    if (transport) sections.transport = TRANSPORT[transport];
+    if (asksClock) {
+      const times = scheduleTimeSection(trip, intentText);
+      if (times) sections.transport = times;
+      else missingFact("transport", "clock_time");
+    } else {
+      const transport = tripTransport(trip);
+      if (transport) sections.transport = TRANSPORT[transport];
+    }
   }
   // A price above already names the hotel(s) as the resolver sells them ("Буудал: …", or a priced
   // offer's own hotel line). The reply checker reads those names to scope the fares under them, so

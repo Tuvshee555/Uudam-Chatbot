@@ -43,11 +43,18 @@ import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
-import { getTripSelection, setTripSelection } from "./tripSelectionState";
+import { getRecentTripIds, getTripSelection, setTripSelection } from "./tripSelectionState";
+import { contrastCandidates } from "./tripContrast";
+import { pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
-import { detectHoliday, withoutHolidayWords } from "./holidayCalendar";
+import { holidayWindowOf } from "./askedWindow";
+import { asksWhatExists } from "./catalogListing";
+import { DATE_FOLLOWUP_WORDS } from "./dateWords";
+import { getInheritedDateScope } from "./inheritedDateScope";
+import { unknownPlaceTokens } from "./placeLikeTokens";
+import { placesMissingFromTrip } from "./placeCoverage";
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -134,51 +141,11 @@ export function isFareOnlyQuestion(text: string): boolean {
     && words.every((word) => FARE_WORDS.has(word) || PASSENGER_WORDS.has(word) || FARE_FILLER.has(word));
 }
 
-const DATE_FOLLOWUP_WORDS = new Set([
-  "оны", "он", "сарын", "сар", "нд", "д", "ны", "ний", "нь", "ni", "nii", "nd", "sariin", "sar",
-  "өнөөдөр", "маргааш", "нөгөөдөр", "today", "tomorrow", "margaash", "margash", "nuguudur",
-  "аялал", "аяллын", "aylal", "aylaliin", "үнэ", "une", "vne", "хэд", "хэдэн", "hed", "heden",
-  "вэ", "ве", "ve", "байна", "байгаа", "бол", "уу", "юу", "uu", "yu", "бну", "бна", "bnu", "bna", "baina",
-  // Phone typing: "11 sard bn", "11.04нийг сонирхож бна" (accusative -ийг).
-  "bn", "bnuu", "bgayu", "бнуу", "бга", "бгаа", "бгаюу", "нийг", "ыг", "ийг", "sarin", "saryn", "sarun",
-  "гарах", "явах", "garah", "yavah", "yvah", "хөтөлбөр", "үзэх", "hutulbur", "uzey", "uzye",
-]);
-
-const CALENDAR_FOLLOWUP_WORDS = new Set([
-  ...DATE_FOLLOWUP_WORDS, "сард", "сарынх", "сарых", "sard", "sariinh", "р", "r", "дугаар", "дахь", "дэх",
-  "эхний", "эхээр", "эхэнд", "сүүлийн", "сүүлчийн", "сүүлээр", "дунд", "дундуур", "долоо", "хоног", "хоногт", "хоногийн", "хооронд",
-  "ehnii", "eheer", "ehend", "suuliin", "suuleer", "dund", "doloo", "honog", "hoorond",
-  // "1 сарын 20доор" = around the 20th.
-  "доор", "door", "орчим", "orchim",
-  "сонирхож", "sonirhoj", "болох", "боломжтой", "суудал", "suudal", "bga", "bgaa", "baigaa",
-  "шууд", "нислэгтэй", "нислэг", "shuud", "nislegtei", "nisleg", "хэдээр", "үнэтэй", "price", "cost",
-  "нэг", "хоёр", "гурав", "дөрөв", "тав", "зургаа", "долоо", "найм", "ес", "арав", "арван",
-  // The same month numbers typed in Latin: "neg sard" read as a new destination and got silence (live 2026-10-30).
-  "neg", "nig", "tav", "hoyor", "hoyr", "hoer", "gurav", "guraw", "dorov", "duruv", "taw", "zurgaa", "naim", "yes", "yos", "arav", "araw", "arvan",
-  // Who travels is not a new destination: "12/20 nd 2 hun", "11/4-нд 3 хүн", "2 том хүн 1 хүүхэд".
-  "хүн", "хүний", "hun", "huun", "humuus", "том", "tom", "хүүхэд", "хүүхдийн", "huuhed", "huuhdiin", "нярай", "nyarai",
-  // A start-date constraint is not a destination either: "Хүүхдийн амралт 11.1-с эхлэх гээд бдаг...яах вэ".
-  "с", "аас", "ээс", "оос", "өөс", "хойш", "хойшоо", "эхлэх", "эхлэн", "эхэлнэ", "эхэлдэг", "эхлэхээр", "hoish", "ehleh", "ehlen",
-  "амралт", "амралтаар", "амралтанд", "amralt", "сургууль", "хичээл", "гээд", "geed", "бдаг", "байдаг", "bdag", "яах", "yah",
-  // "Цагаан сараар хэдэнд гарах вэ" (on which days): a time question about the trips on screen.
-  "хэдэнд", "хэдний", "hedend", "hedenii", "хэзээ", "hezee",
-]);
-
-function calendarWordsAreContextOnly(text: string, extra: ReadonlySet<string> = new Set()): boolean {
-  // A holiday ("цагаан сарын үеэр") is a time, not a new destination (live replay 2026-11-04:
-  // under a trip list, its words read as an unknown place and the customer got silence).
-  const words = withoutHolidayWords(text).replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
-  return words.every(word => CALENDAR_FOLLOWUP_WORDS.has(word) || extra.has(word));
-}
-
-// "Цагаан сарын үеэр ЯМАР аялалууд байна", "наадмаар ХААШАА явах вэ": a question about the whole
-// catalogue at that time, not about the trips on screen. It goes to the catalogue listing.
-const CATALOG_QUESTION_WORDS: ReadonlySet<string> = new Set(["ямар", "yamar", "хаашаа", "haashaa", "хаана", "haana",
-  "аялалууд", "аяллууд", "aylaluud", "ayaluud", "гадагшаа", "гадаад", "gadagshaa", "gadaad", "явж", "yavj", "бүх", "buh", "bvh"]);
-function isHolidayCatalogQuestion(text: string): boolean {
-  const lowered = text.normalize("NFKC").toLowerCase();
-  return detectHoliday(lowered) !== null && [...CATALOG_QUESTION_WORDS].some(word => new RegExp(`(?<![\\p{L}])${word}(?![\\p{L}])`, "u").test(lowered))
-    && calendarWordsAreContextOnly(text, CATALOG_QUESTION_WORDS);
+/** A fare question for a named party under a list: "4 болон 7 настай хүүхэд төлбөр хэд вэ", "2 том 2 хүүхэдтэй явбал нийт". */
+function asksFareForParty(text: string, listed: TravelTrip[], now: Date): boolean {
+  const request = buildTripRequest(text, listed, undefined, now);
+  return request.topics.includes("price") && request.passengers.length > 0 && !request.unsupportedPassengerSelection
+    && resolveTripFromUserMessage(text, listed, { allowLooseFallback: false }).status === "not_found";
 }
 
 /** A date and generic question words carry no new destination identity. */
@@ -271,7 +238,24 @@ function isTripChoiceQuestion(reply: string): boolean {
   return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply) || reply.startsWith(DATE_NOT_SCHEDULED_HEADING);
 }
 
-export async function routeFastPathText(input: {
+/**
+ * Every place the customer names must be in what the bot shows (placeCoverage.ts): a scoped list made
+ * from this message keeps only the trips that hold all of them, and none left means the bot does not
+ * know (staff take it). Live 2026-11-07: a two-city ask got a list of one trip that held neither city.
+ */
+export async function routeFastPathText(input: Parameters<typeof routeFastPathTextInner>[0]): Promise<FastPathRoute> {
+  const route = await routeFastPathTextInner(input);
+  if (!route.scopedClarify?.length || parseNumberedChoice(input.text)) return route;
+  // "A B C аялал" may ask for several trips at once, so a list need not have one trip holding every place;
+  // but a place that NONE of the listed trips holds means the list ignores part of the question.
+  const missingPerTrip = await Promise.all(route.scopedClarify.map((trip) => placesMissingFromTrip(input.text, trip, input.trips, input.getEndedTrips)));
+  const ignored = (missingPerTrip[0] || []).filter((word) => missingPerTrip.every((missing) => missing.includes(word)));
+  if (!ignored.length) return route;
+  await clearClarificationState(input.senderId);
+  return { matchText: markNoTrip(input.text), scopedClarify: null, unsupportedRequest: true };
+}
+
+async function routeFastPathTextInner(input: {
   senderId: string;
   text: string;
   contextualUserText: string;
@@ -284,7 +268,9 @@ export async function routeFastPathText(input: {
    * the trips of the list the bot last offered, in order. Null = could not
    * tell (model down, bad output) and the keyword routing below decides.
    */
-  understand?: (pendingTripIds: string[], selection?: TripSelection | null) => Promise<Understanding | null>;
+  understand?: (pendingTripIds: string[], selection?: TripSelection | null, recentTripIds?: string[]) => Promise<Understanding | null>;
+  /** Ended (archived) trips, loaded only when a word of the message names no active trip (placeCoverage.ts). */
+  getEndedTrips?: () => Promise<TravelTrip[]>;
 }): Promise<FastPathRoute> {
   const { senderId, text, contextualUserText, trips } = input;
   const now = input.now || new Date();
@@ -306,18 +292,11 @@ export async function routeFastPathText(input: {
   // A destination supplied in answer to a calendar-only question completes
   // that request. Keep its date until the customer supplies a new one.
   if (!numericChoice && input.history && !requestedDepartureScope(intentTextOf(text, trips), now)) {
-    const lastReplyIndex = input.history.findLastIndex(message => message.role === "assistant");
-    const reply = input.history[lastReplyIndex]?.text || "";
-    const original = input.history.slice(0, lastReplyIndex).findLast(message => message.role === "user");
     const current = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
-    const displaysTripList = /(?:^|\n)\s*(?:[•*-]|\d{1,2}\.)\s+/u.test(reply)
-      && trips.filter(trip => looseNorm(reply).includes(looseNorm(trip.route_name))).length > 1;
-    // Not after "that date has no departure; here are the dates": the customer
-    // was told the date is off the schedule, so picking a trip drops it.
-    if (original && !reply.startsWith(DATE_NOT_SCHEDULED_HEADING)
-      && (displaysTripList || /(?:аль|ямар)\s+(?:аялл?|чиглэл)|which\s+(?:trip|destination)/iu.test(reply))
-      && calendarWordsAreContextOnly(original.text) && requestedDepartureScope(original.text, now)
-      && current.status !== "not_found") requestText = `${original.text}\n${text}`;
+    // Not after "that date has no departure; here are the dates": the customer was told the date is
+    // off the schedule, so picking a trip drops it (getInheritedDateScope).
+    const inherited = current.status !== "not_found" ? getInheritedDateScope({ history: input.history, trips, now }) : null;
+    if (inherited) requestText = `${inherited.text}\n${text}`;
   }
   const storedSelection = await getTripSelection(senderId);
   const previousSelection = storedSelection && trips.some((trip) => trip.id === storedSelection.tripId)
@@ -325,9 +304,24 @@ export async function routeFastPathText(input: {
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
   const chose = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> => {
+    // Every place the customer names must be in the trip (placeCoverage.ts). A pick by number, or the trip
+    // already selected, is the customer's own choice; anything else that leaves a named place out is a
+    // trip the bot does not have: staff take it, and no trip is remembered for the next turn.
+    const offered = (await getClarificationState(senderId))?.candidateTripIds || [];
+    // A trip from the list the bot just offered is the customer's own pick too ("лумиагаас" under a list).
+    if (!numericChoice && previousSelection?.tripId !== trip.id && !offered.includes(trip.id)
+      && (await placesMissingFromTrip(text, trip, trips, input.getEndedTrips)).length) {
+      return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
+    }
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
-    await setTripSelection(senderId, selection);
+    // The party belongs to the customer, not to one trip: a switch that states no head count keeps the
+    // one already given (fares differ per trip, the people do not). Date, hotel and package are the
+    // old trip's own and are not carried.
+    if (previousSelection && previousSelection.tripId !== trip.id && !selection.passengers.length && previousSelection.passengers.length) {
+      selection.passengers = previousSelection.passengers;
+    }
+    await setTripSelection(senderId, selection, offered);
     // A typed "3" picks the trip exactly as tapping its "3. <name>…" button does. As a
     // bare digit the turn asked for nothing, so no card was built and the free-text
     // model answered instead (or nothing was sent) — live replay 2026-10-30.
@@ -390,17 +384,21 @@ export async function routeFastPathText(input: {
   // Decided before model interpretation: a reading of "the same trips" used to
   // drop the list and answer "Аль аялал вэ?", and asking again re-sent the list
   // without totals (live 2026-10-26).
-  if (pendingTrips.length > 1 && !choice && !tappedOwnButton && isPassengerCountOnly(text)) {
+  // The list on screen may answer a time ("цагаан сараар ямар аялал"): its fares are asked for the
+  // departures just listed, so the window of that earlier turn travels with the question.
+  const listedFares = async (): Promise<FastPathRoute> => {
     await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
-    return { matchText: text, scopedClarify: pendingTrips };
-  }
+    const inherited = requestedDepartureScope(intentTextOf(text, trips), now) ? null : getInheritedDateScope({ history: input.history, trips, now });
+    return inherited
+      ? { matchText: joinContextAndTurn(inherited.text, text), scopedClarify: pendingTrips, requestText: `${inherited.text}\n${text}` }
+      : { matchText: text, scopedClarify: pendingTrips };
+  };
+  if (pendingTrips.length > 1 && !choice && !tappedOwnButton && isPassengerCountOnly(text)) return listedFares();
 
-  // A fare question right under the list ("хүүхдийн үнэ") asks the listed trips' fares. It got
-  // "Аль аялал вэ?" (P2-1); the list now shows each trip's fare and still lets them choose.
-  if (pendingTrips.length > 1 && !choice && !tappedOwnButton && isFareOnlyQuestion(text)) {
-    await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
-    return { matchText: text, scopedClarify: pendingTrips };
-  }
+  // A fare question right under the list ("хүүхдийн үнэ", "4 болон 7 настай хүүхэд төлбөр хэд вэ", "2 том 2
+  // хүүхэдтэй явбал нийт") asks the listed trips' fares for that party. It got "Аль аялал вэ?" (P2-1) or the
+  // answer model's menu of the same trips; the list now shows each trip's own fare and still lets them choose.
+  if (pendingTrips.length > 1 && !choice && !tappedOwnButton && (isFareOnlyQuestion(text) || asksFareForParty(text, pendingTrips, now))) return listedFares();
 
   // A date under a trip or a destination list is a follow-up to that scope.
   // Run before model interpretation and whole-catalog matching: a missing
@@ -423,16 +421,30 @@ export async function routeFastPathText(input: {
   // presentation uses the same constraint to select their displayed dates.
   const calendarScope = !tappedOwnButton && !(numericChoice && requestText !== text)
     ? requestedDepartureScope(intentTextOf(requestText, trips), now) : null;
-  if (calendarScope && !isHolidayCatalogQuestion(text)) {
+  if (calendarScope) {
     const current = resolve(text, trips);
     const named = current.status === "verified" ? [current.trip]
       : current.status === "ambiguous" ? current.candidates : [];
-    const contextOnly = calendarWordsAreContextOnly(text);
-    // A date does not erase a new, unresolved destination. Prior selection is
-    // evidence only for an actual follow-up, never for a different name that
+    // A date does not erase a new, unresolved destination. A word nothing else explains (not a date, a
+    // holiday, a party, a verb or a word of the catalogue) is a NEW place; anything else is a question
+    // about the trip(s) already in scope — "тааруулсан", "юмаа", "ионы" no longer make a follow-up a destination.
+    const newPlace = !named.length && unknownPlaceTokens(intentTextOf(text, trips), trips).length > 0;
+    // A holiday is answered by the holiday listing (catalogListing.ts: the holiday's real days, the window
+    // named, the departures nearest to it), with or without a place — unless it only follows up on the
+    // trip(s) in scope ("тэгвэл цагаан сараар гарах уу"). Asking what exists, naming several trips' place
+    // or a place nothing holds is a new question, not a follow-up.
+    // The holiday must be in THIS message: one carried over from an earlier turn (requestText) is a window
+    // for the trips this message names, answered below with that window named.
+    if (holidayWindowOf(intentTextOf(text, trips), now)
+      && (named.length > 1 || newPlace || (!named.length && dateScope.length > 0 && asksWhatExists(intentTextOf(text, trips))))) {
+      await clearClarificationState(senderId);
+      await setTripSelection(senderId, null);
+      return { matchText: markNoTrip(text), scopedClarify: null };
+    }
+    // Prior selection is evidence only for an actual follow-up, never for a different name that
     // happens to ask about the same month.
-    const scope = named.length ? named : contextOnly ? dateScope : [];
-    if (!named.length && dateScope.length && !contextOnly) {
+    const scope = named.length ? named : !newPlace ? dateScope : [];
+    if (!named.length && dateScope.length && newPlace) {
       return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
     }
     if (calendarScope.kind === "unsupported") {
@@ -448,11 +460,16 @@ export async function routeFastPathText(input: {
       // (the children's fares, the programme, the hotel): the trip's answer covers every part
       // and offers the nearest departures. "Not then, here are the dates" alone ignored the rest
       // of a family's opening message (Oct 24 shape).
-      if (!matching.length && scope.length === 1 && asksBeyondDate(requestText, trips, now)) return chose(scope[0]);
+      // "…цагаан сар тааруулсан ийм хөтөлбөртэй аялал": beside a holiday "хөтөлбөр" describes the trip
+      // the customer wants, it is not a second question; the window answer covers the ask.
+      const beyondText = holidayWindowOf(intentTextOf(requestText, trips), now) ? requestText.replace(/хөтөлбөр\p{L}*/giu, " ") : requestText;
+      if (!matching.length && scope.length === 1 && asksBeyondDate(beyondText, trips, now)) return chose(scope[0]);
       const candidates = matching.length ? matching : scope;
       await setClarificationState(senderId, candidates.map(trip => trip.id));
       return { matchText: requestText, scopedClarify: candidates, unavailableDateWithinScope: matching.length === 0,
-        ...(requestText !== text ? { requestText, ...(matching.length ? {} : { unsupportedRequest: true }) } : {}) };
+        // A window carried over from an earlier turn that none of the trips leaves in is not claimed as "no
+        // departure then" - except a holiday's, whose reply names the window it assumed (dateNotScheduled.ts).
+        ...(requestText !== text ? { requestText, ...(matching.length || holidayWindowOf(intentTextOf(requestText, trips), now) ? {} : { unsupportedRequest: true }) } : {}) };
     }
     if (calendarScope.kind === "dates" && hasDepartureDateAvailabilityIntent(text, now)
       && !filterTripsByTransportIntent(text, trips).some(trip => upcomingDepartures(trip, now)
@@ -467,7 +484,7 @@ export async function routeFastPathText(input: {
   // follow-ups, "тэр", a date or length that narrows a destination — is read
   // once here instead of by keyword scoring.
   if (input.understand && !choice && !tappedOwnButton) {
-    const understanding = await input.understand(pendingTrips.map((trip) => trip.id), previousSelection);
+    const understanding = await input.understand(pendingTrips.map((trip) => trip.id), previousSelection, await getRecentTripIds(senderId));
     if (understanding) {
       if ((understanding.unmet || understanding.unknownRequirement) && understanding.trips.length > 0) {
         await clearClarificationState(senderId);
@@ -682,11 +699,31 @@ export async function routeFastPathText(input: {
   if (contextualUserText !== text && direct.status === "not_found" && isKnownGreetingPhrase(text)) {
     return { matchText: text, scopedClarify: null };
   }
+  // The model could not read the message, so the customer's own words decide. They still do not
+  // leave the trip they are on for a place word it contains or a transport word ("<хот>-оос нисэх
+  // үү" matched a sibling's TITLE), the same rule the model path applies (tripIdentity.ts).
+  const selectedTrip = previousSelection && !tappedOwnButton && !choice
+    ? trips.find((trip) => trip.id === previousSelection.tripId) : undefined;
+  if (selectedTrip && direct.status !== "not_found") {
+    const named = direct.status === "verified" ? [direct.trip] : direct.candidates;
+    const followsUp = buildTripRequest(text, trips, undefined, now).topics.length > 0 || pointsBackAtTrip(text);
+    if (followsUp && verdictAgainstAnchor(text, named, [selectedTrip], trips).kind === "stay") return chose(selectedTrip);
+  }
   // Our own button label never names a trip, however well it scores against
   // one — skip straight to context so the tap applies to the trip the
   // customer was actually looking at.
   if (direct.status === "verified" && !tappedOwnButton) {
     return { ...(await chose(direct.trip)), matchText: text };
+  }
+  // "Not that one, the other": the trip on screen is NOT the answer (tripContrast.ts).
+  if (selectedTrip) {
+    const contrast = contrastCandidates({ text, catalog: trips, selectedIds: [selectedTrip.id], stack: await getRecentTripIds(senderId) });
+    const meant = (contrast?.tripIds || []).map((id) => trips.find((trip) => trip.id === id)).filter((trip): trip is TravelTrip => Boolean(trip));
+    if (meant.length === 1) return chose(meant[0]);
+    if (meant.length > 1) {
+      await setClarificationState(senderId, meant.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: meant };
+    }
   }
   const followupRequest = previousSelection ? buildTripRequest(text, trips, undefined, now) : null;
   const passengerWords = text.toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/);

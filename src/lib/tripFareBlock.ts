@@ -279,29 +279,77 @@ export function onSaleLowDates(trip: TravelTrip, now = new Date()): string[] {
   return upcomingDepartures(trip, now).filter((date) => low.has(date));
 }
 
+/** The amount a "• Том хүн /…/: 990,000₮" fare line states, or null (a range, "Үнэгүй", another currency). */
+function lineAmount(line: string): number | null {
+  const match = /: ([\d,]+)₮$/u.exec(line);
+  return match ? Number(match[1].replace(/,/g, "")) : null;
+}
+
 /**
- * Trips that sell some fare at exactly this price on an upcoming bookable date,
- * with the fare's label ("Том хүн", "Хүүхэд /2-11 нас/") and the dates it applies
- * to. Read from the same fare lines the card prints, so the reply checker agrees.
+ * An ADULT fare the trip sells, from the same fare lines the card prints: the label ("Том хүн"), the
+ * amount, and when it applies — the departures of its fare group, or (a schedule written as text,
+ * "Пүрэв, Ням гариг") the schedule text itself. A supplement (single room) is never a passenger fare.
  */
-export function tripsAtPrice(trips: TravelTrip[], price: number, now = new Date()): Array<{ trip: TravelTrip; label: string; dates: string[] }> {
-  const amount = `${price.toLocaleString("en-US")}₮`;
-  const found: Array<{ trip: TravelTrip; label: string; dates: string[] }> = [];
-  for (const trip of trips) {
-    if (trip.status !== "active") continue;
-    const groups = onSaleFareGroups(trip, upcomingDepartures(trip, now).slice(0, 16), now);
-    let label = "";
-    const dates: string[] = [];
-    for (const group of groups) {
-      // Passenger fares only: a single supplement (group.singles) is never "a trip at this price".
-      const line = group.lines.find((entry) => entry.startsWith("• ") && entry.endsWith(`: ${amount}`));
-      if (!line) continue;
-      label ||= line.slice(2, line.lastIndexOf(":"));
-      dates.push(...group.dates);
+export type AdultFare = { trip: TravelTrip; label: string; amount: number; dates: string[]; schedule: string | null };
+
+export function adultFaresOf(trip: TravelTrip, now = new Date()): AdultFare[] {
+  if (trip.status !== "active") return [];
+  const found: AdultFare[] = [];
+  const add = (lines: string[], dates: string[], schedule: string | null) => {
+    for (const line of lines) {
+      if (!line.startsWith("• Том хүн")) continue;
+      const amount = lineAmount(line);
+      if (amount !== null) found.push({ trip, label: line.slice(2, line.lastIndexOf(":")), amount, dates, schedule });
     }
-    if (label) found.push({ trip, label, dates: [...new Set(dates)].sort() });
+  };
+  const dated = upcomingDepartures(trip, now).slice(0, 16);
+  if (dated.length) {
+    for (const group of onSaleFareGroups(trip, dated, now)) add(group.lines, group.dates, null);
+    return found;
+  }
+  // No calendar date: the fares of the schedule the trip writes as text (buildFarePriceLines).
+  const block = buildFarePriceLines(trip, now);
+  if (block.kind === "undated") add(block.lines, [], block.schedule);
+  return found;
+}
+
+/**
+ * Trips that sell an ADULT fare at exactly this price on an upcoming bookable date (or on their
+ * weekly schedule), with the fare's label and the dates it applies to. An advertised price is the
+ * adult headline fare: a child or infant fare that happens to end in the same amount is another
+ * trip's discount, never "a trip at this price". Read from the same fare lines the card prints,
+ * so the reply checker agrees.
+ */
+export function tripsAtPrice(trips: TravelTrip[], price: number, now = new Date()): Array<{ trip: TravelTrip; label: string; dates: string[]; schedule: string | null }> {
+  const found: Array<{ trip: TravelTrip; label: string; dates: string[]; schedule: string | null }> = [];
+  for (const trip of trips) {
+    const hits = adultFaresOf(trip, now).filter((fare) => fare.amount === price);
+    if (!hits.length) continue;
+    found.push({ trip, label: hits[0].label, dates: [...new Set(hits.flatMap((hit) => hit.dates))].sort(), schedule: hits.find((hit) => hit.schedule)?.schedule ?? null });
   }
   return found;
+}
+
+/**
+ * Trips whose cheapest adult fare is at or under `limit`, dearest first (the closest to the amount),
+ * each with the fare it sells at that level and its dates: the answer to a price no trip sells exactly.
+ */
+export function tripsUpToPrice(trips: TravelTrip[], limit: number, now = new Date()): Array<{ trip: TravelTrip; label: string; amount: number; dates: string[]; schedule: string | null }> {
+  const found: Array<{ trip: TravelTrip; label: string; amount: number; dates: string[]; schedule: string | null }> = [];
+  for (const trip of trips) {
+    const fares = adultFaresOf(trip, now);
+    const cheapest = fares.filter((fare) => fare.amount <= limit).sort((a, b) => a.amount - b.amount)[0];
+    if (!cheapest) continue;
+    const same = fares.filter((fare) => fare.amount === cheapest.amount);
+    found.push({ trip, label: cheapest.label, amount: cheapest.amount,
+      dates: [...new Set(same.flatMap((fare) => fare.dates))].sort(), schedule: same.find((fare) => fare.schedule)?.schedule ?? null });
+  }
+  return found.sort((a, b) => b.amount - a.amount || a.trip.route_name.localeCompare(b.trip.route_name, "mn"));
+}
+
+/** The dearest adult fare any active trip sells (a ceiling for what a typed number can be a price of). */
+export function highestAdultFare(trips: TravelTrip[], now = new Date()): number {
+  return Math.max(0, ...trips.flatMap((trip) => adultFaresOf(trip, now).map((fare) => fare.amount)));
 }
 
 /** Every upcoming departure the canonical resolver knows for this trip. */

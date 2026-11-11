@@ -16,6 +16,9 @@ import { TRIP_TOPICS, buildTripRequest, parseRequestedPassengers, type Requested
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { holidayPromptLine } from "./holidayCalendar";
 import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
+import { MESSAGE_NEEDS, needCueMatches, type MessageNeed } from "./messageNeed";
+import { contrastCandidates, detectContrastCue } from "./tripContrast";
+import { isBareMention, pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { REQUESTED_FACT_FIELDS, parseRequestedFacts, type RequestedFact } from "./requestedFacts";
 import {
   evaluateTripRequirement,
@@ -53,7 +56,15 @@ export type Understanding = {
   /** Independently derived identity scope, before any selected ID is persisted. */
   evidence?: CustomerTripEvidence;
   requestedFacts?: RequestedFact[];
+  /**
+   * A non-trip need the model read (thanks, a group, barter, a ticket-only wish, a booking already made,
+   * a complaint), kept only when its quoted evidence is in the customer's own words and carries a cue of
+   * that class (messageNeed.ts). Absent when the model proposed none or the check failed.
+   */
+  need?: ModelNeed;
 };
+
+export type ModelNeed = { need: MessageNeed; evidence: string };
 
 export type CustomerTripEvidence = {
   source: "current" | "pending" | "selection" | "history" | "none";
@@ -94,10 +105,14 @@ function catalogLine(key: string, trip: TravelTrip, now: Date): string {
     .join(" | ");
 }
 
+const NEED_ENUM = MESSAGE_NEEDS.map((need) => `"${need}"`).join("|");
+
 const SYSTEM_RULES = `You read customer messages for a Mongolian travel agency's chat and decide which catalog trip(s) a message is about. Customers write Mongolian in Cyrillic or Latin letters (e.g. "aylal" = аялал, "une" = үнэ, "hutulbur" = хөтөлбөр, "avi" = авъя), with typos, missing spaces and slang. Reply with ONLY this JSON object:
-{"place": string|null, "intent": "trip"|"catalog"|"booking"|"human"|"smalltalk"|"other", "topics": ["price"], "requestedFacts": [{"field":"hotel.connectivity","evidence":"exact span from the new customer message"}], "hotel": string|null, "package": string|null, "passengers": [{"kind":"adult"|"child"|"infant","count":2,"age":number|null,"ageUnit":"year"|"month"}], "trips": ["T1"], "certainty": "one"|"several"|"none", "date": "YYYY-MM-DD"|null, "from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null, "month": 1-12|null, "days": [min,max]|null, "transport": "direct_flight"|"land"|"land_flight"|"cruise"|null, "unknown_destination": string|null}
+{"place": string|null, "intent": "trip"|"catalog"|"booking"|"human"|"smalltalk"|"other", "need": ${NEED_ENUM}|null, "need_evidence": "exact span from the new customer message"|null, "topics": ["price"], "requestedFacts": [{"field":"hotel.connectivity","evidence":"exact span from the new customer message"}], "hotel": string|null, "package": string|null, "passengers": [{"kind":"adult"|"child"|"infant","count":2,"age":number|null,"ageUnit":"year"|"month"}], "trips": ["T1"], "certainty": "one"|"several"|"none", "date": "YYYY-MM-DD"|null, "from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null, "month": 1-12|null, "days": [min,max]|null, "transport": "direct_flight"|"land"|"land_flight"|"cruise"|null, "unknown_destination": string|null}
 
 topics: ALL questions asked in this turn, chosen from price, availability, dates, hotel, duration, transport, program, includes, booking_terms, weather, photos, comparison, budget, discount. Preserve multiple topics: asking dates AND prices needs both answers. hotel/package: only a hotel name or program/package explicitly requested in this turn, otherwise null. passengers: only counts/ages explicitly stated in this turn; keep each child's age and unit, never invent it. 6 months old means age 6, ageUnit month, not six years old. A hotel star number is not a passenger age. The Selected offer below is persistent context for follow-ups, not new customer requirements.
+
+need: set ONLY when the whole message is about something other than a catalog trip, else null. social = thanks, praise, feedback, an acknowledgement or a goodbye with no question; business_group = an organisation, team, company or a group of 10+ asks for travel, a bespoke route or an itemised quote; commercial_policy = barter, a contract, an invoice, instalments or any other commercial term; transport_only = a ticket, transfer or pick-up wanted without a trip; existing_booking = status, change or cancellation of a booking the customer already made; complaint = dissatisfaction with a service already received. A trip question that merely contains such a word stays null. need_evidence: the exact words of the NEW customer message that show the need (null when need is null).
 
 requestedFacts: preserve specific subquestions that a broad topic cannot answer. Allowed fields: ${REQUESTED_FACT_FIELDS.join(", ")}. Hotel connectivity, facilities, room properties, location/distance and rating are separate facts: naming a hotel or quoting its fare does not answer those questions. Other factual questions outside the listed topics belong to other.unsupported. For EACH such requirement copy its evidence exactly from the NEW customer message; never copy from history or catalog. A property word inside the trip/hotel's proper name alone is not a question about that property. Keep these alongside all ordinary topics in compound requests; do not omit a subquestion because it is unsupported.
 
@@ -396,6 +411,8 @@ export async function understandTripMessage(input: {
   trips: TravelTrip[];
   pendingTripIds?: string[];
   selection?: TripSelection | null;
+  /** The trips the customer was on before the selected one, most recent first (tripSelectionState.ts). */
+  recentTripIds?: string[];
   ask: AskJson;
   now?: Date;
 }): Promise<Understanding | null> {
@@ -407,8 +424,16 @@ export async function understandTripMessage(input: {
     const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|```\s*$/g, ""));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
     let evidence = customerTripEvidence(input, parsed.place);
-    if (evidence.source !== "current" && parsed.intent !== "trip" && parsed.intent !== "booking"
-      && buildTripRequest(input.text, [...keys.values()], undefined, input.now).topics.length === 0) {
+    // A message that asks nothing about a trip (no topic, no pointing word) and that the model read as
+    // not being about one has nothing a trip could answer. The model's reading wins over weak evidence
+    // of any source, not only over inherited context: the customer's own words ("<хот> ... баярлалаа")
+    // must not turn a thank-you or a policy question into a trip list. A bare destination typed alone
+    // is still a destination question.
+    const hasTopic = () => buildTripRequest(input.text, [...keys.values()], undefined, input.now).topics.length > 0;
+    if (evidence.source !== "current" && parsed.intent !== "trip" && parsed.intent !== "booking" && !hasTopic()) {
+      evidence = { source: "none", tripIds: [] };
+    } else if (evidence.source === "current" && (parsed.intent === "smalltalk" || parsed.intent === "other")
+      && !hasTopic() && !pointsBackAtTrip(input.text) && !isBareMention(input.text, [...keys.values()])) {
       evidence = { source: "none", tripIds: [] };
     }
     const allowed = new Set(evidence.tripIds);
@@ -424,8 +449,20 @@ export async function understandTripMessage(input: {
       intent: evidence.source === "current" ? "trip" : parsed.intent,
       unknown_destination: unknown,
     }), keys, input.now, input.text);
-    return interpreted ? { ...interpreted, evidence } : null;
+    const need = parseModelNeed(parsed.need, parsed.need_evidence, input.text);
+    return interpreted ? { ...interpreted, evidence, ...(need ? { need } : {}) } : null;
   } catch { return null; }
+}
+
+/**
+ * The model proposes, the code checks: a need is kept only when it is one of the known classes, the
+ * evidence it quotes is really in the customer's message, and that evidence carries a cue of the class.
+ */
+export function parseModelNeed(rawNeed: unknown, rawEvidence: unknown, customerText: string): ModelNeed | null {
+  if (typeof rawNeed !== "string" || !(MESSAGE_NEEDS as readonly string[]).includes(rawNeed)) return null;
+  if (!customerMentions(customerText, rawEvidence)) return null;
+  const need = rawNeed as MessageNeed;
+  return needCueMatches(need, rawEvidence, customerText) ? { need, evidence: rawEvidence.trim().slice(0, 200) } : null;
 }
 
 function customerMentions(text: string, value: unknown): value is string {
@@ -435,38 +472,83 @@ function customerMentions(text: string, value: unknown): value is string {
     || phonetic.length >= 3 && phoneticLatinText(text).includes(phonetic);
 }
 
-/** A model may interpret an evidenced scope; it cannot create that scope itself. */
+/**
+ * A model may interpret an evidenced scope; it cannot create that scope itself.
+ *
+ * The trip the customer is already on (the selection, or the list the bot just offered) is the
+ * ANCHOR and the default. The customer's own words move away from it only when they name something
+ * the anchor lacks (tripIdentity.ts); a place word the anchor itself contains, or a transport or kind
+ * word ("нисэх", "нислэгтэй"), never does. "Not that one, the other one" (tripContrast.ts) means the
+ * anchor is not the answer.
+ */
 export function customerTripEvidence(input: {
   text: string; history: UnderstandingHistory; trips: TravelTrip[];
-  pendingTripIds?: string[]; selection?: TripSelection | null;
+  pendingTripIds?: string[]; selection?: TripSelection | null; recentTripIds?: string[];
 }, proposedPlace?: unknown): CustomerTripEvidence {
   const catalog = input.trips.filter(trip => trip.status === "active" || trip.status === "sold_out");
+  const byId = new Map(catalog.map(trip => [trip.id, trip]));
+  // A fully booked trip the customer names is still THAT trip: identity includes it, availability is
+  // the answer's concern (case 13: the sibling's card was presented as the answer).
   const resolve = (text: string) => {
     const said = normText(text);
     const named = catalog.filter(trip => normText(trip.route_name).length >= 8 && said.includes(normText(trip.route_name)));
     const distinct = named.filter(trip => !named.some(other => normText(other.route_name).length > normText(trip.route_name).length
       && normText(other.route_name).includes(normText(trip.route_name))));
     if (distinct.length) return distinct.map(trip => trip.id);
-    const result = resolveTripFromUserMessage(text, catalog, { allowLooseFallback: false });
+    const result = resolveTripFromUserMessage(text, catalog, { allowLooseFallback: false, includeSoldOut: true });
     return result.status === "verified" ? [result.trip.id]
       : result.status === "ambiguous" ? result.candidates.map(trip => trip.id) : [];
   };
-  const current = resolve(input.text);
-  if (current.length) return { source: "current", tripIds: current };
+  const tripsOf = (ids: string[]) => ids.map(id => byId.get(id)).filter((trip): trip is TravelTrip => Boolean(trip));
+  const pending = tripsOf(input.pendingTripIds || []);
+  const selected = input.selection ? tripsOf([input.selection.tripId]) : [];
+  const anchor = pending.length ? pending : selected;
+  const anchorSource: "pending" | "selection" = pending.length ? "pending" : "selection";
+
+  /**
+   * What the message's own words say, judged against the anchor: "none" = they resolve to no trip,
+   * "stay" = they resolve to trips but nothing in them leaves the anchor.
+   */
+  const fromWords = (ids: string[]): CustomerTripEvidence | "none" | "stay" => {
+    if (!ids.length) return "none";
+    if (!anchor.length) return { source: "current", tripIds: ids };
+    const verdict = verdictAgainstAnchor(input.text, tripsOf(ids), anchor, catalog);
+    return verdict.kind === "stay" ? "stay" : { source: "current", tripIds: verdict.trips.map(trip => trip.id) };
+  };
+  const words = fromWords(resolve(input.text));
+  const wordsEvidence = typeof words === "string" ? null : words;
+  const switched = wordsEvidence !== null && anchor.length > 0
+    && !wordsEvidence.tripIds.some(id => anchor.some(trip => trip.id === id));
+  // "Not the previous one, the other one with the sea": the anchor is NOT the answer. A message that
+  // names a different trip by something it has (above) is a switch already; otherwise the contrast
+  // cue resolves among the other trips, the ones the customer was shown first.
+  if (!switched && (selected.length || (input.recentTripIds || []).length)) {
+    const contrast = contrastCandidates({ text: input.text, catalog, selectedIds: selected.map(trip => trip.id), stack: input.recentTripIds || [] });
+    if (contrast) return { source: "current", tripIds: contrast.tripIds };
+    // "Not this one" with no other trip to point at: the trip on screen is exactly what was refused,
+    // so it is not the answer either. No trip is evidenced and nothing is quoted from it.
+    if (selected.length && detectContrastCue(input.text) === "not_this") return { source: "none", tripIds: [] };
+  }
+  if (wordsEvidence) return wordsEvidence;
   if (websiteTripLinksInText(input.text).slugs.length || isKnownGreetingPhrase(input.text) || isThanksOnly(input.text)) {
     return { source: "none", tripIds: [] };
   }
   // A destination span present in the actual turn may be isolated from its
   // question words for the existing spelling-tolerant resolver. An unknown
   // fresh destination must not inherit the previous trip.
-  if (customerMentions(input.text, proposedPlace)) return { source: "current", tripIds: resolve(proposedPlace) };
-  const catalogIds = new Set(catalog.map(trip => trip.id));
-  const pending = (input.pendingTripIds || []).filter(id => catalogIds.has(id));
-  if (pending.length) return { source: "pending", tripIds: pending };
-  if (input.selection && catalogIds.has(input.selection.tripId)) return { source: "selection", tripIds: [input.selection.tripId] };
+  if (customerMentions(input.text, proposedPlace)) {
+    const place = fromWords(resolve(proposedPlace));
+    if (typeof place !== "string") return place;
+    if (place === "none") return { source: "current", tripIds: [] };
+  }
+  if (anchor.length) return { source: anchorSource, tripIds: anchor.map(trip => trip.id) };
+  // Earlier messages name a trip only for a follow-up: a question about a trip, or a word pointing
+  // back at one ("тэр", "үнэ"). A message with neither ("barter awdag u") asks nothing a trip answers,
+  // and re-reading the old request turned it into the old trip list.
+  const followsUp = buildTripRequest(input.text, catalog, undefined).topics.length > 0 || pointsBackAtTrip(input.text);
   const prior = input.history.at(-1)?.role === "user" && input.history.at(-1)?.text.trim() === input.text.trim()
     ? input.history.slice(0, -1) : input.history;
-  for (const message of prior.slice(-HISTORY_TURNS).reverse()) {
+  for (const message of followsUp ? prior.slice(-HISTORY_TURNS).reverse() : []) {
     if (message.role !== "user") continue;
     const ids = resolve(message.text);
     if (ids.length) return { source: "history", tripIds: ids };

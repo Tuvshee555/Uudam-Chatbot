@@ -92,7 +92,10 @@ export function withoutHolidayNames(text: string): string {
   // "Шинэ аялал гарсан уу" (has a NEW trip come out?): "new" on its own names nothing either.
   // Only the customer's words lose it; a trip's own title keeps all its words, or a short title
   // would out-score its siblings on the destination alone.
-  return out.replace(/(?<![\p{L}])(?:шинэ|шинээр|shine|shineer)(?![\p{L}])/giu, " ");
+  out = out.replace(/(?<![\p{L}])(?:шинэ|шинээр|shine|shineer)(?![\p{L}])/giu, " ");
+  // "Дараа жилийн 2 сард", "ирэх оны 1 сар": the year is a time word. "жилийн" is also a word of a trip
+  // titled for the New Year, and the customer's calendar phrase then picked that trip.
+  return out.replace(/(?<![\p{L}])(?:дараа|дараагийн|ирэх|энэ|өнгөрсөн|daraa|ireh|ene)\s+(?:(?:жил|он)(?:ийн|ийг|ы|ын|д|оос|ээс|ээр|оор)?(?![\p{L}])|(?:jil|on)(?:iin|iig|d|oos|eer)?(?![a-z]))/giu, " ");
 }
 
 /**

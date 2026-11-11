@@ -3,6 +3,7 @@ import { appSecretForToken, getEnv } from "./env";
 import { GRAPH_API_BASE } from "./metaGraph";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { BOT_MESSAGE_METADATA } from "./messenger";
+import { assertBotMaySend } from "./takeoverGuard";
 import { logError, logInfo } from "./observability";
 import { isPosterPdfEndpointUrl } from "./poster/pdfUrl";
 
@@ -326,12 +327,15 @@ export async function sendFbFileAttachment(
   attachmentId: string,
   pageToken: string,
 ): Promise<boolean> {
+  if (isMetaOutboundDisabled()) {
+    logMetaOutboundSuppressed("fbAttachmentUpload.sendFbFileAttachment");
+    return true;
+  }
+  // These senders post to /me/messages directly, so they were outside the send-time takeover guard
+  // (messenger.ts): a consultant who answered between the text and the PDF still got the PDF under their
+  // message. Throws StaffTakeoverSendBlocked, which ends the turn quietly (webhook.ts handleMessage).
+  await assertBotMaySend(recipientId, { source: "fbAttachmentUpload.sendFbFileAttachment" });
   try {
-    if (isMetaOutboundDisabled()) {
-      logMetaOutboundSuppressed("fbAttachmentUpload.sendFbFileAttachment");
-      return true;
-    }
-
     const resp = await fetch(
       `https://graph.facebook.com/${FB_API_VERSION}/me/messages?access_token=${pageToken}`,
       {
@@ -380,6 +384,8 @@ export async function sendFbFileByUrl(
     logMetaOutboundSuppressed("fbAttachmentUpload.sendFbFileByUrl");
     return true;
   }
+  // Before the (slow) download and upload, not after: a customer a consultant owns gets no file.
+  await assertBotMaySend(recipientId, { source: "fbAttachmentUpload.sendFbFileByUrl" });
 
   const isGoogleDrive = GDRIVE_VIEW_RE.test(fileUrl);
   // Our poster endpoint renders the poster in a headless browser on a cold
@@ -448,6 +454,11 @@ export async function sendFbImageAsPdfByUrl(
   pageToken: string,
   filenameBase: string,
 ): Promise<boolean> {
+  if (isMetaOutboundDisabled()) {
+    logMetaOutboundSuppressed("fbAttachmentUpload.sendFbImageAsPdfByUrl");
+    return true;
+  }
+  await assertBotMaySend(recipientId, { source: "fbAttachmentUpload.sendFbImageAsPdfByUrl" });
   const pdf = await buildPdfFromImageUrl(imageUrl, filenameBase);
   if (!pdf) {
     logError("fbAttachmentUpload.image_to_pdf_failed", { imageUrl, filenameBase });

@@ -11,6 +11,9 @@ import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type Re
 import { buildFarePriceLines, displayAgeBand, onSaleDepartureText, shortDate, upcomingDepartures } from "./tripFareBlock";
 import { verifyTripReply } from "./tripReplyVerification";
 import { customerDate } from "./customerDate";
+import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
+import { holidayWindowOf } from "./askedWindow";
+import { holidayDatesFor, holidayDatesToShow, type ResolvedHoliday } from "./holidayDepartures";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -1111,7 +1114,8 @@ export function extractNormalizedPrice(text: string): number | null {
     }
   }
 
-  const kiloMatch = /(?:^|[^\d])(\d{3,5}(?:[.,]\d+)?)\s*[кk]\b/i.exec(compact);
+  // "990k", "990К" and "990 мянга / мянгатай / мянганы": thousands, however it is typed.
+  const kiloMatch = /(?:^|[^\d])(\d{3,5}(?:[.,]\d+)?)\s*(?:[кk](?![\p{L}\d])|(?:мянга|myanga|mynga)\p{L}*)/iu.exec(compact);
   if (kiloMatch) {
     const amount = Number.parseFloat(kiloMatch[1].replace(",", "."));
     if (!Number.isNaN(amount)) return Math.round(amount * 1000);
@@ -1582,12 +1586,16 @@ const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "
  * date sold at another price the reply verifier rightly rejected it, and the
  * whole "which trip?" question became silence plus a paused customer.
  */
-function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: RequestedDepartureScope | null = null): { fares: ListedFares | null; dates: string[]; soldOut?: boolean; outsideScope?: boolean; qualifications?: string[]; ageLabels?: Partial<Record<PassengerKind, string>> } {
+function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: RequestedDepartureScope | null = null, holiday: ResolvedHoliday | null = null): { fares: ListedFares | null; dates: string[]; soldOut?: boolean; outsideScope?: boolean; qualifications?: string[]; ageLabels?: Partial<Record<PassengerKind, string>> } {
   // The dated departures come from the same resolver the reply checker uses, so a
   // line can never print a date the checker does not know (a cancelled or copied
   // date made it reject the whole list). Weekly schedules ("Ням гараг бүр") have no
   // calendar dates and keep the trip's own text.
-  const dated = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope)).slice(0, scope?.kind === "dates" ? scope.dates.length : 8);
+  const inScope = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope));
+  // Under a holiday list the card prints the departures that list showed (the ones over the holiday),
+  // not the earliest dates of the search window.
+  const forHoliday = holiday ? holidayDatesToShow(holidayDatesFor(trip, holiday, now), 8).filter(date => inScope.includes(date)) : [];
+  const dated = (forHoliday.length ? forHoliday : inScope).slice(0, scope?.kind === "dates" ? scope.dates.length : 8);
   if (scope && !dated.length) return { fares: null, dates: [], outsideScope: true };
   const future = dated.length ? dated : withFutureDepartureDates(trip, now).departure_dates.slice(0, 8);
   // A sold-out or closed departure is not on sale: listing it with a price made
@@ -1644,6 +1652,7 @@ export function buildAmbiguousTripReply(
   now = new Date(),
 ) {
   const scope = options.customerText ? requestedDepartureScope(options.customerText, now) : null;
+  const holiday = options.customerText ? holidayWindowOf(options.customerText, now) : null;
   if (scope?.kind === "unsupported") return "REFER";
   const candidates = scope ? trips.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, scope))) : trips;
   const text = options.customerText || "";
@@ -1654,7 +1663,7 @@ export function buildAmbiguousTripReply(
   const asksChild = /хүүх|child|huuh|huvh/i.test(text);
   const asksInfant = /нярай|infant|nyarai/i.test(text);
   const shown = candidates.slice(0, limit)
-    .map((trip) => ({ trip, listed: listedFaresAndDates(trip, now, scope) }))
+    .map((trip) => ({ trip, listed: listedFaresAndDates(trip, now, scope, holiday) }))
     .filter(({ listed }) => !listed.outsideScope);
   const cards = shown.map(({ trip, listed }, index) => {
     const currency = trip.currency || "MNT";
@@ -1735,8 +1744,13 @@ export function buildDateNotScheduledReply(trips: TravelTrip[], now = new Date()
     DATE_NOT_SCHEDULED_HEADING,
     ...shown.map(({ trip, dates }) => `• ${trip.route_name}: ${dates.slice(0, 3).map((date) => customerDate(date, now)).join(", ")}`),
     ...(scheduled.length > shown.length ? [`Өөр ${scheduled.length - shown.length} сонголт бий.`] : []),
+    // Owner 2026-11-11: point to every other trip too, and let the customer say which one.
+    "", OTHER_TRIPS_LINK_LINE,
   ].join("\n");
 }
+
+/** The closing line of a "not then" reply: the whole catalogue on the website, and an invitation to name a trip. */
+export const OTHER_TRIPS_LINK_LINE = `Бусад аяллуудыг эндээс харж болно: ${BOOKING_WEBSITE_URL} — сонирхсон аяллаа бичээрэй 😊`;
 
 /** Legacy text for integrations that explicitly request contact. */
 export const LEAD_CAPTURE_CTA =
