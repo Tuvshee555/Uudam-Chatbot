@@ -250,26 +250,33 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   };
 }
 
-export function mergeTripSelection(tripId: string, request: TripRequest, previous: TripSelection | null): TripSelection {
+/**
+ * `carry`: what the customer stated before this trip (constraintLedger.ts) — the party and the window
+ * belong to the customer, not to one trip, so a trip that is new to the selection starts from them.
+ * Absent or null, the merge is exactly the selection's own.
+ */
+export function mergeTripSelection(tripId: string, request: TripRequest, previous: TripSelection | null,
+  carry?: { passengers: RequestedPassenger[]; dateScope: TripDateScope | null } | null): TripSelection {
   const same = previous?.tripId === tripId ? previous : null;
+  const party = same ?? (carry ? { passengers: carry.passengers, ...(carry.dateScope ? { dateScope: carry.dateScope } : {}) } : null);
   const suppliedKinds = new Set(request.passengers.map((passenger) => passenger.kind));
   // Several groups ("2 том хүн 1 хүүхэд") or "зөвхөн" restate the party. Adults are kept
   // with the earlier children when they complete a party of minors (the answer to "Хэдэн
   // том хүн явах вэ?") or the message says it changes one count ("Одоо 3 том хүн"); both
   // used to drop the children (live replay 2026-10-30). Otherwise adults restate it.
-  const previousHasAdults = Boolean(same?.passengers.some((passenger) => passenger.kind === "adult"));
+  const previousHasAdults = Boolean(party?.passengers.some((passenger) => passenger.kind === "adult"));
   const keepsOthers = !request.passengersExclusive && (!suppliedKinds.has("adult")
     || (request.passengers.length === 1 && (Boolean(request.passengersUpdate) || !previousHasAdults)));
   // Routing and the answer plan both merge the same turn: a selection that already holds
   // this single update is that merge, not an earlier party to restate.
-  const alreadyMerged = request.passengers.length === 1 && !request.passengersExclusive && Boolean(same?.passengers.some((passenger) =>
+  const alreadyMerged = request.passengers.length === 1 && !request.passengersExclusive && Boolean(party?.passengers.some((passenger) =>
     passenger.kind === request.passengers[0].kind && passenger.count === request.passengers[0].count && passenger.age === request.passengers[0].age));
   let passengers = request.passengers.length
-    ? alreadyMerged ? same!.passengers
+    ? alreadyMerged ? party!.passengers
     : keepsOthers
-      ? [...(same?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
+      ? [...(party?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
       : request.passengers
-    : same?.passengers || [];
+    : party?.passengers || [];
   // An answer to the child-age question refines the existing people even if
   // the supplied age moves them into another fare category.
   if (same && request.passengerAgeFollowup && request.passengers.length && request.passengers.every(passenger => passenger.age !== undefined)) {
@@ -294,7 +301,7 @@ export function mergeTripSelection(tripId: string, request: TripRequest, previou
     }
   }
   const dateScope = request.date ? undefined : request.range || request.month || request.year || request.dates
-    ? { month: request.month, year: request.year, range: request.range || null, ...(request.dates ? { dates: request.dates } : {}) } : same?.dateScope;
+    ? { month: request.month, year: request.year, range: request.range || null, ...(request.dates ? { dates: request.dates } : {}) } : party?.dateScope;
   return {
     tripId, date: request.date || (request.range || request.dates && same?.date && !request.dates.includes(same.date) || request.month && same?.date
       && (Number(same.date.slice(5, 7)) !== request.month || request.year && Number(same.date.slice(0, 4)) !== request.year)

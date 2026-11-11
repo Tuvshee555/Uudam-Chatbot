@@ -8,8 +8,8 @@
 import type { TravelTrip } from "./travelTypes";
 import { normText } from "./travelTextNorm";
 
-/** "what time" in Cyrillic and Latin spellings. */
-const WHAT_TIME = /(?:^|\s)(?:(?:хэдэн|хэд|ямар|хэдийн)\s+цаг(?:т|ийн|аар|ийг)?|цаг\s+хэд|цагийн\s+хуваарь|(?:heden|hed|hedn|yamar|hediin)\s+ts?ag(?:t|iin|aar)?|ts?ag\s+hed|tsagiin\s+huvaari)(?=\s|$)/u;
+/** "what time" in Cyrillic and Latin spellings; "хэзээ цагт" / "hezhe tsagt" ("when, at what hour") too. */
+const WHAT_TIME = /(?:^|\s)(?:(?:хэдэн|хэд|ямар|хэдийн)\s+цаг(?:т|ийн|аар|ийг)?|хэзээ\s+цагт|цаг\s+хэд|цагийн\s+хуваарь|(?:heden|hed|hedn|yamar|hediin)\s+ts?ag(?:t|iin|aar)?|(?:hezee|hezhe|hejee|hezii|xezee)\s+ts?agt|ts?ag\s+hed|tsagiin\s+huvaari)(?=\s|$)/u;
 /** A travel leg: fly, take off, land, depart, start, train, bus. */
 const LEG_WORD = /(?:^|\s)(?:нис[\p{L}]*|онгоц[\p{L}]*|хөөр[\p{L}]*|буух|буулт[\p{L}]*|газарда[\p{L}]*|хөдл[\p{L}]*|эхл[\p{L}]*|гарах|гарна|тэрэг[\p{L}]*|автобус[\p{L}]*|nis[\p{L}]*|ongots[\p{L}]*|huur[\p{L}]*|huurnu|buuh|hudul[\p{L}]*|ehel[\p{L}]*|ehl[\p{L}]*|garah|garna|tereg[\p{L}]*|avtobus[\p{L}]*)(?=\s|$)/u;
 /** A question about meeting before the trip (airport, station) is not a question about a leg. */

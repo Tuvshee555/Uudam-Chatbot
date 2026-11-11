@@ -14,7 +14,8 @@ export type ContrastCue = "previous" | "other" | "first" | "not_this";
 // Whole words only: "нөгөөдөр" (the day after tomorrow) is a date, not "the other one".
 const OTHER_WORDS = /(?:^|\s)(?:нөгөө|нөгөөх|нөгөөгийн|нөгөөг|нөгөөгөө|nugu|nuguu|nugui|nogoo)(?=\s|$)/u;
 const PREVIOUS_WORDS = /(?:^|\s)(?:өмнөх|өмнөхөө|өмнөхийг|omnoh|umnuh|omnoh\p{L}*)(?=\s|$)/u;
-const FIRST_WORDS = /(?:^|\s)(?:эхнийх\p{L}*|эхний\s+(?:аял\p{L}*|нь|хувилбар\p{L}*|нэг)|ehniih\p{L}*|ehnii\s+(?:ayl\p{L}*|ayal\p{L}*|ni))(?=\s|$)/u;
+// "Анхны аялал" (the very first trip) means the same as "эхний аялал".
+const FIRST_WORDS = /(?:^|\s)(?:эхнийх\p{L}*|(?:эхний|анхны)\s+(?:аял\p{L}*|нь|хувилбар\p{L}*|нэг)|ehniih\p{L}*|(?:ehnii|anhnii|anhni)\s+(?:ayl\p{L}*|ayal\p{L}*|ni))(?=\s|$)/u;
 const NOT_THIS_WORDS = /(?:^|\s)(?:энэ|тэр|энэхүү|энийг|тэрийг|ene|ter)\s+(?:аялал\p{L}*\s+|aylal\p{L}*\s+)?(?:биш|хэрэггүй|болохгүй|bish|hereggui)(?=\s|$)/u;
 
 const TRIP_WORD = /(?:^|\s)(?:аял\p{L}*|aylal\p{L}*|ayalal\p{L}*|хувилбар\p{L}*)(?=\s|$)/u;

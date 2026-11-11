@@ -63,7 +63,7 @@ import { latestCustomerLead, recordLeadFollowup } from "../../lib/travelLeadsDb"
 import { buildScopedNotScheduledReply } from "../../lib/dateNotScheduled";
 import { conversationLeadContext } from "../../lib/leadContext";
 import { commercialFactsText } from "../../lib/commercialFacts";
-import { withoutNegatedTrips } from "../../lib/negatedTrip";
+import { mayNegateTrip, ruleOutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { dbAppendStaffMessages, dbHasRecentStaffMessage } from "../../lib/travelDb";
@@ -119,6 +119,7 @@ import { rememberSenderName } from "../../lib/senderNames";
 import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, isContactOperatorTap, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
+import { placeWeatherAnswer } from "../../lib/placeWeather";
 import { catalogueFollowupLabel, handleCatalogueTurn, handleTesterPairingTurn, noteBlockedCatalogueRequest } from "../../lib/webhookCatalogue";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
@@ -390,17 +391,13 @@ async function handleMessageTurn(
   ]);
   // "1" under a bulleted hotel / package / date question is that option, not a number with no list.
   text = adultCountAnswer(history, text) ?? optionChosenByNumber(history, text) ?? text;
-  // "<place> биш, …" rules that place out: only the rest is matched, and that place's
-  // trips are left out of this turn's catalogue (negatedTrip.ts).
+  // "<place> биш / хэрэггүй / орохгүй / -гүй / -аас бусад" rules that place out: only the rest is matched,
+  // and the trips it names are left out of this turn's catalogue (negatedTrip.ts).
   const excludedTripIds = new Set<string>();
-  if (/биш|bish/iu.test(text)) {
+  if (mayNegateTrip(text)) {
     const active = withoutHiddenTrips(await listTrips({ limit: 5000 })).filter((trip) => trip.status === "active").map(sanitizeTripForCustomers);
-    const resolve = (word: string) => resolveTripFromUserMessage(word, active, { allowLooseFallback: false });
-    const corrected = withoutNegatedTrips(text, (word) => resolve(word).status !== "not_found");
-    for (const word of corrected.negated) {
-      const ruledOut = resolve(word);
-      for (const trip of ruledOut.status === "verified" ? [ruledOut.trip] : ruledOut.status === "ambiguous" ? ruledOut.candidates : []) excludedTripIds.add(trip.id);
-    }
+    const corrected = ruleOutNegatedTrips(text, active);
+    for (const id of corrected.excludedTripIds) excludedTripIds.add(id);
     text = corrected.text;
   }
   const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
@@ -452,6 +449,7 @@ async function handleMessageTurn(
     ungroundedTripInReply(reply, {
       customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
       selectionTripId: groundingSelection?.tripId || null, recentTripIds: groundingRecent, catalogTripIds, trips: await getGroundingTrips(),
+      ruledOutTripIds: [...excludedTripIds],
     });
   let currentSelection: TripSelection | null = null;
   const deliverFastPathReply = async (input: {
@@ -480,7 +478,7 @@ async function handleMessageTurn(
     const ungroundedPlan = !missingData && input.decision && !answerPlanHasCustomerEvidence(input.decision.plan.tripId, {
       customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
       selectionTripId: groundingSelection?.tripId || null, recentTripIds: groundingRecent, catalogTripIds: input.catalogTripIds,
-      trips: await getGroundingTrips(),
+      trips: await getGroundingTrips(), ruledOutTripIds: [...excludedTripIds],
     });
     const ungroundedTrip = missingData ? null : await findUngroundedTrip(reply, input.catalogTripIds);
     const noDataReply = missingData || Boolean(ungroundedTrip) || Boolean(ungroundedPlan);
@@ -1290,6 +1288,15 @@ async function handleMessageTurn(
     return;
   }
 
+  // A weather question about a place several trips share, or a full trip's place, is answered as weather (placeWeather.ts).
+  if (isWeatherTurn(intentText, history)) {
+    const place = await placeWeatherAnswer({ routed: await getRouted(), trips: await getTrips(), text, askedText: intentText });
+    if (place) {
+      await deliverFastPathReply({ reply: sanitizeAssistantReply(place.reply), failTag: "weather_place", catalogTripIds: place.candidates.map((trip) => trip.id),
+        rememberSource: "api.webhook.weather_place", counter: "webhook.weather_fast_path_total" });
+      return;
+    }
+  }
   // The customer named a trip that is sold out or paused: say so (soldOutNamed.ts) before an answer
   // plan prices it as open or a list of its siblings stands in for it.
   if (await deliverSoldOutNamed(soldOutNamedReply({ routed: await getRouted(), text, trips: await getTrips() }))) return;

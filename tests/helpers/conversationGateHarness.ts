@@ -221,7 +221,8 @@ export async function conversationGateHarness(context: TestContext, options: { e
         return Response.json({ paging: {} });
       }
       const messages = (script?.messages ?? []).map((entry, index) => ({
-        id: entry.id ?? `m_thread_${index}`,
+        // Meta message ids are unique across conversations: staff messages are stored once per id.
+        id: entry.id ?? `m_thread_${customer}_${index}`,
         from: { id: entry.from === "page" ? "1234567890" : customer },
         message: entry.text ?? "",
         created_time: new Date(Date.now() - entry.agoMs).toISOString(),
