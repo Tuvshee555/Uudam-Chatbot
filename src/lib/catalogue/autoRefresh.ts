@@ -16,6 +16,8 @@ import { catalogueAgeDays, evaluateFreshness, checkLiveDrift, type FreshnessVerd
 export const REFRESH_AFTER_DAYS = 14;
 export const AUTO_REFRESH_ACTOR = "auto-refresh";
 const LOCK_MINUTES = 12;
+/** Versions kept per edition (the published one always stays). */
+export const KEEP_VERSIONS = 4;
 
 export type RefreshDecision = { refresh: boolean; reasons: string[] };
 
@@ -129,6 +131,9 @@ export async function refreshCatalogues(opts: { now?: Date; only?: "quick" | "co
         results.push({ edition, status: "failed", reasons: [], detail: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300) });
       }
     }
+    // Every version stores its PDF and page previews in the database: keep the newest few per edition
+    // (rollback targets) so storage does not grow with every refresh. A published version is never removed.
+    await store.pruneOldVersions?.(KEEP_VERSIONS).catch(() => undefined);
   } finally {
     await unlock();
   }

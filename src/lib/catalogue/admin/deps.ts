@@ -42,6 +42,8 @@ export type CatalogueStorePort = {
     actor: string | null;
   }): Promise<CatalogueVersionMeta>;
   listVersions(edition?: CatalogueEdition, limit?: number): Promise<CatalogueVersionMeta[]>;
+  /** Deletes old non-published versions beyond the newest `keep` per edition (storage housekeeping). */
+  pruneOldVersions?(keep: number): Promise<{ deleted: number }>;
   getVersionMeta(id: string): Promise<CatalogueVersionMeta | null>;
   getVersionPdf(id: string): Promise<{ bytes: Buffer; meta: CatalogueVersionMeta } | null>;
   getVersionPageImage(id: string, page: number): Promise<Buffer | null>;
