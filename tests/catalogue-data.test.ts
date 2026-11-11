@@ -573,7 +573,7 @@ test("liveDrift: a trip that closed, a changed dated fare or a removed departure
     datedTrip("f3", [["2027-03-06", 2_000_000]]),
   ];
   const published = buildCatalogueSnapshot(inputOf(base));
-  assert.deepEqual(liveDrift(published, buildCatalogueSnapshot(inputOf(base))), { drifted: false, reasons: [] });
+  assert.deepEqual(liveDrift(published, buildCatalogueSnapshot(inputOf(base))), { drifted: false, reasons: [], pending: [] });
 
   const closed = buildCatalogueSnapshot(inputOf([base[0], base[1], { ...base[2], status: "sold_out" as const }], { codeMap: { f1: "A01", f2: "A02", f3: "A03" } }));
   const a = liveDrift(published, closed);
@@ -592,7 +592,7 @@ test("liveDrift: a trip that closed, a changed dated fare or a removed departure
 
   const extra = [...base, datedTrip("f4", [["2027-04-03", 900_000]])];
   const d = liveDrift(published, buildCatalogueSnapshot(inputOf(extra, { codeMap: { f1: "A01", f2: "A02", f3: "A03", f4: "A04" } })));
-  assert.deepEqual(d, { drifted: false, reasons: [] }, "a new trip only makes the file older, nothing in it is false");
+  assert.deepEqual(d, { drifted: false, reasons: [], pending: [] }, "a new trip only makes the file older, nothing in it is false");
 });
 
 /* ------------------------------------------------------------------ kicker (line above the headline) */
@@ -692,7 +692,7 @@ test("weekly schedules are recognised in the spellings the live data uses and st
 test("REGRESSION: liveDrift sees a changed weekly schedule line, duration and transport", () => {
   const weekly = (day: string, over: TripOverrides = {}) => trip("wd1", { departure_dates: [day], adult_price: 1_500_000, extra: { transport_type: "land" }, ...over });
   const published = buildCatalogueSnapshot(inputOf([weekly("Пүрэв гараг бүр")]));
-  assert.deepEqual(liveDrift(published, buildCatalogueSnapshot(inputOf([weekly("Пүрэв гараг бүр")]))), { drifted: false, reasons: [] });
+  assert.deepEqual(liveDrift(published, buildCatalogueSnapshot(inputOf([weekly("Пүрэв гараг бүр")]))), { drifted: false, reasons: [], pending: [] });
 
   const day = liveDrift(published, buildCatalogueSnapshot(inputOf([weekly("Мягмар гараг бүр")])));
   assert.equal(day.drifted, true);
@@ -1145,7 +1145,7 @@ test("liveDrift ignores a photo or display-title change but still catches the ti
   assert.notEqual(display.contentHash, published.contentHash, "the printed file does change");
   assert.notEqual(display.trips[0].editorialTitle, published.trips[0].editorialTitle);
   assert.notEqual(display.trips[0].photo?.url, published.trips[0].photo?.url);
-  assert.deepEqual(liveDrift(published, display), { drifted: false, reasons: [] }, "display-only edits do not make the published file stale");
+  assert.deepEqual(liveDrift(published, display), { drifted: false, reasons: [], pending: [] }, "display-only edits do not make the published file stale");
   const renamed = buildCatalogueSnapshot(inputOf([{ ...t, route_name: "Тестград шинэ нэртэй аялал" }]));
   assert.equal(liveDrift(published, renamed).drifted, true, "the title of record is still compared");
   const repriced = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [["2027-01-09", 3_500_000]], { route_name: "Тестград аялал", photo_urls: t.photo_urls })]));
@@ -1497,7 +1497,7 @@ test("liveDrift: a changed schedule or any date's adult fare is drift; the windo
   // Three days later the 90-day window starts and ends later, but the schedule is the same: not drift.
   const later = buildCatalogueSnapshot(inputOf([datedTrip("dr1", fares)], { nowIso: "2026-11-09T04:00:00.000Z" }));
   assert.notDeepEqual(later.trips[0].dates.window, published.trips[0].dates.window, "the window itself did move");
-  assert.deepEqual(liveDrift(published, later), { drifted: false, reasons: [] });
+  assert.deepEqual(liveDrift(published, later), { drifted: false, reasons: [], pending: [] });
   // A far-future (outside the window) date's fare changed: drift, although the price-from and the window are untouched.
   const farFare = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [fares[0], fares[1], fares[2], ["2027-04-09", 1_900_000]])]));
   assert.equal(liveDrift(published, farFare).drifted, true);
@@ -1505,8 +1505,20 @@ test("liveDrift: a changed schedule or any date's adult fare is drift; the windo
   // A date sold out / removed: drift.
   const removed = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [fares[0], fares[2], fares[3]])]));
   assert.equal(liveDrift(published, removed).drifted, true);
-  // A date added: drift.
+  // A date added: NOT stale (everything printed is still true), but pending so the scheduled refresh adds it.
+  // Owner, 2026-11-11: weekly trips roll a new date in every day, and treating that as stale made the bot
+  // send the website text instead of the PDF.
   const added = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [...fares, ["2027-05-14", 1_900_000]])]));
-  assert.equal(liveDrift(published, added).drifted, true);
-  assert.match(liveDrift(published, added).reasons.join(" "), /шинэ огноо/);
+  assert.equal(liveDrift(published, added).drifted, false);
+  assert.match(liveDrift(published, added).pending.join(" "), /шинэ огноо/);
+  // A printed date that has simply passed and did not carry the starting price: not stale, only pending.
+  const notCheapestFirst: Array<[string, number]> = [["2026-12-04", 1_700_000], ["2026-12-11", 1_500_000], ["2027-02-06", 1_600_000]];
+  const pubB = buildCatalogueSnapshot(inputOf([datedTrip("dr2", notCheapestFirst)]));
+  const passed = buildCatalogueSnapshot(inputOf([datedTrip("dr2", notCheapestFirst)], { nowIso: "2026-12-05T04:00:00.000Z" }));
+  assert.equal(liveDrift(pubB, passed).drifted, false, JSON.stringify(liveDrift(pubB, passed).reasons));
+  assert.match(liveDrift(pubB, passed).pending.join(" "), /өнгөрсөн/);
+  // ...but when the date that passed carried the printed starting price, that price is no longer true: stale.
+  const cheapestPassed = buildCatalogueSnapshot(inputOf([datedTrip("dr1", fares)], { nowIso: "2026-12-05T04:00:00.000Z" }));
+  assert.equal(liveDrift(published, cheapestPassed).drifted, true);
+  assert.match(liveDrift(published, cheapestPassed).reasons.join(" "), /үнэ өөрчлөгдсөн/);
 });

@@ -53,6 +53,8 @@ type ProposalSource = {
 };
 
 import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
+import { liftDayStates, withPricedDaysOnCalendar } from "./tripDayStates";
+import { settleRowInfantFares } from "./tripRowFares";
 import { applyPriceTable, readPriceTable, type PriceTable } from "./tripPriceTable";
 
 function buildBatchSourceParts(input: {
@@ -899,6 +901,13 @@ async function createProposal(opts: {
     forbidCreate: instructionForbidsTripCreation(opts.instruction),
   }).proposal;
   if (opts.afterValidation) proposal = opts.afterValidation(proposal, trips);
+  // After validation (which rewrites dates and rows): every priced day on the calendar and each
+  // day's seat state held per day for the review (tripDayStates.ts).
+  for (const action of newTripActions(proposal)) {
+    const fields = action.fields as Record<string, unknown>;
+    const scheduled = liftDayStates(withPricedDaysOnCalendar(settleRowInfantFares(fields)));
+    if (scheduled !== fields) Object.assign(fields, { departure_dates: scheduled.departure_dates, infant_price: scheduled.infant_price, extra: scheduled.extra });
+  }
 
   let inserted: Awaited<ReturnType<typeof queryNeon<{ id: number }>>> = null;
   try {

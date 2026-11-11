@@ -25,9 +25,9 @@ function MealSummary({ day }: { day: Day }) {
   const stated = MEAL_SHORT.filter(([key]) => typeof meals[key] === "boolean");
   if (!stated.length) return null;
   return (
-    <span className="flex shrink-0 items-center gap-2 text-[11px]">
+    <span className="flex shrink-0 items-center gap-2 text-[12px]">
       {stated.map(([key, label]) => (
-        <span key={key} className={cx("inline-flex items-center gap-0.5", meals[key] ? "font-semibold text-brand" : "text-ink-subtle")}>
+        <span key={key} className={cx("inline-flex items-center gap-0.5", meals[key] ? "font-semibold text-brand" : "text-ink-muted")}>
           {meals[key] ? <Icons.check size={10} /> : <Icons.close size={9} />}{label}
         </span>
       ))}
@@ -44,6 +44,7 @@ export function ItineraryTimeline({
   title,
   hint,
   photoNote,
+  size,
 }: {
   days: Day[];
   onChange: (days: Day[]) => void;
@@ -56,6 +57,8 @@ export function ItineraryTimeline({
   title?: string;
   hint?: React.ReactNode;
   photoNote?: string;
+  /** The heading's size (parts.Group): "section" in the new-trip review. */
+  size?: "group" | "section";
 }) {
   const [open, setOpen] = React.useState<Record<number, boolean>>({});
   const isLocked = (day: Day | undefined) => Boolean(day && locked?.(day));
@@ -87,13 +90,14 @@ export function ItineraryTimeline({
 
   return (
     <Group
+      size={size}
       title={title ?? `${days.length} өдөр`}
       hint={hint}
       action={
         <span className="flex items-center gap-2">
           {days.length > 1 && (
             <button type="button" onClick={() => setOpen(allOpen ? Object.fromEntries(days.map((_, i) => [i, false])) : Object.fromEntries(days.map((_, i) => [i, true])))}
-              className="rounded-md px-2 py-1.5 text-xs font-medium text-brand hover:bg-brand-soft">{allOpen ? "Бүгдийг хураах" : "Бүгдийг дэлгэх"}</button>
+              className="rounded-md px-2 py-1.5 text-[13px] font-medium text-brand hover:bg-brand-soft">{allOpen ? "Бүгдийг хураах" : "Бүгдийг дэлгэх"}</button>
           )}
           <AddRowButton label="Өдөр нэмэх" onClick={add} />
         </span>
@@ -113,11 +117,11 @@ export function ItineraryTimeline({
                     <button type="button" aria-expanded={expanded} onClick={() => setOpen((o) => ({ ...o, [idx]: !expanded }))} className="flex min-w-0 flex-1 items-center gap-3 text-left">
                       <span className="min-w-0 flex-1">
                         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span className="truncate text-sm font-semibold text-ink">{d.title || "Гарчиггүй өдөр"}</span>
-                          {standard && <span className="rounded bg-surface-sunken px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-muted">Стандарт өдөр</span>}
-                          {showSourceDates && d.date && <span className="text-xs text-ink-subtle">файлд: {d.date}</span>}
+                          <span className="truncate text-[15px] font-semibold text-ink">{d.title || "Гарчиггүй өдөр"}</span>
+                          {standard && <span className="rounded bg-surface-sunken px-1.5 py-0.5 text-[11px] font-semibold text-ink-muted">Стандарт өдөр</span>}
+                          {showSourceDates && d.date && <span className="text-[13px] text-ink-muted">файлд: {d.date}</span>}
                         </span>
-                        {!expanded && <span className="block truncate text-xs text-ink-muted">{(d.description || "").replace(/\s+/g, " ").slice(0, 140) || "Тайлбаргүй"}</span>}
+                        {!expanded && <span className="block truncate text-[13px] leading-5 text-ink-muted">{(d.description || "").replace(/\s+/g, " ").slice(0, 140) || "Тайлбаргүй"}</span>}
                       </span>
                       {!expanded && <span className="hidden sm:block"><MealSummary day={d} /></span>}
                       <Icons.chevronRight size={16} className={cx("shrink-0 text-ink-subtle transition-transform", expanded ? "-rotate-90" : "rotate-90")} />
@@ -133,7 +137,7 @@ export function ItineraryTimeline({
                   {expanded && (
                     <div className="space-y-4 border-t border-line px-4 pb-4 pt-4">
                       {standard ? (
-                        <p className="whitespace-pre-line text-sm leading-6 text-ink-muted">{d.description}<span className="mt-2 block text-xs text-ink-subtle">Улаанбаатараас гарах, буцах стандарт өдөр. Тээврийн төрлөөс хамаарч өөрөө солигдоно.</span></p>
+                        <p className="whitespace-pre-line text-sm leading-6 text-ink-muted">{d.description}<span className="mt-2 block text-[13px] text-ink-muted">Улаанбаатараас гарах, буцах стандарт өдөр. Тээврийн төрлөөс хамаарч өөрөө солигдоно.</span></p>
                       ) : (
                         <>
                           <div className="grid gap-4 sm:grid-cols-2">

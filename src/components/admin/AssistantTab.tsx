@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { Card, Icons, cx } from "@/components/ui";
+import { Icons, cx } from "@/components/ui";
 import {
   ActionGlyph,
   ComposerActionMenu,
@@ -86,7 +86,7 @@ function FileProgress({ label, reported }: { label: string; reported: number }) 
           </li>
         ))}
       </ol>
-      <p className="mt-2.5 text-[11px] leading-4 text-ink-subtle">Нэг файл ихэвчлэн 1 минут орчим. Энэ хуудсыг бүү хаагаарай.</p>
+      <p className="mt-2.5 text-[12px] leading-4 text-ink-muted">Нэг файл ихэвчлэн 1 минут орчим. Энэ хуудсыг бүү хаагаарай.</p>
     </div>
   );
 }
@@ -122,7 +122,7 @@ function ReplyCaption({ meta }: { meta?: ReplyMeta }) {
   const caption = replyCaption(meta);
   if (!caption) return null;
   return (
-    <p className={cx("mt-1 px-1 text-[11px] leading-4", meta?.simple ? "text-warning" : "text-ink-subtle")}>{caption}</p>
+    <p className={cx("mt-1 px-1 text-[12px] leading-4", meta?.simple ? "text-warning" : "text-ink-muted")}>{caption}</p>
   );
 }
 
@@ -296,11 +296,14 @@ export function AssistantTab({
     inputRef.current?.focus();
   };
 
+  // The whole content area, edge to edge (admin.tsx gives this tab no page padding): one scroll
+  // area for the conversation, a slim header above and the composer below. The owner, 2026-11-11:
+  // the card inside the page left wide gaps and showed half a screen of the review.
   return (
-    <Card
+    <div
       className={cx(
-        "relative flex h-[calc(100dvh-5.5rem)] min-h-[30rem] min-w-0 flex-col overflow-hidden transition-shadow sm:h-[calc(100dvh-6.5rem)] lg:h-[calc(100dvh-7.5rem)]",
-        dragOver && "ring-2 ring-brand",
+        "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface",
+        dragOver && "ring-2 ring-inset ring-brand",
       )}
       onDragOver={(e) => {
         if (!e.dataTransfer.types.includes("Files")) return;
@@ -320,17 +323,17 @@ export function AssistantTab({
         if (!busy) onDropFiles(files);
       }}
     >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3 sm:px-5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-travel text-white shadow-xs">
-          <Icons.ai size={18} />
+      <div className="flex min-h-12 shrink-0 items-center gap-3 border-b border-line px-4 py-1.5 sm:px-6">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-brand to-travel text-white shadow-xs">
+          <Icons.ai size={16} />
         </span>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold leading-5 text-ink">Аяллын туслах</h2>
-          <p className="text-xs leading-4 text-ink-muted">Би санал бэлдэнэ. Та хянаад хадгална.</p>
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3">
+          <h2 className="text-[15px] font-semibold leading-6 text-ink">Аяллын туслах</h2>
+          <p className="hidden truncate text-sm leading-6 text-ink-muted sm:block">Би санал бэлдэнэ. Та хянаад хадгална.</p>
         </div>
         {existingTrips.length > 0 && (
-          <span className="hidden shrink-0 items-center gap-1.5 rounded-full border border-line bg-canvas px-2.5 py-1 text-xs font-medium text-ink-muted sm:inline-flex">
-            <Icons.trips size={13} className="text-ink-subtle" />
+          <span className="hidden shrink-0 items-center gap-1.5 text-[13px] font-medium text-ink-muted sm:inline-flex">
+            <Icons.trips size={14} />
             {existingTrips.length} аялал
           </span>
         )}
@@ -340,7 +343,7 @@ export function AssistantTab({
             onClick={onNewConversation}
             disabled={busy}
             title="Яриаг цэвэрлээд шинээр эхлэх (хадгалсан өөрчлөлт хэвээр)"
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-line-strong bg-surface px-3 text-[13px] font-medium text-ink transition-colors hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Icons.plus size={13} />
             Шинэ яриа
@@ -356,8 +359,9 @@ export function AssistantTab({
           <p className="text-sm text-ink-muted">Уншаад өөрчлөлтийн санал бэлдье.</p>
         </div>
       )}
+      {/* The one scrollbar. The review card's sticky footer sits on this padding's bottom edge (ProposalCard: -bottom-4 / sm:-bottom-5). */}
       <div
-        className="scroll-area flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas/40 p-3.5 sm:p-5"
+        className="scroll-area flex min-h-0 flex-1 flex-col overflow-y-auto bg-surface px-4 py-4 sm:px-6 sm:py-5"
         role="log"
         aria-label="Туслахтай ярилцсан түүх"
         aria-relevant="additions text"
@@ -389,7 +393,7 @@ export function AssistantTab({
                 </li>
               ))}
             </ul>
-            <p className="mt-3 max-w-md text-xs leading-5 text-ink-subtle">
+            <p className="mt-3 max-w-md text-[13px] leading-5 text-ink-muted">
               Зураг солихдоо зургаа хавсаргаад «3-р өдрийн зургийг соль» гэж бичнэ. uudamtravel.mn эсвэл хамтрагчийн
               хуудасны холбоосыг буулгаж болно. Нэг мессежид хэд хэдэн өөрчлөлт бичиж болно.
             </p>
@@ -414,7 +418,7 @@ export function AssistantTab({
             </button>
             <div className="mt-6 flex w-full items-center gap-3" aria-hidden="true">
               <span className="h-px flex-1 bg-line" />
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
+              <span className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">
                 {step ? "өөрчлөлт хийж байна" : "эсвэл шууд өөрчлөх"}
               </span>
               <span className="h-px flex-1 bg-line" />
@@ -424,7 +428,7 @@ export function AssistantTab({
             </div>
           </div>
         ) : (
-          <div className="mx-auto mt-auto w-full max-w-4xl space-y-4">
+          <div className="mx-auto mt-auto w-full max-w-6xl space-y-4">
           {messages.map((message) => (
             <ChatBubble
               key={message.id}
@@ -448,7 +452,7 @@ export function AssistantTab({
         )}
 
         {busy && (
-          <div className="mx-auto mt-4 flex w-full max-w-4xl justify-start">
+          <div className="mx-auto mt-4 flex w-full max-w-6xl justify-start">
             {progress != null ? (
               <FileProgress label={busyLabel} reported={Math.round(progress)} />
             ) : busyStages && busyStages.length > 0 && !busyLabel ? (
@@ -474,7 +478,8 @@ export function AssistantTab({
         <div ref={chatEndRef} />
       </div>
 
-      <div className="border-t border-line bg-surface p-3 sm:p-4">
+      <div className="shrink-0 border-t border-line bg-surface px-4 py-2.5 sm:px-6">
+        <div className="mx-auto w-full max-w-6xl">
         <div className={cx(
           "rounded-2xl border bg-surface shadow-xs transition-[border-color,box-shadow] duration-200 focus-within:ring-2",
           step
@@ -556,7 +561,7 @@ export function AssistantTab({
               }}
               rows={1}
               placeholder={placeholder}
-              className="scroll-area max-h-40 min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-2.5 text-sm leading-5 text-ink placeholder:text-ink-muted focus-visible:[box-shadow:none]"
+              className="scroll-area max-h-40 min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-2.5 text-[15px] leading-5 text-ink placeholder:text-ink-muted focus-visible:[box-shadow:none]"
             />
             <button
               type="button"
@@ -575,7 +580,7 @@ export function AssistantTab({
             </button>
           </div>
         </div>
-        <div id={`${composerId}-hint`} className="mt-2 flex items-center justify-between gap-3 px-1.5 text-[11px] leading-4 text-ink-subtle">
+        <div id={`${composerId}-hint`} className="mt-1.5 flex items-center justify-between gap-3 px-1.5 text-[12px] leading-4 text-ink-muted">
           {step ? (
             <span>
               {(stepPhase === "trip" || stepPhase === "value") && (
@@ -603,8 +608,9 @@ export function AssistantTab({
             <span className="shrink-0 font-mono" role="status">{aiInput.length.toLocaleString()} / {MAX_AI_INPUT_CHARS.toLocaleString()}</span>
           )}
         </div>
+        </div>
       </div>
-    </Card>
+    </div>
   );
 }
 
