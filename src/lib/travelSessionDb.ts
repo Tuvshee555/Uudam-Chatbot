@@ -170,7 +170,7 @@ export async function dbAppendStaffMessages(
 /**
  * Has a consultant written to this customer within `days` days? ('staff' rows, stored from the Page
  * thread and from echoes.) Such a customer is not a prospect: the bot does not try to sell them
- * alternatives (existingCustomer.ts). False when the database is unavailable.
+ * alternatives (dateMiss.ts). False when the database is unavailable.
  */
 export async function dbHasRecentStaffMessage(senderId: string, days = 30): Promise<boolean> {
   const ready = await ensureTravelSchema();
