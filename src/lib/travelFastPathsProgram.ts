@@ -32,6 +32,7 @@ import {
 } from "./travelFastPathsSearch";
 import { buildAmbiguousTripReply, formatExtraFeesLine, hasPriceIntent } from "./travelFastPathsPricing";
 import { replyPreferences } from "./chatbotReplyPolicy";
+import { aliasOccursInText } from "./aliasMatch";
 
 const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "хөтөлбөр",
@@ -224,7 +225,7 @@ export function buildTripProgramReply(
   const wantsFlight = queryWantsFlight(text);
   const exactMentionedTrips = trips.filter((trip) => {
     if (query.includes(normText(trip.route_name))) return true;
-    return getAliases(trip).some((alias) => query.includes(normText(alias)));
+    return getAliases(trip).some((alias) => aliasOccursInText(alias, text));
   });
   // A shared destination word is NOT the same as naming a trip. When several
   // tours visit the destination the customer said, that is precisely when the

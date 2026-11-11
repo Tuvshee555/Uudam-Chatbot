@@ -105,7 +105,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
     }
     if (/SELECT[\s\S]*FROM travel_trip_entries/i.test(sql)) {
       if (/WHERE\s+id\s*=\s*\$1/i.test(sql)) return result(catalog.filter(trip => trip.id === sender));
-      if (params[1] === "archived") return result();
+      if (params[1] === "archived") return result(catalog.filter(trip => trip.status === "archived"));
       return result(catalog);
     }
     if (/SELECT[\s\S]*FROM travel_bot_settings/i.test(sql)) return result([{

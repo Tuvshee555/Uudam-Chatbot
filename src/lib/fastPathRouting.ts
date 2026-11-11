@@ -43,7 +43,9 @@ import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
-import { getTripSelection, setTripSelection } from "./tripSelectionState";
+import { getRecentTripIds, getTripSelection, setTripSelection } from "./tripSelectionState";
+import { contrastCandidates } from "./tripContrast";
+import { pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
@@ -248,7 +250,7 @@ export async function routeFastPathText(input: {
    * the trips of the list the bot last offered, in order. Null = could not
    * tell (model down, bad output) and the keyword routing below decides.
    */
-  understand?: (pendingTripIds: string[], selection?: TripSelection | null) => Promise<Understanding | null>;
+  understand?: (pendingTripIds: string[], selection?: TripSelection | null, recentTripIds?: string[]) => Promise<Understanding | null>;
 }): Promise<FastPathRoute> {
   const { senderId, text, contextualUserText, trips } = input;
   const now = input.now || new Date();
@@ -282,9 +284,16 @@ export async function routeFastPathText(input: {
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
   const chose = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> => {
+    const offered = (await getClarificationState(senderId))?.candidateTripIds || [];
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
-    await setTripSelection(senderId, selection);
+    // The party belongs to the customer, not to one trip: a switch that states no head count keeps the
+    // one already given (fares differ per trip, the people do not). Date, hotel and package are the
+    // old trip's own and are not carried.
+    if (previousSelection && previousSelection.tripId !== trip.id && !selection.passengers.length && previousSelection.passengers.length) {
+      selection.passengers = previousSelection.passengers;
+    }
+    await setTripSelection(senderId, selection, offered);
     // A typed "3" picks the trip exactly as tapping its "3. <name>…" button does. As a
     // bare digit the turn asked for nothing, so no card was built and the free-text
     // model answered instead (or nothing was sent) — live replay 2026-10-30.
@@ -447,7 +456,7 @@ export async function routeFastPathText(input: {
   // follow-ups, "тэр", a date or length that narrows a destination — is read
   // once here instead of by keyword scoring.
   if (input.understand && !choice && !tappedOwnButton) {
-    const understanding = await input.understand(pendingTrips.map((trip) => trip.id), previousSelection);
+    const understanding = await input.understand(pendingTrips.map((trip) => trip.id), previousSelection, await getRecentTripIds(senderId));
     if (understanding) {
       if ((understanding.unmet || understanding.unknownRequirement) && understanding.trips.length > 0) {
         await clearClarificationState(senderId);
@@ -662,11 +671,31 @@ export async function routeFastPathText(input: {
   if (contextualUserText !== text && direct.status === "not_found" && isKnownGreetingPhrase(text)) {
     return { matchText: text, scopedClarify: null };
   }
+  // The model could not read the message, so the customer's own words decide. They still do not
+  // leave the trip they are on for a place word it contains or a transport word ("<хот>-оос нисэх
+  // үү" matched a sibling's TITLE), the same rule the model path applies (tripIdentity.ts).
+  const selectedTrip = previousSelection && !tappedOwnButton && !choice
+    ? trips.find((trip) => trip.id === previousSelection.tripId) : undefined;
+  if (selectedTrip && direct.status !== "not_found") {
+    const named = direct.status === "verified" ? [direct.trip] : direct.candidates;
+    const followsUp = buildTripRequest(text, trips, undefined, now).topics.length > 0 || pointsBackAtTrip(text);
+    if (followsUp && verdictAgainstAnchor(text, named, [selectedTrip], trips).kind === "stay") return chose(selectedTrip);
+  }
   // Our own button label never names a trip, however well it scores against
   // one — skip straight to context so the tap applies to the trip the
   // customer was actually looking at.
   if (direct.status === "verified" && !tappedOwnButton) {
     return { ...(await chose(direct.trip)), matchText: text };
+  }
+  // "Not that one, the other": the trip on screen is NOT the answer (tripContrast.ts).
+  if (selectedTrip) {
+    const contrast = contrastCandidates({ text, catalog: trips, selectedIds: [selectedTrip.id], stack: await getRecentTripIds(senderId) });
+    const meant = (contrast?.tripIds || []).map((id) => trips.find((trip) => trip.id === id)).filter((trip): trip is TravelTrip => Boolean(trip));
+    if (meant.length === 1) return chose(meant[0]);
+    if (meant.length > 1) {
+      await setClarificationState(senderId, meant.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: meant };
+    }
   }
   const followupRequest = previousSelection ? buildTripRequest(text, trips, undefined, now) : null;
   const passengerWords = text.toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/);

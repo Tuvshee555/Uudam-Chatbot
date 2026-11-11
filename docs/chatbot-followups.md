@@ -296,3 +296,19 @@ reason `delivery_failed:*` → Meta refused the reply; any other reason → proc
 run against the production database with placeholder page ids from `.env.local`. Now only the production
 deployment seeds page rows (a missing row means "not paused"); the five fixture rows were deleted, the two
 real pages kept.
+
+## P2-6 — Identity and context (branch `fix/understanding-routing`) — OPEN remainder
+Fixed on the branch (journeys `tests/understanding-routing-*.test.ts`): the selected trip stays the
+default unless the customer names something it lacks; transport words and the trip's own towns never
+switch it; "not that one, the other" resolves among the trips shown before; a weak alias inside a
+longer word names no trip; a named full trip is announced as full with the open ones; closed
+departures are called closed; a customer a consultant wrote to within 30 days is not sold
+alternatives on a date miss; clock times only from the itinerary; a list never answers a question
+none of its trips can answer. Still open (each a `test.todo` in `tests/understanding-routing-journeys.test.ts`):
+- A bare alias shared by a full trip and an open sibling names only the open sibling (not "one is
+  full, one is open").
+- Model unavailable: a genuine switch named by one destination word is offered as a one-trip menu
+  instead of being chosen.
+- An existing customer who names one trip and a date it does not depart on still gets that trip's
+  nearest departures (only the multi-trip date miss is silent). Owner decision: is that selling?
+- Instagram threads carry no consultant rows, so the existing-customer signal is Facebook-only.

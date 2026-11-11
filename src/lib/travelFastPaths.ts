@@ -64,6 +64,7 @@ import {
 } from "./travelFastPathsSearch";
 import { buildTripProgramReply } from "./travelFastPathsProgram";
 import { phoneticTokenMatches } from "./travelTextNorm";
+import { aliasOccursInText } from "./aliasMatch";
 import { CUSTOMER_TURN_MARK, customerTurn, intentTextOf, joinContextAndTurn } from "./customerTurn";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
@@ -1208,7 +1209,7 @@ function findCombinedDatePriceMatches(
     if (bestForTrip) {
       const finalMatch = bestForTrip as CombinedDatePriceMatch;
       if (query.includes(normText(trip.route_name))) finalMatch.score += 8;
-      if (getAliases(trip).some((alias) => query.includes(normText(alias)))) finalMatch.score += 5;
+      if (getAliases(trip).some((alias) => aliasOccursInText(alias, query))) finalMatch.score += 5;
       matches.push(finalMatch);
     }
   }
@@ -1404,7 +1405,16 @@ function buildUnavailableTripReply(
     ].join("\n");
   }
   if (!best) return null;
+  return buildUnavailableReplyForTrip(best, trips, status);
+}
 
+/**
+ * "This trip is full / paused" for a trip already identified (by the customer's words or by the
+ * router), with the open trips of the same destination. soldOutNamed.ts uses it when the router has
+ * chosen the unavailable trip itself.
+ */
+export function buildUnavailableReplyForTrip(best: TravelTrip, trips: TravelTrip[], status: "sold_out" | "paused"): string {
+  const wording = UNAVAILABLE_STATUS_WORDING[status];
   // An unavailable answer that stops there buries the sellable catalog: a
   // generic "<хот>" question was leading with the dead <city> trip while
   // three bookable <city> trips went unmentioned. Pitch ACTIVE trips that

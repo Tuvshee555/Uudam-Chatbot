@@ -22,8 +22,9 @@ import { hasUnsupportedOriginRequest, routeFastPathText, type FastPathRoute } fr
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { soldOutNamedReply } from "../../lib/soldOutNamed";
 import { decideTripAnswer } from "../../lib/tripAnswerDecision";
-import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
+import { getRecentTripIds, getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
 import { recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
@@ -243,8 +244,8 @@ export default async function handler(
         return sendJson(body);
       };
       const history = await getHistory(sessionId);
-      const [groundingSelection, groundingClarification] = await Promise.all([
-        getTripSelection(sessionId), getClarificationState(sessionId),
+      const [groundingSelection, groundingClarification, groundingRecent] = await Promise.all([
+        getTripSelection(sessionId), getClarificationState(sessionId), getRecentTripIds(sessionId),
       ]);
       const detectedPhone = extractPhoneNumber(normalizedText);
       const phoneCollected =
@@ -409,8 +410,8 @@ export default async function handler(
           history,
           trips: await getTrips(),
           understand: tripUnderstandingEnabled()
-            ? async (pendingTripIds, selection) =>
-                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, ask: understandingModel(trace) })
+            ? async (pendingTripIds, selection, recentTripIds) =>
+                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, recentTripIds, ask: understandingModel(trace) })
             : undefined,
         });
         currentSelection = routedCache.selection || null;
@@ -495,6 +496,17 @@ export default async function handler(
           await appendMessage(sessionId, "user", normalizedText);
           return returnHandoff();
         }
+        // Mirrors the webhook: a trip the customer named that is sold out or paused is announced
+        // as such before an answer plan prices it or a list of its siblings stands in for it.
+        const soldOutNamed = soldOutNamedReply({ routed: route, text: normalizedText, trips: await getTrips() });
+        if (soldOutNamed) {
+          const safeReply = appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(soldOutNamed)), phoneAlreadyRequested);
+          factualScope = tripsNamedIn(safeReply, await getTrips());
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
         const plan = await buildTripAnswerRuntime({ text: normalizedText, trips: await getTrips(), route });
         if (plan) {
           const decision = decideTripAnswer(plan, { userText: normalizedText,
@@ -503,7 +515,7 @@ export default async function handler(
           // A short answer may omit the trip name; validate its hidden identity
           // against customer evidence captured before the router selected it.
           const allowed = groundedTripIds({ customerText: normalizedText, history,
-            selectionTripId: groundingSelection?.tripId,
+            selectionTripId: groundingSelection?.tripId, recentTripIds: groundingRecent,
             pendingTripIds: groundingClarification?.candidateTripIds,
             trips: await getTrips() });
           currentSelection = plan.selection;
