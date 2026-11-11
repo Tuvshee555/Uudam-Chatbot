@@ -15,40 +15,15 @@
  * uses (Cyrillic/normalised and phonetic Latin), so Latin typing of the same endings is
  * covered.
  */
-import { normText, phoneticLatinText } from "./travelTextNorm";
-
-const CASE_ENDINGS_CYRILLIC = [
-  "ы", "ий", "ын", "ийн", "д", "т", "ыг", "ийг", "аас", "ээс", "оос", "өөс", "аар", "ээр", "оор", "өөр",
-  "тай", "тэй", "той", "төй", "ууд", "үүд", "ынх", "ийнх",
-];
-// The same endings as people type them in Latin letters.
-const CASE_ENDINGS_LATIN = ["yn", "iyn", "iin", "yg", "iyg", "iig", "tai", "tei", "toi", "uud", "uld",
-  "as", "aas", "es", "ees", "os", "oos", "us", "uus", "ar", "aar", "er", "eer", "or", "oor", "ur", "uur"];
-const LINKERS = ["", "г", "н", "g", "n"];
-
-function buildEndings(): ReadonlySet<string> {
-  const raw = new Set<string>(["н", "г", "n", "g"]);
-  for (const linker of LINKERS) {
-    for (const ending of [...CASE_ENDINGS_CYRILLIC, ...CASE_ENDINGS_LATIN]) raw.add(linker + ending);
-  }
-  const all = new Set<string>(raw);
-  // The phonetic spelling of an ending ("ээс" -> "es") is what the phonetic comparison sees.
-  for (const ending of raw) {
-    const phonetic = phoneticLatinText(ending);
-    if (phonetic) all.add(phonetic);
-  }
-  return all;
-}
-
-const CASE_ENDINGS = buildEndings();
+import { MIN_AFFIXED_WORD_LETTERS, isMongolianCaseEnding, normText, phoneticLatinText } from "./travelTextNorm";
 
 /** Below this many letters an alias word matches only as a whole word, never inside a longer one. */
-export const MIN_AFFIXED_ALIAS_LETTERS = 5;
+export const MIN_AFFIXED_ALIAS_LETTERS = MIN_AFFIXED_WORD_LETTERS;
 
 function wordCarriesAlias(word: string, alias: string): boolean {
   if (word === alias) return true;
   if (alias.length < MIN_AFFIXED_ALIAS_LETTERS || word.length <= alias.length || !word.startsWith(alias)) return false;
-  return CASE_ENDINGS.has(word.slice(alias.length));
+  return isMongolianCaseEnding(word.slice(alias.length));
 }
 
 function occursAsWords(aliasText: string, queryText: string): boolean {
