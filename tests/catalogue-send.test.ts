@@ -600,3 +600,21 @@ test("owner decision 2026-11-07: the Complete caption fits the broad request; a 
   assert.equal(catalogueEditionOfCaption(catalogueCaption("quick")), "quick");
   assert.equal(tripCodeAckText({ code: null, title: "ТЕСТ-АЯЛАЛ", groupSize: 25, month: 1 }), "ТЕСТ-АЯЛАЛ (25 хүн, 1-р сар) гэж бүртгэлээ. Манай ажилтан үнийн санал бэлтгэж, тантай холбогдоно.");
 });
+
+test("an out-of-date or missing file asks for a rebuild at once (the next customer gets the fresh PDF); a clean send does not", async () => {
+  // Owner, 2026-11-11: GitHub runs the 30-minute schedule only every few hours, so the bot itself starts the
+  // refresh the moment it has to send the website text instead of the PDF.
+  const asked: string[] = [];
+  const stale = harness();
+  stale.deps.requestRefresh = async (edition) => { asked.push(`stale:${edition}`); };
+  stale.stored.publish(makeVersion({ generatedAt: new Date(NOW - 40 * DAY).toISOString() }));
+  assert.equal((await deliverCatalogue(stale.request())).status, "stale_fallback");
+  const none = harness();
+  none.deps.requestRefresh = async (edition) => { asked.push(`none:${edition}`); };
+  assert.equal((await deliverCatalogue(none.request({ edition: "complete" }))).status, "no_published_version");
+  const fresh = harness();
+  fresh.deps.requestRefresh = async (edition) => { asked.push(`fresh:${edition}`); };
+  fresh.stored.publish(makeVersion());
+  assert.equal((await deliverCatalogue(fresh.request())).status, "sent");
+  assert.deepEqual(asked, ["stale:quick", "none:complete"]);
+});

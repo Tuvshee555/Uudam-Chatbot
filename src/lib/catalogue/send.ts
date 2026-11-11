@@ -69,6 +69,11 @@ export type GateVerdict = { status: "blocked_staff_owned" | "blocked_paused"; re
 
 export type SendDeps = {
   now: () => Date;
+  /**
+   * Ask for the published file to be rebuilt now (the bot just found it missing or out of date). Fire and
+   * forget: the customer already has the safe text; the next customer gets the fresh PDF.
+   */
+  requestRefresh?: (edition: CatalogueEdition) => Promise<void>;
   store: CatalogueSendStore;
   /** Is this conversation owned by a person, or is the bot paused? null = the bot may send. */
   gate: (senderId: string, pageId: string) => Promise<GateVerdict>;
@@ -101,9 +106,33 @@ export function catalogueFileUrl(token: string, env: Partial<NodeJS.ProcessEnv> 
   return base && token ? `${base}${CATALOGUE_PUBLIC_FILE_PATH}/${encodeURIComponent(token)}` : "";
 }
 
+const REFRESH_PING_GAP_MS = 10 * 60_000;
+const lastRefreshPing = new Map<string, number>();
+
+/** Pings the deployment's own refresh endpoint (it answers at once and rebuilds in the background). */
+async function pingRefresh(edition: CatalogueEdition): Promise<void> {
+  const base = (process.env.SITE_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "")).replace(/\/$/, "");
+  const secret = process.env.CRON_SECRET || "";
+  if (!base || !secret || edition === "preview") return;
+  const last = lastRefreshPing.get(edition) ?? 0;
+  if (Date.now() - last < REFRESH_PING_GAP_MS) return;
+  lastRefreshPing.set(edition, Date.now());
+  try {
+    await fetch(`${base}/api/cron/catalogue-refresh?async=1&edition=${edition}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    logInfo("catalogue.refresh_requested", { edition });
+  } catch (error) {
+    logWarn("catalogue.refresh_request_failed", { edition, message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 export function defaultSendDeps(): SendDeps {
   return {
     now: () => new Date(),
+    requestRefresh: pingRefresh,
     store: {
       getPublished: async (edition) => (await import("./store")).getPublished(edition),
       getVersionMeta: async (id) => (await import("./store")).getVersionMeta(id),
@@ -341,6 +370,7 @@ export async function deliverCatalogue(input: DeliverCatalogueInput): Promise<Ca
       const outcome = outcomeOf(input, plan.status, { versionId: plan.version?.id ?? null, reason: plan.reason });
       if (claim) await deps.store.finishSend(claim.sendId, { status: sent ? "stale_fallback" : "failed", reason: sent ? plan.reason : "stale_text_withheld" }).catch(() => false);
       logOutcome(input, outcome, { staleReasons: plan.freshness?.reasons.length ?? 0, ageDays: plan.freshness?.ageDays ?? null });
+      await deps.requestRefresh?.(input.edition).catch(() => undefined);
       await lead(plan.status === "no_published_version" ? "no_published_version" : "stale_fallback", plan.reason, plan.version, plan.freshness?.reasons.join("; ") || null);
       return outcome;
     }

@@ -30,6 +30,8 @@ export type DecideInput = {
   publishedTripIds: readonly string[] | null;
   /** Trip ids the live Complete edition would print now (only needed for "complete"). */
   liveTripIds: readonly string[] | null;
+  /** Changes that keep the file true but incomplete (new or passed dates): refresh, without being stale. */
+  pendingChanges?: number;
   nowIso: string;
 };
 
@@ -38,6 +40,7 @@ export function decideRefresh(input: DecideInput): RefreshDecision {
   const reasons: string[] = [];
   if (!input.published) return { refresh: true, reasons: ["none_published"] };
   if (input.freshness?.stale) reasons.push(`stale:${input.freshness.code}`);
+  if ((input.pendingChanges ?? 0) > 0) reasons.push("schedule_changed");
   const age = catalogueAgeDays(input.published.generatedAt, input.nowIso);
   if (age !== null && age > REFRESH_AFTER_DAYS) reasons.push("age");
   const generated = Date.parse(input.published.generatedAt);
@@ -100,14 +103,17 @@ export async function refreshCatalogues(opts: { now?: Date; only?: "quick" | "co
         let freshness: FreshnessVerdict | null = null;
         let publishedTripIds: string[] | null = null;
         let liveTripIds: string[] | null = null;
+        let pendingChanges = 0;
         if (published) {
-          freshness = evaluateFreshness({ published, nowIso, drift: await checkLiveDrift(published, nowIso) });
+          const drift = await checkLiveDrift(published, nowIso);
+          pendingChanges = drift?.pending?.length ?? 0;
+          freshness = evaluateFreshness({ published, nowIso, drift });
           publishedTripIds = ((await store.getVersionSnapshot(published.id))?.trips ?? []).map((trip) => trip.tripId);
           if (edition === "complete") {
             liveTripIds = data.buildCatalogueSnapshot(await data.loadSnapshotInput("complete", { nowIso })).trips.map((trip) => trip.tripId);
           }
         }
-        const decision = decideRefresh({ edition, published, freshness, configUpdatedAt: config.updatedAt, publishedTripIds, liveTripIds, nowIso });
+        const decision = decideRefresh({ edition, published, freshness, configUpdatedAt: config.updatedAt, publishedTripIds, liveTripIds, pendingChanges, nowIso });
         if (!decision.refresh) { results.push({ edition, status: "unchanged", reasons: [] }); continue; }
 
         const input = await data.loadSnapshotInput(edition, { nowIso, measurePhotos: true });

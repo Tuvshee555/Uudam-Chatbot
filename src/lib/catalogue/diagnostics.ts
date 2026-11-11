@@ -232,7 +232,7 @@ const fareText = (mnt: number | null) => (mnt === null ? "үнэгүй/бүрт�
  * passed), a new date, or a changed dated fare is drift. Old snapshots without `schedule` fall back to the
  * capped `departures` list.
  */
-function scheduleDrift(card: CatalogueTripCard, now: CatalogueTripCard, reasons: string[]): void {
+function scheduleDrift(card: CatalogueTripCard, now: CatalogueTripCard, reasons: string[], today: string, pending: string[]): void {
   const before = card.dates.schedule;
   const after = now.dates.schedule;
   if (!before || !after) {
@@ -245,13 +245,20 @@ function scheduleDrift(card: CatalogueTripCard, now: CatalogueTripCard, reasons:
   }
   const liveByDate = new Map(after.map((entry) => [entry.date, entry.adultMnt]));
   const publishedByDate = new Map(before.map((entry) => [entry.date, entry.adultMnt]));
-  const removed = before.filter((entry) => !liveByDate.has(entry.date)).map((entry) => entry.date);
+  // Only a printed date that is still in the future and no longer bookable makes the file wrong. A date that
+  // simply passed, or a new date that appeared (weekly trips roll new dates in every day), leaves everything
+  // the file says true: those are "pending" changes the scheduled refresh picks up, never a reason to
+  // withhold the PDF from a customer (owner, 2026-11-11: the bot sent the website text instead of the PDF).
+  const gone = before.filter((entry) => !liveByDate.has(entry.date));
+  const removed = gone.filter((entry) => entry.date > today).map((entry) => entry.date);
+  const passed = gone.filter((entry) => entry.date <= today).map((entry) => entry.date);
   const added = after.filter((entry) => !publishedByDate.has(entry.date)).map((entry) => entry.date);
+  if (passed.length) pending.push(`${cardLabel(card)} — ${passed.length} огноо өнгөрсөн`);
   if (removed.length) reasons.push(`${cardLabel(card)} — ${removed.slice(0, 3).join(", ")} огноо захиалгаас хасагдсан${removed.length > 3 ? ` (нийт ${removed.length})` : ""}`);
-  if (card.dates.nextDeparture !== now.dates.nextDeparture && !removed.length) {
+  if (card.dates.nextDeparture !== now.dates.nextDeparture && !removed.length && !passed.length && !added.length) {
     reasons.push(`${cardLabel(card)} — ойрын огноо өөрчлөгдсөн (${card.dates.nextDeparture ?? "—"} → ${now.dates.nextDeparture ?? "—"})`);
   }
-  if (added.length) reasons.push(`${cardLabel(card)} — шинэ огноо нэмэгдсэн (${added.slice(0, 3).join(", ")}${added.length > 3 ? ` +${added.length - 3}` : ""})`);
+  if (added.length) pending.push(`${cardLabel(card)} — шинэ огноо нэмэгдсэн (${added.slice(0, 3).join(", ")}${added.length > 3 ? ` +${added.length - 3}` : ""})`);
   const changed = before.filter((entry) => liveByDate.has(entry.date) && liveByDate.get(entry.date) !== entry.adultMnt);
   if (changed.length) {
     const first = changed[0];
@@ -274,9 +281,10 @@ function scheduleDrift(card: CatalogueTripCard, now: CatalogueTripCard, reasons:
  * A trip that only appears in the live snapshot is not drift: the published file is merely
  * older, nothing in it is false. Pure; the caller builds `live` with the same edition and config.
  */
-export function liveDrift(published: CatalogueSnapshot, live: CatalogueSnapshot): { drifted: boolean; reasons: string[] } {
+export function liveDrift(published: CatalogueSnapshot, live: CatalogueSnapshot): { drifted: boolean; reasons: string[]; pending: string[] } {
   const liveById = new Map(live.trips.map((card) => [card.tripId, card]));
   const reasons: string[] = [];
+  const pending: string[] = [];
   for (const card of published.trips) {
     const now = liveById.get(card.tripId);
     if (!now) {
@@ -286,7 +294,7 @@ export function liveDrift(published: CatalogueSnapshot, live: CatalogueSnapshot)
     if (priceSignature(card) !== priceSignature(now)) {
       reasons.push(`${cardLabel(card)} — огноот үнэ өөрчлөгдсөн (${card.price.display} → ${now.price.display})`);
     }
-    scheduleDrift(card, now, reasons);
+    scheduleDrift(card, now, reasons, live.asOfDay, pending);
     // A weekly trip has no calendar dates (departures [] and nextDeparture null on both sides), so the
     // printed schedule line ("Пүрэв гараг бүр") is the only date fact the card carries.
     if (!card.dates.departures.length && !now.dates.departures.length && card.dates.label !== now.dates.label) {
@@ -301,5 +309,5 @@ export function liveDrift(published: CatalogueSnapshot, live: CatalogueSnapshot)
       reasons.push(`${cardLabel(card)} — тээврийн төрөл өөрчлөгдсөн («${card.transportLabel || "—"}» → «${now.transportLabel || "—"}»)`);
     }
   }
-  return { drifted: reasons.length > 0, reasons };
+  return { drifted: reasons.length > 0, reasons, pending };
 }

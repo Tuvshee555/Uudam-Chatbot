@@ -21,7 +21,8 @@ const DAY_MS = 86_400_000;
 /** The live comparison reads every trip; once per version per few minutes is plenty. */
 const DRIFT_CACHE_MS = 5 * 60_000;
 
-export type LiveDrift = { drifted: boolean; reasons: string[] };
+/** `pending`: changes that leave the file true but incomplete (new or passed dates): refresh, never withhold. */
+export type LiveDrift = { drifted: boolean; reasons: string[]; pending?: string[] };
 
 export type FreshnessInput = {
   published: Pick<CatalogueVersionMeta, "generatedAt">;
