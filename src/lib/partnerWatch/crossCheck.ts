@@ -25,11 +25,19 @@ const money = (value: number) => `${value.toLocaleString("en-US")}₮`;
 
 /** "Citadines Bayfront Nha Trang *****" → "citadines bayfront nha trang". */
 const hotelKey = (value: unknown) => text(value).toLowerCase().replace(/[*★]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-const sameHotel = (a: unknown, b: unknown) => {
-  const x = hotelKey(a);
-  const y = hotelKey(b);
-  return Boolean(x && y) && (x.includes(y) || y.includes(x));
-};
+/** The hotels a cell names: "1 A ****, 2. B" / "A / B" / "A эсвэл B" → ["a", "b"] (list numbers and stars dropped). */
+export function hotelParts(value: unknown): string[] {
+  return text(value).split(/\s*(?:,|\/|;|\n|\s+эсвэл\s+|\s+or\s+)\s*/i)
+    .map((part) => hotelKey(part.replace(/^\s*\d{1,2}\s*[.)]?\s+/, ""))).filter(Boolean);
+}
+/** Two cells name the same hotel(s): every hotel of each is in the other ("A, B" = "B / A"; "A" ≈ "A Hotel"). */
+export function sameHotel(a: unknown, b: unknown): boolean {
+  const x = hotelParts(a);
+  const y = hotelParts(b);
+  if (!x.length || !y.length) return false;
+  const found = (part: string, list: string[]) => list.some((other) => part.includes(other) || other.includes(part));
+  return x.every((part) => found(part, y)) && y.every((part) => found(part, x));
+}
 
 function isoOf(row: ScheduleRow, now: Date): string | null {
   if (/^\d{4}-\d{2}-\d{2}$/.test(row.date)) return row.date;
@@ -85,8 +93,11 @@ export function completeFromSchedule(fields: Row, pageText: string, now = new Da
       }
       continue;
     }
-    // A row naming several hotels («A, B») already stands for both: not a missing option.
-    if (sameDay.some((row) => text(row.hotel).includes(",") && sameHotel(row.hotel, entry.hotel))) continue;
+    // The same prices as a row of that day: the same option named differently, not a missing hotel.
+    const amounts = entry.prices.map((price) => price.amount).sort((a, b) => a - b).join(",");
+    const rowAmounts = (row: Row) => [row.adult_price, ...records(row.passenger_prices).map((band) => band.price)]
+      .filter((value): value is number => typeof value === "number" && value > 0).sort((a, b) => a - b).join(",");
+    if (sameDay.some((row) => rowAmounts(row) === amounts)) continue;
     const built = rowFor(sameDay[0], entry, day);
     if (typeof built === "string") { skipped.push(`${entry.date} ${entry.hotel}: ${built}`); continue; }
     added.push(built);

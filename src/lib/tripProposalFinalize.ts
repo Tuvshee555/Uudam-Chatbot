@@ -380,9 +380,16 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
       }, route);
       // Nothing here stops the admin from saving; it only keeps an automatic import
       // (Drive sync) from saving a trip nobody looked at.
-      if (built.added > 0 || !detected.sure || typeof fields.adult_price !== "number") proposal.needs_confirmation = true;
+      // A trip priced per date (a schedule table) has its prices on the rows; the trip-wide fare is
+      // derived from them on save. Saying "no tugrug price" there was false (2026-11-11, 6 partner pages).
+      const rowPriced = (["price_groups", "departure_date_groups"] as const).some((key) => {
+        const list = record(fields.extra)[key];
+        return Array.isArray(list) && list.some((row) => typeof record(row).adult_price === "number" && (record(row).adult_price as number) >= MIN_TRIP_PRICE_MNT);
+      });
+      const unpriced = typeof fields.adult_price !== "number" && !rowPriced;
+      if (built.added > 0 || !detected.sure || unpriced) proposal.needs_confirmation = true;
       // What is still missing is said once, beside the field it belongs to (tripReview.ts).
-      if (typeof fields.adult_price !== "number") {
+      if (unpriced) {
         setConflictItem(proposal, { text: `«${route}»: файлд төгрөгийн зарах үнэ алга (юань, ландын үнийг үнэ гэж авахгүй). Нийтлэхийн өмнө том хүн, хүүхдийн үнийг оруулна.`, severity: "info", type: PRICE_MISSING, data: { route_name: route } }, route);
       } else {
         dropConflictItem(proposal, PRICE_MISSING, route);

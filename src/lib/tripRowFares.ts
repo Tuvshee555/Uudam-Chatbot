@@ -27,6 +27,35 @@ export function forwardAgeRange(value: string): string {
   return `${Number(match[2])}-${Number(match[1])}${match[3].replace(/^\s*/, " ")}`;
 }
 
+/**
+ * A numbered hotel list ("1 LARACINE ****, 2. Vinholidays Fiesta ****") is the source offering one or the
+ * other: written the house way, "LARACINE **** эсвэл Vinholidays Fiesta ****" (the hotel split rule both
+ * repos share). A single numbered hotel loses its number. Anything else is left as written.
+ */
+export function cleanHotelList(value: string): string {
+  const numbered = /(^|,|\n)\s*\d{1,2}\s*[.)]?\s+\S/;
+  if (!numbered.test(value)) return value;
+  const parts = value.split(/\s*(?:,|\n)\s*/).map((part) => part.replace(/^\s*\d{1,2}\s*[.)]?\s+/, "").trim()).filter(Boolean);
+  return parts.join(" эсвэл ");
+}
+
+/** Every row's hotel and the trip's hotel line cleaned (cleanHotelList). */
+export function cleanRowHotels(fields: Row): Row {
+  const extra = record(fields.extra);
+  const key = records(extra.price_groups).length ? "price_groups" : "departure_date_groups";
+  let changed = false;
+  const rows = records(extra[key]).map((row) => {
+    const hotel = text(row.hotel);
+    const clean = hotel ? cleanHotelList(hotel) : hotel;
+    if (clean === hotel) return row;
+    changed = true;
+    return { ...row, hotel: clean };
+  });
+  const tripHotel = typeof fields.hotel === "string" ? cleanHotelList(fields.hotel) : fields.hotel;
+  if (!changed && tripHotel === fields.hotel) return fields;
+  return { ...fields, hotel: tripHotel, extra: { ...extra, ...(changed ? { [key]: rows } : {}) } };
+}
+
 /** The source says infants travel free (notes, important notes, included items). */
 export function saysInfantsFree(fields: Row): boolean {
   const extra = record(fields.extra);
@@ -62,6 +91,10 @@ export function settleRowInfantFares(fields: Row): Row {
     return next;
   });
   const tripInfant = free && (fields.infant_price === null || fields.infant_price === undefined) ? { infant_price: 0 } : {};
-  if (!changed && !Object.keys(tripInfant).length) return fields;
-  return { ...fields, ...tripInfant, extra: { ...extra, ...(groups.length ? { [key]: rows } : {}) } };
+  // The trip's own age bands, the same way round ("12 – 2 нас" → "2-12 нас").
+  const ages = record(extra.age_rules);
+  const forwardAges = Object.fromEntries(Object.entries(ages).map(([key, value]) => [key, typeof value === "string" ? forwardAgeRange(value) : value]));
+  const agesChanged = JSON.stringify(forwardAges) !== JSON.stringify(ages);
+  if (!changed && !agesChanged && !Object.keys(tripInfant).length) return fields;
+  return { ...fields, ...tripInfant, extra: { ...extra, ...(groups.length ? { [key]: rows } : {}), ...(agesChanged ? { age_rules: forwardAges } : {}) } };
 }
