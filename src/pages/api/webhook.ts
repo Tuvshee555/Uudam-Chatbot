@@ -394,6 +394,8 @@ async function handleMessageTurn(
   // "<place> биш / хэрэггүй / орохгүй / -гүй / -аас бусад" rules that place out: only the rest is matched,
   // and the trips it names are left out of this turn's catalogue (negatedTrip.ts).
   const excludedTripIds = new Set<string>();
+  // The need gate reads the customer's own words: "<place> хэрэггүй" is part of a custom-route ask.
+  const textBeforeNegation = text;
   if (mayNegateTrip(text)) {
     const active = withoutHiddenTrips(await listTrips({ limit: 5000 })).filter((trip) => trip.status === "active").map(sanitizeTripForCustomers);
     const corrected = ruleOutNegatedTrips(text, active);
@@ -404,7 +406,7 @@ async function handleMessageTurn(
   // What the customer needs, read from their own words before any catalogue lookup (messageNeed.ts).
   const lastBotReply = history.findLast((message) => message.role === "assistant")?.text ?? null;
   const hasTripContext = Boolean(groundingSelection?.tripId) || Boolean(groundingPending?.candidateTripIds?.length);
-  const needHit = attachmentReply ? null : classifyMessageNeed(text, { lastBotReply, hasTripContext });
+  const needHit = attachmentReply ? null : classifyMessageNeed(textBeforeNegation, { lastBotReply, hasTripContext });
   // Non-blocking: the memory merge continues after the response via waitUntil.
   // It used to be awaited inline while holding the conversation lock, which
   // serialized a long model call behind every reply.
