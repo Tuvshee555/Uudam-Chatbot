@@ -76,8 +76,26 @@ const BARE_VERB_ENDING = /(?:маар|мээр|моор|мөөр|хаар|хээ
 const REFLEXIVE_ENDING = /(?:(?:тай|тэй|той|төй)(?:гаа|гээ|гоо|гөө)|аараа|ээрээ|оороо|өөрөө|тайгаа|тэйгээ)$/u;
 const COMITATIVE_ENDING = /(?:тай|тэй|той|төй|tai|tei)$/u;
 
+/** Chat typing doubles letters ("үеээр", "байнаа") and drops vowels ("ямр", "бн"): compare on a collapsed form. */
+const collapseRuns = (word: string) => word.replace(/(\p{L})\1+/gu, "$1");
+const VOWELS = /[аэиоуөүыеёюяaeiou]/gu;
+const skeleton = (word: string) => word.charAt(0) + word.slice(1).replace(VOWELS, "");
+const COLLAPSED_FUNCTION_WORDS = new Set([...FUNCTION_WORDS, ...CALENDAR_FOLLOWUP_WORDS].map(collapseRuns));
+const FUNCTION_SKELETONS = new Set([...FUNCTION_WORDS, ...CALENDAR_FOLLOWUP_WORDS].filter((word) => word.length >= 3).map(skeleton));
+
+/** A typed variant of a known function word: same word with doubled letters, or with its vowels left out. */
+function isTypedFunctionWord(word: string): boolean {
+  const collapsed = collapseRuns(word);
+  if (COLLAPSED_FUNCTION_WORDS.has(collapsed)) return true;
+  // Vowel-dropped typing only when the customer really dropped them (at most one vowel left), so a
+  // real place name full of vowels is never mistaken for a filler word.
+  const vowels = (collapsed.slice(1).match(VOWELS) || []).length;
+  return vowels <= 1 && collapsed.length <= 6 && FUNCTION_SKELETONS.has(skeleton(collapsed));
+}
+
 export function isVerbOrFunctionWord(word: string): boolean {
   if (FUNCTION_WORDS.has(word) || CALENDAR_FOLLOWUP_WORDS.has(word)) return true;
+  if (isTypedFunctionWord(word)) return true;
   // "аялал" in any case ("аяллыг", "аялалд") and its Latin spellings: the word for a trip is never a place.
   if (/^(?:аял|ayal|ayl)/u.test(word)) return true;
   if (BARE_VERB_ENDING.test(word) && word.length >= 5) return true;
