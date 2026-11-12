@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { launchWithRetry } from "../chromiumLaunch";
+import { launchWithRetry, sharedExecutablePath } from "../chromiumLaunch";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -68,7 +68,7 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
     "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   ].find(existsSync);
   const browser = await launchWithRetry(async () => playwright.launch({
-    executablePath: localExecutable || await chromium.executablePath(),
+    executablePath: localExecutable || await sharedExecutablePath(() => chromium.executablePath()),
     args: localExecutable ? [] : chromium.args, headless: true,
   }));
   try {

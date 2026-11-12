@@ -4,7 +4,7 @@
  * on Vercel. The page can load data: URLs only, runs no document script of its own, and every
  * measurement happens through page.evaluate.
  */
-import { launchWithRetry } from "../../chromiumLaunch";
+import { launchWithRetry, sharedExecutablePath } from "../../chromiumLaunch";
 import { existsSync } from "node:fs";
 import { chromium as playwright, type Browser, type Page } from "playwright-core";
 import chromium from "@sparticuz/chromium";
@@ -33,7 +33,7 @@ async function launch(): Promise<Browser> {
   const local = localBrowserPath();
   try {
     const browser = await launchWithRetry(async () => playwright.launch({
-      executablePath: local || (await chromium.executablePath()),
+      executablePath: local || (await sharedExecutablePath(() => chromium.executablePath())),
       args: local ? [] : chromium.args,
       headless: true,
     }));
