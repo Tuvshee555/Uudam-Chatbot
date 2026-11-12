@@ -44,6 +44,7 @@ import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTo
 import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
 import { CONTACT_OPERATOR_LABEL, isContactOperatorTap, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
+import { planReplyQuestion } from "../../lib/replyQuestion";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -511,7 +512,7 @@ export default async function handler(
         if (plan) {
           const decision = decideTripAnswer(plan, { userText: normalizedText,
             hasPriorReply: history.some((message) => message.role === "assistant"), phoneAlreadyRequested });
-          const reply = decision.reply;
+          let reply = decision.reply;
           // A short answer may omit the trip name; validate its hidden identity
           // against customer evidence captured before the router selected it.
           const allowed = groundedTripIds({ customerText: normalizedText, history,
@@ -523,6 +524,9 @@ export default async function handler(
           recordCounter("demo.answer_plan_total", 1, { status: decision.outcome });
           if (decision.outcome === "handoff" || !allowed.has(plan.tripId)) return returnHandoff();
           await setTripSelection(sessionId, plan.selection);
+          // The same next question Messenger adds to an answer that asks nothing (replyQuestion.ts); never followed up here.
+          reply = (await planReplyQuestion({ senderId: sessionId, platform: "website", failTag: "answer_plan", reply, decisionOutcome: decision.outcome,
+            customerText: normalizedText, history, trips: getTrips, isExistingCustomer: async () => false })).reply;
           const media = buildDemoMedia({ reply, userText: normalizedText, trips: factualScope || [], explicitMediaUrls: plan.mediaUrls, brochureUrl: plan.brochureUrl });
           await appendConversationMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
           await rememberTurn();

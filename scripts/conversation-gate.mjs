@@ -25,7 +25,9 @@ const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test
   "tests/understanding-routing-existing-customer.test.ts", "tests/understanding-holiday-journeys.test.ts", "tests/understanding-scenarios.test.ts",
   "tests/understanding-catalogue-need.test.ts", "tests/understanding-live-2026-11-11.test.ts", "tests/understanding-title-note.test.ts",
   "tests/understanding-fa-cal.test.ts", "tests/understanding-fa-ctx.test.ts", "tests/understanding-fa-need.test.ts",
-  "tests/understanding-checker-2026-11-11.test.ts"],
+  "tests/understanding-checker-2026-11-11.test.ts",
+  // Next question + 10-minute follow-up (owner 2026-11-12): the bot asks one useful thing, and once after silence.
+  "tests/understanding-next-question.test.ts", "tests/follow-up-journeys.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

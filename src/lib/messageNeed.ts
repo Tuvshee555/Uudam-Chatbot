@@ -16,6 +16,7 @@ import { normText, phoneticLatinText } from "./travelTextNorm";
 import { isBookingStatusQuestion } from "./bookedFollowup";
 import { isThanksOnly } from "./greetingPhrases";
 import { isGroupInquiryReply } from "./groupInquiry";
+import { withoutNextQuestion } from "./nextQuestionText";
 
 /** "policy" (visa, passport, insurance, travel documents) was added 2026-11-11 at the END, so every older value keeps its meaning. */
 export const MESSAGE_NEEDS = ["social", "business_group", "commercial_policy", "transport_only", "existing_booking", "complaint", "policy"] as const;
@@ -300,7 +301,9 @@ function socialKind(prepared: Prepared): SocialKind | null {
 
 /** A bare acknowledgement is only a close when the bot did not just ask the customer something. */
 function botAskedSomething(last: string | null | undefined): boolean {
-  const value = (last || "").trim();
+  // An open next question added to an answer ("Хэдэн хүн явах вэ?", nextQuestion.ts) is not something
+  // an "ok" answers: the answer before it decides, exactly as before those questions were added.
+  const value = withoutNextQuestion(last || "").trim();
   // The question mark may sit above a list of options ("Аль өдрөөр аялах вэ?\n• 3/15\n• 3/29"), so the closing
   // 240 characters are read, not just the last one.
   return /[?？]/.test(value.slice(-240)) || /(?:уу|үү|вэ|юу)[\s\p{Extended_Pictographic}️]*$/u.test(value)

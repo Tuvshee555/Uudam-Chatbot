@@ -1,0 +1,32 @@
+name: Follow-up questions
+
+# The one follow-up question to a customer who left the bot's answer on seen (src/lib/followUp.ts).
+# Reuses the partner-sync secret and URL: same CRON_SECRET, same deployment.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: follow-up-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Send due follow-up questions
+        env:
+          PARTNER_SYNC_URL: ${{ vars.PARTNER_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.PARTNER_SYNC_CRON_SECRET }}
+        run: |
+          test -n "$PARTNER_SYNC_URL" && test -n "$CRON_SECRET"
+          URL="${PARTNER_SYNC_URL%/api/cron/partner-sync}/api/cron/follow-up"
+          curl --fail-with-body --silent --show-error --retry 1 --retry-delay 10 \
+            --max-time 75 --request POST \
+            --header "Authorization: Bearer $CRON_SECRET" "$URL" \
+            --output "$RUNNER_TEMP/follow-up.json"
+          jq -e '.ok == true' "$RUNNER_TEMP/follow-up.json"
+          jq '{ok, disabled, deferred, candidates, sent, skipped}' "$RUNNER_TEMP/follow-up.json"

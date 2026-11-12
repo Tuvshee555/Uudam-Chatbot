@@ -52,6 +52,13 @@ export async function conversationGateHarness(context: TestContext, options: { e
   const echoes: Array<{ recipient: string; appId: string; classification: string; hasBotMetadata: boolean; deliveredBy: string; verdict: string }> = [];
   // Runs once at the next model call: something that happens while the bot is composing.
   let duringModel: (() => void) | null = null;
+  // The follow-up columns of travel_senders (followUp.ts) and each sender's platform (dbTrackSender).
+  const followUps = new Map<string, { slot: string; question: string; armedAt: string | null; sentAt: string | null }>();
+  const senderPlatform = new Map<string, string>();
+  // Runs once when this customer's Messenger thread is next read (e.g. a consultant takes over meanwhile).
+  const threadHooks = new Map<string, () => void>();
+  // The metadata each Messenger send carried (the bot's own marker makes the takeover guard apply).
+  const sendMetadata: Array<{ senderId: string; metadata: string | null }> = [];
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
   /** Waits (real time, up to 2 s) until fire-and-forget writes make `done` true. Only Date is mocked. */
   const settle = async (done: () => boolean) => {
@@ -59,6 +66,37 @@ export async function conversationGateHarness(context: TestContext, options: { e
   };
   const query = async (sql: string, params: unknown[] = []) => {
     const sender = String(params[0] ?? "");
+    // Follow-up arming, sweep and claim (followUp.ts). Times come from the mocked clock; each WHERE condition
+    // is applied only when the statement holds it, so a query that drops one is caught here.
+    if (/UPDATE travel_senders SET follow_up_slot = \$2, follow_up_question = \$3/i.test(sql)) {
+      followUps.set(sender, { slot: String(params[1]), question: String(params[2]), armedAt: new Date().toISOString(), sentAt: followUps.get(sender)?.sentAt ?? null });
+      return result();
+    }
+    if (/UPDATE travel_senders SET follow_up_slot = '', follow_up_question = ''/i.test(sql)) {
+      const state = followUps.get(sender);
+      if (state && (!/follow_up_armed_at = \$2/i.test(sql) || state.armedAt === new Date(String(params[1])).toISOString())) Object.assign(state, { slot: "", question: "" });
+      return result();
+    }
+    if (/SELECT sender_id, follow_up_slot AS slot/i.test(sql)) {
+      const [dueBy, windowStart, cooldown, limit] = params.map(String);
+      const holds = (condition: string) => sql.includes(condition);
+      return result([...followUps.entries()].filter(([id, state]) => state.slot && state.question && state.armedAt
+        && (!holds("platform = 'facebook'") || senderPlatform.get(id) === "facebook") && (!holds("NOT LIKE 'demo:%'") || !id.startsWith("demo:"))
+        && state.armedAt <= new Date(dueBy).toISOString()
+        && (!holds("follow_up_armed_at > $2") || state.armedAt > new Date(windowStart).toISOString())
+        && (!holds("follow_up_sent_at < $3") || !state.sentAt || state.sentAt < new Date(cooldown).toISOString()))
+        .sort((a, b) => String(a[1].armedAt).localeCompare(String(b[1].armedAt))).slice(0, Number(limit))
+        .map(([id, state]) => ({ sender_id: id, slot: state.slot, question: state.question, armed_at: state.armedAt })));
+    }
+    if (/UPDATE travel_senders SET follow_up_sent_at = \$3/i.test(sql)) {
+      const state = followUps.get(sender);
+      const fresh = state && state.slot && state.armedAt === new Date(String(params[1])).toISOString()
+        && (!sql.includes("follow_up_sent_at < $4") || !state.sentAt || state.sentAt < new Date(String(params[3])).toISOString());
+      if (!fresh) return result();
+      Object.assign(state, { sentAt: new Date(String(params[2])).toISOString(),
+        ...(sql.includes("follow_up_slot = ''") ? { slot: "", question: "" } : {}) });
+      return result([{ sender_id: sender }]);
+    }
     if (/INSERT INTO travel_outbound_messages/i.test(sql)) {
       if (!outbound.has(sender)) outbound.set(sender, { recipient: String(params[1] ?? ""), at: Date.now() });
       return result();
@@ -162,6 +200,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
       pauses.set(sender, { paused: true, expires_at: String(params[2]), pause_reason: String(params[1]) }); return result();
     }
     if (/INSERT INTO travel_senders \(sender_id, platform,/i.test(sql)) {
+      senderPlatform.set(sender, String(params[1] ?? ""));
       seen.set(sender, (seen.get(sender) || 0) + 1);
       return result([{ msg_count: seen.get(sender), prev_msg_at: null, get_started_at: null }]);
     }
@@ -213,6 +252,8 @@ export async function conversationGateHarness(context: TestContext, options: { e
     }
     if (/^https:\/\/graph\.facebook\.com\/[^/]+\/me\/conversations\?platform=messenger&user_id=/.test(url)) {
       const customer = new URL(url).searchParams.get("user_id") || "";
+      const hook = threadHooks.get(customer);
+      if (hook) { threadHooks.delete(customer); hook(); }
       const script = threads.get(customer);
       if (script && "fail" in script) {
         if (script.fail === "timeout") throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
@@ -234,7 +275,10 @@ export async function conversationGateHarness(context: TestContext, options: { e
       if (failingRecipients.has(String(body.recipient?.id || ""))) {
         return new Response(JSON.stringify({ error: { message: "(#100) Length of param message[text] must be less than or equal to 2000", code: 100 } }), { status: 400 });
       }
-      if (body.message?.text) sends.push({ senderId: String(body.recipient?.id || ""), text: body.message.text });
+      if (body.message?.text) {
+        sends.push({ senderId: String(body.recipient?.id || ""), text: body.message.text });
+        sendMetadata.push({ senderId: String(body.recipient?.id || ""), metadata: body.message.metadata ?? null });
+      }
       return new Response(JSON.stringify({ recipient_id: body.recipient?.id || "fixture", message_id: `fixture-${++serial}`, data: [] }), { status: 200 });
     }
     blockedNetwork.push(url);
@@ -244,6 +288,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
   env.resetEnvCacheForTests();
   const webhook = await import("../../src/pages/api/webhook");
   const demo = await import("../../src/pages/api/demo");
+  const followUpCron = await import("../../src/pages/api/cron/follow-up");
   const { getTripSelection } = await import("../../src/lib/tripSelectionState");
   const { closeNeonPool } = await import("../../src/lib/neonDb");
   /** POST one signed webhook delivery and collect the handler's effects. */
@@ -286,7 +331,24 @@ export async function conversationGateHarness(context: TestContext, options: { e
     const senderId = `demo:${conversationId}`;
     return { status, body, selection: await getTripSelection(senderId), history: history.filter(row => row.sender_id === senderId) };
   };
-  return { turn, demoTurn, history, leads, models, blockedNetwork, logs,
+  /** One run of the follow-up sweep (/api/cron/follow-up), as the 5-minute workflow calls it. */
+  const runFollowUpCron = async (headers: Record<string, string> = {}) => {
+    const beforeSend = sends.length;
+    let status = 200;
+    let body: Record<string, unknown> = {};
+    const req = { method: "POST", url: "/api/cron/follow-up", query: {}, headers };
+    const res = { status(code: number) { status = code; return res; }, json(value: Record<string, unknown>) { body = value; return res; },
+      send() { return res; }, end() { return res; }, setHeader() {}, get statusCode() { return status; } };
+    await followUpCron.default(req as never, res as never);
+    return { status, body, sends: sends.slice(beforeSend) };
+  };
+  return { turn, demoTurn, history, leads, models, blockedNetwork, logs, runFollowUpCron,
+    /** The follow-up columns of travel_senders for this customer (followUp.ts). */
+    followUpState(senderId: string) { return followUps.get(senderId) ?? null; },
+    /** Runs `hook` once, when this customer's Messenger thread is next read. */
+    onThreadRead(senderId: string, hook: () => void) { threadHooks.set(senderId, hook); },
+    /** The metadata of every Messenger text send so far. */
+    sendMetadata() { return [...sendMetadata]; },
     /** Meta rejects every message to this customer (as the over-long replies of 2026-10-24). */
     failSends(senderId: string, failing = true) { if (failing) failingRecipients.add(senderId); else failingRecipients.delete(senderId); },
     catalog(value: FixtureTrip[]) { catalog = value; webhook.resetWebhookStateForTests(); },

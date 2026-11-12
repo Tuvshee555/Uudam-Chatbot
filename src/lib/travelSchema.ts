@@ -598,6 +598,19 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS takeover_source TEXT NOT NULL DEFAULT '';
       `);
+      // The one follow-up question after a customer leaves the bot's answer on seen (followUp.ts):
+      // what the last answer armed and when ('' = nothing armed), and when one was last sent.
+      await client.query(`
+        ALTER TABLE travel_senders
+          ADD COLUMN IF NOT EXISTS follow_up_slot     TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS follow_up_question TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS follow_up_armed_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS follow_up_sent_at  TIMESTAMPTZ NULL;
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_senders_follow_up
+          ON travel_senders (follow_up_armed_at) WHERE follow_up_slot <> '';
+      `);
       // Model spend per day, environment, model and call site (aiUsage.ts): production and
       // testing are always counted apart.
       await client.query(`

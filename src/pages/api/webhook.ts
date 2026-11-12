@@ -121,6 +121,7 @@ import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpl
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 import { placeWeatherAnswer } from "../../lib/placeWeather";
 import { catalogueFollowupLabel, handleCatalogueTurn, handleTesterPairingTurn, noteBlockedCatalogueRequest } from "../../lib/webhookCatalogue";
+import { planReplyQuestion, settleFollowUp } from "../../lib/replyQuestion";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
@@ -454,6 +455,10 @@ async function handleMessageTurn(
       ruledOutTripIds: [...excludedTripIds],
     });
   let currentSelection: TripSelection | null = null;
+  // What the next-question hook reads at both exits (replyQuestion.ts); staff-owned customers get none.
+  const questionContext = () => ({ senderId, platform, customerText: text, history, trips: getGroundingTrips,
+    staffOwned: waitingForConsultant || pauseAfterContactCapture,
+    isExistingCustomer: async () => (existingCustomer ??= await dbHasRecentStaffMessage(senderId)) });
   const deliverFastPathReply = async (input: {
     reply: string;
     failTag: string;
@@ -471,7 +476,7 @@ async function handleMessageTurn(
     });
     const verificationScope = input.verifyConfiguredFacts ? await getGroundingTrips()
       : input.catalogTripIds ? (await getGroundingTrips()).filter(trip => input.catalogTripIds!.includes(trip.id)) : factualScope;
-    const reply = verificationScope && !input.decision
+    let reply = verificationScope && !input.decision
       ? verifyTripReply({ reply: presented, trips: verificationScope, selection: currentSelection })
       : presented;
     const missingData = input.decision ? input.decision.outcome === "handoff" : isReferReply(reply) || shouldSilenceNoDataReply(reply);
@@ -515,6 +520,9 @@ async function handleMessageTurn(
       return false;
     }
     noteInbound((outcome) => { outcome.route = input.failTag; });
+    // A trip answer that asks nothing gets the next question; the reply arms the follow-up (replyQuestion.ts).
+    const asked = await planReplyQuestion({ ...questionContext(), failTag: input.failTag, reply, decisionOutcome: input.decision?.outcome });
+    reply = asked.reply;
     recordReplyPresentation({ reply, userText: text, path: "webhook_code", latencyMs: Date.now() - replyStartedAt });
     await assertLockHealthy();
     let delivered: boolean;
@@ -587,6 +595,7 @@ async function handleMessageTurn(
         classification: classifyError(error),
       });
     }
+    await settleFollowUp(senderId, asked);
     if (!noDataReply && input.afterDeliver) await input.afterDeliver();
     await rememberTurn(noDataReply ? `${input.rememberSource}_handoff` : input.rememberSource);
     if (pauseAfterContactCapture) await pauseBookedCustomer(senderId);
@@ -2205,6 +2214,8 @@ async function handleMessageTurn(
     });
     return;
   }
+  // The model's answer is never extended; it only arms the follow-up (replyQuestion.ts).
+  const asked = await planReplyQuestion({ ...questionContext(), failTag: "model_reply", reply: safeReply });
   recordReplyPresentation({ reply: safeReply, userText: text, path: "webhook_ai", latencyMs: Date.now() - replyStartedAt });
   let replyButtons: string[] = [...aiButtons];
   if (platform === "facebook") {
@@ -2274,6 +2285,7 @@ async function handleMessageTurn(
       classification: classifyError(error),
     });
   }
+  await settleFollowUp(senderId, asked);
   await rememberTurn("api.webhook.reply");
   await sendTripMediaForReply(
     platform,
