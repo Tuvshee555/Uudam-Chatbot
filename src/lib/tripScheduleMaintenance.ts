@@ -7,12 +7,37 @@
 import { waitUntil } from "@vercel/functions";
 import { queryNeon } from "./neonDb";
 import { flushWebsiteSync } from "./websiteTripSync";
-import { prunePastDepartureDates, type ResolvedDepartureDate } from "./travelDates";
+import { parseTripDepartureDateText, prunePastDepartureDates, type ResolvedDepartureDate } from "./travelDates";
 import { normalizeExtra } from "./tripExtraSchema";
 import type { TravelTrip } from "./travelTypes";
 
 function cloneExtra(extra: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(extra || {})) as Record<string, unknown>;
+}
+
+const DEADLINE = /(\d{1,2})\s*[/.]\s*(\d{1,2})\s*-?\s*(?:аас|ээс|оос|өөс|с)?\s*(?:өмнө|хүртэл)/iu;
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * The last day of a trip sold on request until a deadline ("12/15-аас өмнөх өдрүүдэд хамт олны захиалгаар"):
+ * only when the trip has no departure date at all, and the deadline's year is written in the trip's own
+ * name or notes ("… - 2026-12-15-с өмнөх …"); a yearless deadline is never guessed. Null otherwise.
+ */
+export function requestWindowEnd(trip: TravelTrip): string | null {
+  const texts = (trip.departure_dates || []).map((value) => String(value || ""));
+  if (!texts.length || texts.some((value) => parseTripDepartureDateText(value).length)) return null;
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const own = [trip.route_name, trip.notes, ...(Array.isArray(extra.important_notes) ? extra.important_notes.map(String) : [])].join(" ");
+  for (const value of texts) {
+    const match = DEADLINE.exec(value);
+    if (!match) continue;
+    const month = Number(match[1]);
+    const day = Number(match[2]);
+    const year = new RegExp(`(20\\d{2})\\s*[-./]\\s*0?${month}\\s*[-./]\\s*0?${day}(?!\\d)`).exec(own)?.[1]
+      || new RegExp(`(20\\d{2})\\s*оны\\s*0?${month}\\s*(?:-?р\\s*)?сарын\\s*0?${day}(?!\\d)`, "iu").exec(own)?.[1];
+    if (year) return `${year}-${pad2(month)}-${pad2(day)}`;
+  }
+  return null;
 }
 
 export function sanitizeTripScheduleForCurrentDate(
@@ -34,6 +59,13 @@ export function sanitizeTripScheduleForCurrentDate(
       archived_reason: missingDepartureDates ? "no_departure_dates" : "all_departure_dates_passed",
       archived_at: now.toISOString(),
     };
+    changed = true;
+  }
+  // A trip sold on request until a deadline closes after it (its own reason: it never reopens by itself).
+  const windowEnd = trip.status === "active" && nextStatus === "active" ? requestWindowEnd(trip) : null;
+  if (windowEnd && new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10) > windowEnd) {
+    nextStatus = "archived";
+    nextExtra = { ...nextExtra, archived_reason: "request_window_passed", archived_at: now.toISOString() };
     changed = true;
   }
   if (

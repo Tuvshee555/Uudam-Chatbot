@@ -39,6 +39,17 @@ export function cleanHotelList(value: string): string {
   return parts.join(" эсвэл ");
 }
 
+/**
+ * A new trip's title without its length in brackets ("… аялал (8 өдөр) МИАТ чартер нислэг" → "… аялал МИАТ
+ * чартер нислэг"): the length is the trip's own field and is shown beside the title on the site and in
+ * the bot; written twice it went stale when the program changed. The admin removed it by hand until 2026-11-12.
+ */
+export function cleanTripTitle(fields: Row): Row {
+  const title = text(fields.route_name);
+  const clean = title.replace(/\s*\(\s*\d+\s*(?:өдөр|хоног)(?:\s*[/,]?\s*\d+\s*шөнө)?\s*\)\s*/giu, " ").replace(/\s{2,}/g, " ").trim();
+  return clean && clean !== title ? { ...fields, route_name: clean } : fields;
+}
+
 /** Every row's hotel and the trip's hotel line cleaned (cleanHotelList). */
 export function cleanRowHotels(fields: Row): Row {
   const extra = record(fields.extra);
@@ -85,6 +96,12 @@ export function settleRowInfantFares(fields: Row): Row {
     if (free && !infantBand) {
       bands = [...bands, { label: "Нярай", age_range: infantAge, price: 0, currency: "MNT", note: "Үнэгүй" }];
       next.infant_price = 0;
+      changed = true;
+    } else if (!infantBand && bands.length && typeof next.infant_price === "number" && next.infant_price >= 0) {
+      // An infant fare kept only on the row («Нярай: 700.000») becomes a band like the others: the review's
+      // table, the poster and the fare card all read the bands (it was invisible in the review, 2026-11-12).
+      const price = next.infant_price;
+      bands = [...bands, { label: "Нярай", age_range: infantAge, price, currency: "MNT", ...(price === 0 ? { note: "Үнэгүй" } : {}) }];
       changed = true;
     }
     if (bands.length) next.passenger_prices = bands;

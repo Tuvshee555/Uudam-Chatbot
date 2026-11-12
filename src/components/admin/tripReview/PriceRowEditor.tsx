@@ -19,7 +19,7 @@ import {
 import { INVERTED_BAND_TEXT, cardWhere, invertedBands } from "@/lib/tripReviewProblems";
 import { PassengerBandRow } from "../tripEditor/PricingEditor";
 import { Checkbox, Field, MoneyField, TextInput } from "../tripEditor/parts";
-import { AddChips, linkButton } from "./ReviewParts";
+import { AddChips, linkButton, useReturnFocus } from "./ReviewParts";
 import { cardFields, type CardField, type PriceColumn } from "./reviewView";
 
 type Row = Record<string, unknown>;
@@ -66,10 +66,11 @@ export function PriceRowEditor({ card, cards, years, hasAll, columns, showAll, f
     setRevealed((current) => new Set([...current, `${card.key}:${field}`]));
     window.requestAnimationFrame(() => document.getElementById(id(field))?.focus());
   };
+  const panel = useReturnFocus();
   const optionalChips = [...chips, ...(own ? [{ key: "bands" as const, label: "Өөр насны ангилал" }] : [])];
 
   return (
-    <div role="group" aria-label={`Үнэ засах: ${cardWhere(card, years)}`}
+    <div ref={panel} role="group" aria-label={`Үнэ засах: ${cardWhere(card, years)}`}
       onKeyDown={(event) => { if (event.key === "Escape" && !(event.target instanceof HTMLSelectElement)) { event.preventDefault(); onClose(); } }}
       className="mx-0 mb-4 mt-1 rounded-xl border border-brand-border bg-surface p-4 shadow-[0_8px_24px_-18px_rgb(15_118_110/0.45)] sm:mx-2 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">

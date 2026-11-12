@@ -3,7 +3,7 @@
  * optional field folds into, the panel a click opens under what it edits, and inputs that read as
  * the page's own text until they are clicked (a value is edited where it is shown).
  */
-import type { InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import { useEffect, useRef, useState, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { Icons, cx } from "@/components/ui";
 import type { Chip } from "./reviewView";
 
@@ -54,7 +54,26 @@ export function AddChips<K extends string>({ chips, onAdd, className, label = "�
   );
 }
 
-/** The panel a click opens under what it edits; «Болсон» or Escape closes it. */
+/**
+ * Closing a panel gives the focus back to what opened it (the fare, chip or date), so a keyboard user
+ * goes on where they were. Only when the focus was inside the panel or nowhere: a click elsewhere wins.
+ */
+export function useReturnFocus() {
+  const [opener] = useState<HTMLElement | null>(() => (typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null));
+  const panel = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const element = panel.current;
+    return () => {
+      const active = typeof document !== "undefined" ? document.activeElement : null;
+      if (opener?.isConnected && (!active || active === document.body || (element && element.contains(active)))) {
+        window.requestAnimationFrame(() => opener.focus());
+      }
+    };
+  }, [opener]);
+  return panel;
+}
+
+/** The panel a click opens under what it edits; «Болсон» or Escape closes it (the focus goes back). */
 export function EditPanel({ title, onClose, children, target, className }: {
   title: ReactNode;
   onClose: () => void;
@@ -62,8 +81,9 @@ export function EditPanel({ title, onClose, children, target, className }: {
   target?: string;
   className?: string;
 }) {
+  const panel = useReturnFocus();
   return (
-    <div data-review-target={target} role="group" aria-label={typeof title === "string" ? title : undefined}
+    <div ref={panel} data-review-target={target} role="group" aria-label={typeof title === "string" ? title : undefined}
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}
       className={cx("mt-3 scroll-mt-24 rounded-xl border border-brand-border bg-surface p-4 shadow-[0_1px_0_rgb(0_0_0/0.02),0_8px_24px_-16px_rgb(15_118_110/0.35)] sm:p-5", className)}>
       <div className="mb-3 flex items-center justify-between gap-3">

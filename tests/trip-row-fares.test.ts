@@ -45,3 +45,18 @@ test("a real infant band is left alone", () => {
   assert.equal(settled.infant_price, 300_000);
   assert.equal((settled.passenger_prices as Row[]).length, 2);
 });
+
+test("an infant fare kept only on the row becomes a band; the title loses its bracketed length", async () => {
+  const { cleanTripTitle } = await import("../src/lib/tripRowFares");
+  const own = fields([]);
+  const row = firstRow(own);
+  row.passenger_prices = [{ label: "Хүүхэд", age_range: "2-11 нас", price: 800_000 }];
+  row.infant_price = 300_000;
+  const settled = firstRow(settleRowInfantFares(own));
+  assert.deepEqual((settled.passenger_prices as Row[]).at(-1), { label: "Нярай", age_range: "2-оос доош нас", price: 300_000, currency: "MNT" });
+  assert.equal(cleanTripTitle({ route_name: "НОРВЕЛ арлын аялал (8 өдөр) чартер нислэг" }).route_name, "НОРВЕЛ арлын аялал чартер нислэг");
+  assert.equal(cleanTripTitle({ route_name: "НОРВЕЛ (8 өдөр 7 шөнө)" }).route_name, "НОРВЕЛ");
+  assert.equal(cleanTripTitle({ route_name: "НОРВЕЛ (8 хоног)" }).route_name, "НОРВЕЛ");
+  const plain = { route_name: "НОРВЕЛ 2 хот" };
+  assert.equal(cleanTripTitle(plain), plain);
+});
