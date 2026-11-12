@@ -297,18 +297,28 @@ run against the production database with placeholder page ids from `.env.local`.
 deployment seeds page rows (a missing row means "not paused"); the five fixture rows were deleted, the two
 real pages kept.
 
-## P2-6 — Identity and context (branch `fix/understanding-routing`) — OPEN remainder
+## P2-6 — Identity and context — OPEN remainder (owner decision + Instagram data)
 Fixed on the branch (journeys `tests/understanding-routing-*.test.ts`): the selected trip stays the
 default unless the customer names something it lacks; transport words and the trip's own towns never
 switch it; "not that one, the other" resolves among the trips shown before; a weak alias inside a
 longer word names no trip; a named full trip is announced as full with the open ones; closed
 departures are called closed; a customer a consultant wrote to within 30 days is not sold
 alternatives on a date miss; clock times only from the itinerary; a list never answers a question
-none of its trips can answer. Still open (each a `test.todo` in `tests/understanding-routing-journeys.test.ts`):
-- A bare alias shared by a full trip and an open sibling names only the open sibling (not "one is
-  full, one is open").
-- Model unavailable: a genuine switch named by one destination word is offered as a one-trip menu
-  instead of being chosen.
+none of its trips can answer.
+**Fixed 2026-11-12.** A nickname carried by a full trip AND an open sibling no longer names the open one
+alone (it quoted the open trip's price as the answer about the full one): when the customer's own words do
+not clearly favour the open trip (score lead under 5), the reply says the full trip is full and lists the
+open ones, the chosen one among them (`soldOutNamed.ts`, journey in
+`tests/understanding-routing-unavailable.test.ts`, fails without the fix). Only on the turn the trip enters
+the conversation; a trip typed in full, or already chosen, is answered as before. Model unavailable: a
+switch named by one destination word already chooses that trip (260 combinations swept, no one-trip menu);
+now guarded by a journey in `tests/understanding-routing-journeys.test.ts`.
+Measured read-only on the live catalogue (2,084 real non-demo messages, 60 days): 30 change, all one pair (a full
+direct-flight trip and its open land+flight sibling sharing the landmark name), including "<landmark> шууд аялалын
+мэдээлэл" and "<landmark> Суудал дүүрсэн юм уу", which used to get the land+flight card. A menu tap on the open trip is
+unchanged. Small open item: the full-trip notice is a bulleted list, so a bare "1" under it (here and in case 13) is
+silence + a lead rather than a pick; the name or "эхнийх" works.
+Still open (each a `test.todo` in `tests/understanding-routing-journeys.test.ts`):
 - An existing customer who names one trip and a date it does not depart on still gets that trip's
   nearest departures (only the multi-trip date miss is silent). Owner decision: is that selling?
 - Instagram threads carry no consultant rows, so the existing-customer signal is Facebook-only.

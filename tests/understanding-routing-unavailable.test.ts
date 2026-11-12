@@ -97,3 +97,47 @@ test("case 13: the demo chat says the same as Messenger", async (context: TestCo
     await harness.close();
   }
 });
+
+test("a nickname shared by the full trip and an open sibling says the full one is full, then offers the open one", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog(namedFullCatalog("SOLD_OUT"));
+  const OPEN_SIBLING = "ЗОРЕНТЫН ХААЛГАНЫ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ";
+  try {
+    // "Зорентын хаалга" and "Mirova" are aliases of BOTH trips; the full one is the direct flight.
+    for (const text of ["Зорентын хаалга аялал үнэ хэд вэ", "зорентын хаалга", "mirova une"]) {
+      for (const [label, model] of readings.filter(([name]) => name !== "the model reads the full trip")) {
+        const result = await harness.turn(`rt-alias-${text}-${label}`, text, model);
+        const said = textOf(result.sends);
+        if (!result.sends.length) {
+          assert.ok(result.leads.length > 0, `"${text}" ${label}: silence without a staff lead`);
+          continue;
+        }
+        assert.ok(said.includes(NAMED) && /дууссан|дүүрсэн/.test(said), `"${text}" ${label}: the full trip is named as full: ${said}`);
+        assert.ok(said.includes(OPEN_SIBLING), `"${text}" ${label}: the open sibling is offered: ${said}`);
+        assert.ok(said.search(/дууссан|дүүрсэн/) < said.indexOf("2,750,000"), `"${text}" ${label}: full first, the open fare after: ${said}`);
+      }
+    }
+    // The open sibling's own full name names it alone: its card, no notice about the other trip.
+    const exact = await harness.turn("rt-alias-exact", `${OPEN_SIBLING} үнэ`, { topics: ["price"] });
+    assert.ok(textOf(exact.sends).includes("2,750,000"), `the open trip's fare: ${textOf(exact.sends)}`);
+    assert.doesNotMatch(textOf(exact.sends), /дууссан|дүүрсэн/, `no full notice for a trip named in full: ${textOf(exact.sends)}`);
+    // A customer who already chose the open trip is not told about the full one again.
+    const chosen = "rt-alias-chosen";
+    await harness.turn(chosen, `${OPEN_SIBLING} үнэ`, { topics: ["price"] });
+    const again = await harness.turn(chosen, "Зорентын хаалга хэдэн өдөр вэ", { topics: ["duration"] });
+    assert.doesNotMatch(textOf(again.sends), /дууссан|дүүрсэн/, `the chosen open trip keeps the conversation: ${textOf(again.sends)}`);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("a shared nickname while both trips are open is not announced as full", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog(namedFullCatalog("OPEN"));
+  try {
+    const result = await harness.turn("rt-alias-open", "Зорентын хаалга аялал үнэ хэд вэ", { topics: ["price"] });
+    assert.doesNotMatch(textOf(result.sends), /дууссан|дүүрсэн/, `nothing is full: ${textOf(result.sends)}`);
+  } finally {
+    await harness.close();
+  }
+});

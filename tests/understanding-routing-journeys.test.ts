@@ -238,7 +238,26 @@ test("a list answers 'which trip?', not a question none of the listed trips can 
 });
 
 // Known open failures of this stream (kept visible, owner's rule): none of them is a wrong confident answer.
-test.todo("a bare alias shared by a full trip and an open sibling is announced as 'one is full, one is open' (today the open sibling is named alone)");
-test.todo("model unavailable: a genuine switch to a trip named by one destination word is offered as a menu of ONE trip instead of being chosen");
+// Fixed 2026-11-12: a bare alias shared by a full trip and an open sibling -> tests/understanding-routing-unavailable.test.ts.
+test("model unavailable: a genuine switch named by one destination word chooses that trip, never a menu of one", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog(landFamily);
+  try {
+    const cases: Array<[string, string]> = [
+      ["Волдар руу нисэж болох уу", "far"], ["Волдар аялал үнэ", "far"], ["voldar une", "far"], ["Волдар", "far"],
+      ["Марина аялал үнэ хэд вэ", "isl"], ["Марина руу явмаар байна", "isl"],
+    ];
+    for (const [text, expected] of cases) {
+      const sender = `rt-switch-unavailable-${text}`;
+      await selectLandTrip(harness, sender);
+      const asked = await harness.turn(sender, text, { unavailable: true });
+      const said = textOf(asked.sends);
+      assert.equal(asked.selection?.tripId, expected, `"${text}": the named trip is chosen (${said})`);
+      for (const marker of TRIP_LIST_MARKERS) assert.ok(!said.includes(marker), `"${text}": no menu: ${said}`);
+    }
+  } finally {
+    await harness.close();
+  }
+});
 test.todo("an existing customer who names one trip and a date it does not depart on still gets the nearest departures from the answer plan (only the multi-trip date miss is silent)");
 test.todo("Instagram threads carry no consultant rows, so the existing-customer signal is Facebook-only");
