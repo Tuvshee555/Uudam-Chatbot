@@ -33,3 +33,16 @@ test("a plan cannot use a different selection ID or deliver an empty answer", ()
   assert.deepEqual(different.missingFacts, ["selection.trip"]);
   for (const reply of ["", "  ", "REFER", "SILENT"]) assert.equal(decideTripAnswer(plan({ reply }), { userText: "үнэ?" }).outcome, "handoff");
 });
+
+test("a plan that wrote nothing for the turn is a hand-off, never the cleaner's 'Хүний ажилтантай холбож өгье' line", async () => {
+  // Live 2026-11-06..12: "Үнэ", "9 том хүн", "3 том хүн, 6,8 настай 2 хүүхэд" under a selected trip got an answer plan with
+  // no section; presenting "" gave sanitizeAssistantReply's stand-in, which went out as an answer with no lead.
+  const { presentAssistantReply } = await import("../src/lib/chatbotReplyPolicy");
+  const { EMPTY_REPLY_FALLBACK } = await import("../src/lib/reply");
+  const empty = presentAssistantReply({ reply: "", userText: "Үнэ" });
+  assert.equal(empty, EMPTY_REPLY_FALLBACK, "what an empty plan reply becomes");
+  const decision = decideTripAnswer(plan({ reply: empty, request: { ...plan().request, topics: [] }, answeredTopics: [] }), { userText: "Үнэ" });
+  assert.equal(decision.outcome, "handoff");
+  assert.equal(decision.reply, "REFER");
+  assert.deepEqual(decision.missingFacts, ["reply.empty"]);
+});

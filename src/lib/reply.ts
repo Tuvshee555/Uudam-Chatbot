@@ -567,6 +567,14 @@ function isGreetingBlock(text: string) {
   return /^(?:сайн\s+байна(?:\s+уу)?|сайн\s+уу|тавтай\s+морил(?:но\s+уу)?|hello|hi)(?:[\s!,.?…:;]|\p{Extended_Pictographic}|\p{Emoji_Modifier}|\uFE0F|\u200D)*$/iu.test(text.trim());
 }
 
+/**
+ * What sanitizeAssistantReply returns when nothing is left of a reply. It is never meant to reach a
+ * customer: every exit treats it as no data (NO_DATA_REPLY_PATTERNS → silence + a staff lead), and
+ * an answer plan whose text came out empty is a hand-off (tripAnswerDecision.ts). Before 2026-11-12
+ * that plan path sent it as an answer ("Үнэ" → this line, nine times in a week, with no lead).
+ */
+export const EMPTY_REPLY_FALLBACK = "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+
 export function sanitizeAssistantReply(text: string) {
   // URLs can contain underscores, control words and case-sensitive signatures.
   // Keep them outside prose cleanup, including internal-vocabulary replacement.
@@ -581,7 +589,7 @@ export function sanitizeAssistantReply(text: string) {
     .replace(/\bContext\b/gi, "аяллын мэдээлэл");
   const cleaned = normalizeWhitespace(stripScoldingRepeatPhrases(stripControlTokens(stripMarkdown(stripLeakedPlaceholders(withoutInternalVocabulary)))))
     .replace(new RegExp(`${urlPrefix}(\\d+)END`, "g"), (_, index: string) => urls[Number(index)]);
-  if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+  if (!cleaned) return EMPTY_REPLY_FALLBACK;
 
   // Split on blank lines (paragraph breaks) — preserve them so the AI's
   // line-by-line trip details format (price on one line, date on next, etc.)
@@ -622,7 +630,7 @@ export function sanitizeAssistantReply(text: string) {
     }
   }
 
-  return dedupedBlocks.join("\n\n").trim() || "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+  return dedupedBlocks.join("\n\n").trim() || EMPTY_REPLY_FALLBACK;
 }
 
 export function stripRepeatedGreeting(replyText: string, hasPriorAssistantReply: boolean) {
