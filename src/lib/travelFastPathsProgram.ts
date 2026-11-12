@@ -544,7 +544,10 @@ export function buildArchivedTripNotice(
         (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
           "all_departure_dates_passed" ||
         (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
-          "no_departure_dates"
+          "no_departure_dates" ||
+        // A trip sold on request until a deadline that has passed has ended the same way.
+        (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
+          "request_window_passed"
       ),
   );
   if (unavailable.length === 0) return null;

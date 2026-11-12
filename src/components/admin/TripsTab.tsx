@@ -548,6 +548,9 @@ function archivedReasonHint(trip: TravelTrip): string | null {
   if (reason === "all_departure_dates_passed") {
     return "Бүх гарах өдөр өнгөрсөн тул автоматаар архивлагдсан — шинэ огноо нэмбэл дахин идэвхжинэ.";
   }
+  if (reason === "request_window_passed") {
+    return "Захиалга авах эцсийн өдөр өнгөрсөн тул автоматаар архивлагдсан — шинэ огноо, хугацаа оруулж идэвхжүүлнэ.";
+  }
   return null;
 }
 

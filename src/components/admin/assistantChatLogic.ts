@@ -126,7 +126,26 @@ export function displayText(text: string): string {
 /* Progress while the agent works                                   */
 /* ---------------------------------------------------------------- */
 
-export type ProgressStage = { at: number; label: string };
+/** `long`: a step of a 1–2 minute job, shown as a checklist with a clock instead of one rotating line. */
+export type ProgressStage = { at: number; label: string; long?: boolean };
+
+/**
+ * "<link> нэм" / the «Шинэ аялал болгон дахин нэмэх» button: a partner page read as a new trip, 60–110 s
+ * (page, the reader, the table cross-check, photos). One rotating line sat on «Өөрчлөлтийг бэлдэж байна…»
+ * for a minute and looked frozen (2026-11-11).
+ */
+export function isTripFromLink(text: string): boolean {
+  const value = String(text || "");
+  if (/\[хамтрагч шалгах:/u.test(value)) return false;
+  return /\[шинэ аялал\]/u.test(value) || (hasLink(value) && /нэм|nem|add|оруул|шинэ\s*аялал|аялал\s*болго/iu.test(value));
+}
+
+export const TRIP_FROM_LINK_STAGES: ProgressStage[] = [
+  { at: 0, label: "Хуудсыг нээж байна", long: true },
+  { at: 6, label: "Хуваарь, үнэ, огноо, хөтөлбөрийг уншиж байна", long: true },
+  { at: 45, label: "Хуудасны хүснэгттэй тулгаж шалгаж байна", long: true },
+  { at: 55, label: "Аялалд тохирох зураг сонгож байна", long: true },
+];
 
 const LINK = /(?:https?:\/\/|www\.)\S+|uudamtravel\.mn\/\S*/iu;
 
@@ -136,6 +155,7 @@ export function hasLink(text: string): boolean {
 
 /** The usual order of the agent's work, with the second each step usually starts at. */
 export function agentProgressStages(text: string): ProgressStage[] {
+  if (isTripFromLink(text)) return TRIP_FROM_LINK_STAGES;
   return hasLink(text)
     ? [
       { at: 0, label: "Ойлгож байна…" },

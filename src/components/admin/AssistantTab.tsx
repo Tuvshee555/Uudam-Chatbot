@@ -47,7 +47,9 @@ const FILE_STAGES = [
  * answers. The bar follows the usual time and never claims to be finished before the answer;
  * the stage list and the clock show that work is happening (it sat at "15%" before, 2026-11-04).
  */
-function FileProgress({ label, reported }: { label: string; reported: number }) {
+function FileProgress({ label, reported, stages = FILE_STAGES, footer = "Нэг файл ихэвчлэн 1 минут орчим. Энэ хуудсыг бүү хаагаарай." }: {
+  label: string; reported: number; stages?: ReadonlyArray<{ at: number; label: string }>; footer?: string;
+}) {
   const [startedAt] = useState(() => Date.now());
   const [now, setNow] = useState(startedAt);
   useEffect(() => {
@@ -56,7 +58,7 @@ function FileProgress({ label, reported }: { label: string; reported: number }) 
   }, []);
   const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000));
   const shown = Math.min(95, Math.max(reported, Math.round(92 * (1 - Math.exp(-elapsed / 28)))));
-  const current = FILE_STAGES.reduce((index, stage, i) => (elapsed >= stage.at ? i : index), 0);
+  const current = stages.reduce((index, stage, i) => (elapsed >= stage.at ? i : index), 0);
   const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
   return (
     <div className="w-full max-w-md rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3.5 shadow-xs">
@@ -75,7 +77,7 @@ function FileProgress({ label, reported }: { label: string; reported: number }) 
         <div className="h-full rounded-full bg-brand transition-[width] duration-1000 ease-out" style={{ width: `${shown}%` }} />
       </div>
       <ol className="mt-3 space-y-1.5" aria-label="Алхамууд">
-        {FILE_STAGES.map((stage, index) => (
+        {stages.map((stage, index) => (
           <li key={stage.label} className={cx("flex items-center gap-2 text-xs leading-5",
             index < current ? "text-ink-muted" : index === current ? "font-medium text-ink" : "text-ink-subtle")}>
             <span aria-hidden="true" className={cx("flex h-4 w-4 shrink-0 items-center justify-center rounded-full",
@@ -86,7 +88,7 @@ function FileProgress({ label, reported }: { label: string; reported: number }) 
           </li>
         ))}
       </ol>
-      <p className="mt-2.5 text-[12px] leading-4 text-ink-muted">Нэг файл ихэвчлэн 1 минут орчим. Энэ хуудсыг бүү хаагаарай.</p>
+      <p className="mt-2.5 text-[12px] leading-4 text-ink-muted">{footer}</p>
     </div>
   );
 }
@@ -455,6 +457,10 @@ export function AssistantTab({
           <div className="mx-auto mt-4 flex w-full max-w-6xl justify-start">
             {progress != null ? (
               <FileProgress label={busyLabel} reported={Math.round(progress)} />
+            ) : busyStages?.some((stage) => stage.long) ? (
+              // A partner page read as a new trip takes 1–2 minutes: the steps and the clock, like a file.
+              <FileProgress label="Хуудсыг шинэ аялал болгон уншиж байна" reported={0} stages={busyStages}
+                footer="Нэг хуудас ихэвчлэн 1–1.5 минут. Энэ хуудсыг бүү хаагаарай." />
             ) : busyStages && busyStages.length > 0 && !busyLabel ? (
               <AgentProgress key={busyStages.map((stage) => stage.label).join("|")} stages={busyStages} />
             ) : (

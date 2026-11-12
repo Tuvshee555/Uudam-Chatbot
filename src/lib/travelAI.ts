@@ -54,7 +54,7 @@ type ProposalSource = {
 
 import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
 import { liftDayStates, withPricedDaysOnCalendar, withRowYearsOfCalendar } from "./tripDayStates";
-import { cleanRowHotels, settleRowInfantFares } from "./tripRowFares";
+import { cleanRowHotels, cleanTripTitle, settleRowInfantFares } from "./tripRowFares";
 import { applyPriceTable, readPriceTable, type PriceTable } from "./tripPriceTable";
 
 function buildBatchSourceParts(input: {
@@ -912,8 +912,8 @@ async function createProposal(opts: {
   // day's seat state held per day for the review (tripDayStates.ts).
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Record<string, unknown>;
-    const scheduled = liftDayStates(withPricedDaysOnCalendar(withRowYearsOfCalendar(settleRowInfantFares(cleanRowHotels(fields)))));
-    if (scheduled !== fields) Object.assign(fields, { departure_dates: scheduled.departure_dates, infant_price: scheduled.infant_price, extra: scheduled.extra });
+    const scheduled = liftDayStates(withPricedDaysOnCalendar(withRowYearsOfCalendar(settleRowInfantFares(cleanRowHotels(cleanTripTitle(fields))))));
+    if (scheduled !== fields) Object.assign(fields, { route_name: scheduled.route_name, departure_dates: scheduled.departure_dates, infant_price: scheduled.infant_price, extra: scheduled.extra });
   }
 
   let inserted: Awaited<ReturnType<typeof queryNeon<{ id: number }>>> = null;
