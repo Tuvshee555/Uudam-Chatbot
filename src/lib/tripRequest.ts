@@ -59,7 +59,7 @@ function parsePassengerText(text: string): { passengers: RequestedPassenger[]; u
   const result: RequestedPassenger[] = [];
   let unsupported = false;
   // "2 om" is "2 tom" with its first letter lost (typed on a phone); only right after a count.
-  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|om(?![\p{L}])|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?)/giu)) {
+  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|tom(?![\p{L}])|om(?![\p{L}])|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?)/giu)) {
     const kind = /том|adult|tom|^om/i.test(match[2]) ? "adult" : /нярай|nyarai|infant/i.test(match[2]) ? "infant" : "child";
     const count = Number(match[1]);
     if (!Number.isInteger(count) || count < 1 || count > 100) unsupported = true;
@@ -80,10 +80,18 @@ function parsePassengerText(text: string): { passengers: RequestedPassenger[]; u
   const ages: Array<{ age: number; ageUnit: "year" | "month" }> = [];
   // "6 болон 2 насны 2 хүүхэдтэй" (Oct 24 shape): ages joined by "болон" and given as "насны"
   // were not read, so the family's children lost their ages.
-  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:\s*(?:[,/]|болон|ба|bolon|ba|and)\s*\d+(?:\.\d+)?)*)\s*(настай|насны|нас(?!\p{L})|nas(?:tai|nii|ny)?(?!\p{L})|years?\s*old|сартай|months?\s*old)/giu)) {
-    const parts = match[1].split(/\s*(?:[,/]|болон|ба|bolon|ba|and)\s*/iu);
+  // A list may also be separated by spaces only ("2 хүүхэд 4 7 настай", "3 huuhed 4 7 10 nastai", live
+  // 2026-11-12: the ages were dropped and the bot asked how many adults, with no child fare). It is read as
+  // ages only when its length equals the stated number of children, the one reading that cannot be wrong;
+  // otherwise only the last number is the age, as before.
+  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:(?:\s*(?:[,/]|болон|ба|bolon|ba|and)\s*|\s+)\d+(?:\.\d+)?)*)\s*(настай|насны|нас(?!\p{L})|nas(?:tai|nii|ny)?(?!\p{L})|years?\s*old|сартай|months?\s*old)/giu)) {
+    let parts = match[1].split(/\s*(?:[,/]|болон|ба|bolon|ba|and)\s*|\s+/iu);
     // An unspaced comma may mean a decimal age. Do not guess without a count.
     const childCount = result.filter((row) => row.kind !== "adult").reduce((sum, row) => sum + row.count, 0);
+    // ...and every number must be a possible age: a phone number or a year typed just before the age word ("утас
+    // 99112233 5 настай", "2026 5 настай") is not part of the list.
+    if (parts.length > 1 && !/[,/]|болон|ба|bolon|ba|and/iu.test(match[1])
+      && (childCount !== parts.length || parts.some((part) => !(Number(part) >= 0 && Number(part) <= 120)))) parts = [parts[parts.length - 1]];
     const hasCountedAdults = result.some(row => row.kind === "adult");
     const beforeAge = text.slice(0, match.index);
     const afterAge = text.slice((match.index || 0) + match[0].length);

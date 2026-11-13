@@ -25,6 +25,7 @@
 import { CALENDAR_FOLLOWUP_WORDS } from "./dateWords";
 import { withoutHolidayWords } from "./holidayCalendar";
 import { getTripNameHaystack } from "./travelFastPathsSearch";
+import { isAttributeWord } from "./travelModeWords";
 import { isHomeCityWord, phoneticLatinText } from "./travelTextNorm";
 import type { TravelTrip } from "./travelTypes";
 
@@ -175,7 +176,10 @@ export function unknownPlaceTokens(text: string, trips: TravelTrip[], options: {
   const known = catalogueWords(trips);
   const found: string[] = [];
   for (const word of words) {
-    if (isHomeCityWord(word) || isVerbOrFunctionWord(word) || inCatalogue(word, known)) continue;
+    // A travel mode or trip kind in any case or spelling ("газраар", "газрын", "нислэгээр", "gazraar") says how
+    // a trip travels, never where: the word list is shared with trip identity (travelModeWords.ts). Applied
+    // here only, not inside isVerbOrFunctionWord, which other matchers also use.
+    if (isHomeCityWord(word) || isVerbOrFunctionWord(word) || isAttributeWord(word.toLowerCase()) || inCatalogue(word, known)) continue;
     if (!found.includes(word)) found.push(word);
   }
   if (options.corroborated) return found;

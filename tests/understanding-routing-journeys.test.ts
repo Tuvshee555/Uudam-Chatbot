@@ -3,6 +3,7 @@ import test, { type TestContext } from "node:test";
 import { conversationGateHarness, type ModelOverride as BaseOverride } from "./helpers/conversationGateHarness";
 import { closedDepartureCatalog, correctionsCatalog, landFamily, siblingIslandsCatalog } from "./helpers/understandingRoutingCatalogs";
 import { TRIP_LIST_MARKERS, textOf } from "./helpers/understandingRoutingFixtures";
+import { NOT_SCHEDULED_RE } from "./helpers/notScheduled";
 
 /**
  * IDENTITY AND CONTEXT. The customer keeps answering about the trip they are on; a name, alias or
@@ -51,7 +52,7 @@ test("case 11: a follow-up with the selected trip's own town and a transport wor
     await selectLandTrip(harness, sender);
     await harness.turn(sender, "Эрдэнээс нисэх юм уу", { topics: ["transport"] });
     const date = await harness.turn(sender, "2/25-ны аялал", { topics: ["dates"], certainty: "one", tripId: "sel" });
-    assert.ok(!/Тэр хугацаанд гарах аялал алга/.test(textOf(date.sends)), `the selected trip departs on that date: ${textOf(date.sends)}`);
+    assert.ok(!NOT_SCHEDULED_RE.test(textOf(date.sends)), `the selected trip departs on that date: ${textOf(date.sends)}`);
     assert.equal(date.selection?.tripId, "sel");
     const party = await harness.turn(sender, "2 том хүн", { topics: ["price"], passengers: [{ kind: "adult", count: 2 }] });
     assert.ok(textOf(party.sends).includes("2,414,000"), `two adults on the ORIGINAL trip: ${textOf(party.sends)}`);

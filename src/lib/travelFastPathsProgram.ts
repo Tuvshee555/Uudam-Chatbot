@@ -10,6 +10,7 @@ import type { TravelTrip } from "./travelOps";
 import {
   findTripMatches,
   getAliases,
+  getTripNameHaystack,
   getTripBrochureAsset,
   getTripWebsiteLink,
   hasProgramIntent,
@@ -33,6 +34,7 @@ import {
 import { buildAmbiguousTripReply, formatExtraFeesLine, hasPriceIntent } from "./travelFastPathsPricing";
 import { replyPreferences } from "./chatbotReplyPolicy";
 import { aliasOccursInText } from "./aliasMatch";
+import { isAttributeWord } from "./travelModeWords";
 
 const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "хөтөлбөр",
@@ -524,6 +526,19 @@ export function buildTripProgramReply(
 }
 
 /**
+ * Did the customer type a word of the ended trip's name that no open trip's name holds (word by word, a
+ * travel-mode word never counts)? Then the customer means the ended trip, not its open look-alike.
+ */
+function namesEndedTripAlone(text: string, ended: TravelTrip, open: TravelTrip[]): boolean {
+  const same = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)));
+  const held = open.flatMap((trip) => getTripNameHaystack(trip).split(/\s+/).filter(Boolean));
+  const typed = normText(text).split(/\s+/).filter(Boolean);
+  const distinct = getTripNameHaystack(ended).split(/\s+/)
+    .filter((word) => word.length >= 4 && !/\d/.test(word) && !isAttributeWord(word) && !held.some((other) => same(other, word)));
+  return distinct.some((word) => typed.some((said) => same(said, word)));
+}
+
+/**
  * A trip auto-archives once every departure date has passed (see
  * sanitizeTripScheduleForCurrentDate in travelDb.ts) — it disappears from the
  * website and from the catalogue the bot's own matchers search. Without this,
@@ -536,6 +551,13 @@ export function buildTripProgramReply(
 export function buildArchivedTripNotice(
   text: string,
   archivedTrips: TravelTrip[],
+  /**
+   * The open catalogue. When the customer's words already name an open trip (or several), the answer is
+   * about those, never about an ended trip that shares a word with them. Live since 2026-11-11: 18 of 44
+   * open trip names typed in full were answered with "<another, ended trip> is inactive". Omitted only
+   * where the caller has already established that no open trip matched.
+   */
+  activeTrips?: TravelTrip[],
 ): { reply: string; trip: TravelTrip } | null {
   const unavailable = archivedTrips.filter(
     (trip) =>
@@ -559,6 +581,13 @@ export function buildArchivedTripNotice(
     includeArchived: true,
   });
   if (resolution.status !== "verified") return null;
+  // The open catalogue answers first (an open trip typed in full must never be called "inactive" because an ended
+  // trip shares a word with it) - unless the customer typed a word that ONLY the ended trip's name holds
+  // ("<city> НАМРЫН аялал 2097": the ended trip itself, whose open sibling shares the city).
+  if (activeTrips?.length) {
+    const open = resolveTripFromUserMessage(text, activeTrips, { allowLooseFallback: false, includeSoldOut: true });
+    if (open.status !== "not_found" && !namesEndedTripAlone(text, resolution.trip, activeTrips)) return null;
+  }
   const reason = (resolution.trip.extra as Record<string, unknown> | undefined)?.archived_reason;
   const detail = reason === "no_departure_dates"
     ? "гарах өдөр нь одоогоор баталгаажаагүй байгаа тул"

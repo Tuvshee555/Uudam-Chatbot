@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { NOT_SCHEDULED_LIST_START, NOT_SCHEDULED_RE } from "./helpers/notScheduled";
 import test from "node:test";
 import { conversationGateHarness } from "./helpers/conversationGateHarness";
 import { HOLIDAY_CATALOG, HOLIDAY_NOW, PRICE_NOISE_TRIPS, WEEKLY_TRIP } from "./helpers/holidayFixture";
@@ -65,7 +66,7 @@ test("holiday / calendar journeys (invented catalogue)", async (context) => {
         const reply = await say(fresh(), text);
         assert.equal(reply.sends.length, 1, text);
         assert.match(reply.text, /^Цагаан сарын (?:үеэр|дараа) \(2027 оны 2 сарын 6–9 орчим\) Пекара чиглэлд гарах аяллын хуваарь одоогоор гараагүй байна/u, `${text}: ${reply.text}`);
-        assert.doesNotMatch(reply.text, /Тэр хугацаанд гарах аялал алга/u, text);
+        assert.doesNotMatch(reply.text, NOT_SCHEDULED_RE, text);
         // Nearest to the holiday first: the January departure, not the November ones or December's.
         assert.ok(reply.text.indexOf("ПЕКАРА - ЖИРОН") < reply.text.indexOf("ПЕКАРА - ТОРВИН"), `nearest-to-window order: ${reply.text}`);
         assert.match(reply.text, /📅 [^\n]*1\/10/u, text);
@@ -105,7 +106,8 @@ test("holiday / calendar journeys (invented catalogue)", async (context) => {
       assert.match(holiday.text, /^Цагаан сарын үеэр \(2027 оны 2 сарын 6–9 орчим\) гарах аяллын хуваарь одоогоор гараагүй байна/u);
       // The year the customer states is the year: February 2027, never November 2026.
       const month = await say(await withTrip("korvelin-ad"), "2027 ионы 2-р сард аялах юмаа");
-      assert.match(month.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:\n• КОРВЕЛИН[^\n]*: 11 сарын 19/u);
+      assert.match(month.text, NOT_SCHEDULED_LIST_START);
+      assert.match(month.text, /\n• КОРВЕЛИН[^\n]*: 11 сарын 19/u);
     });
 
     await context.test("CASE3b the same follow-ups with no trip on screen get the trips that leave then, not silence", async () => {

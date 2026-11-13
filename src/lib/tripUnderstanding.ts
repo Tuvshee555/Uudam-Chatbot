@@ -18,7 +18,7 @@ import { holidayPromptLine } from "./holidayCalendar";
 import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
 import { MESSAGE_NEEDS, needCueMatches, type MessageNeed } from "./messageNeed";
 import { contrastCandidates, detectContrastCue } from "./tripContrast";
-import { isBareMention, pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
+import { directionTripsNamedIn, isBareMention, pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { REQUESTED_FACT_FIELDS, parseRequestedFacts, type RequestedFact } from "./requestedFacts";
 import {
   evaluateTripRequirement,
@@ -62,6 +62,11 @@ export type Understanding = {
    * that class (messageNeed.ts). Absent when the model proposed none or the check failed.
    */
   need?: ModelNeed;
+  /**
+   * The trip(s) that were in focus when they failed the stated requirement, after which the customer's
+   * direction was searched instead (directionForUnmetRequirement): the trips above are the direction's.
+   */
+  widenedFrom?: string[];
 };
 
 export type ModelNeed = { need: MessageNeed; evidence: string };
@@ -309,7 +314,7 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
   let unknownRequirement: Understanding["unknownRequirement"] = null;
   // A trip the customer named in full stays theirs; only a place is widened.
   const namedInFull = trips.some((trip) => normText(trip.route_name).length >= 8 && normText(customerText).includes(normText(trip.route_name)));
-  let fitting = unsupportedDateWindow ? [] : place && intent === "trip" && (date || range || month) && !namedInFull
+  let fitting = unsupportedDateWindow ? [] : place && intent === "trip" && (date || range || month || transport || days) && !namedInFull
     ? withEveryTripAtPlace(place, trips, [...keys.values()])
     : trips;
   const checks: TripRequirement[] = [];
@@ -444,14 +449,59 @@ export async function understandTripMessage(input: {
     const place = evidence.source === "current" && customerMentions(input.text, parsed.place) ? parsed.place : null;
     const unknown = !groundedKeys.length && customerMentions(input.text, parsed.unknown_destination)
       ? parsed.unknown_destination : null;
-    const interpreted = interpretUnderstanding(JSON.stringify({
+    let interpreted = interpretUnderstanding(JSON.stringify({
       ...parsed, place, trips: groundedKeys,
       intent: evidence.source === "current" ? "trip" : parsed.intent,
       unknown_destination: unknown,
     }), keys, input.now, input.text);
+    // A requirement the trip(s) in focus do not meet is asked about the customer's DIRECTION, not about
+    // that one trip: check it on the direction's trips before anything says "none in this direction".
+    if (interpreted?.unmet) {
+      const direction = directionForUnmetRequirement(input, interpreted.trips, [...keys.values()]);
+      if (direction) {
+        const directionKeys = [...keys].filter(([, trip]) => direction.some((other) => other.id === trip.id)).map(([key]) => key);
+        const again = interpretUnderstanding(JSON.stringify({ ...parsed, place, trips: directionKeys, intent: "trip", unknown_destination: null }),
+          keys, input.now, input.text);
+        if (again && again.trips.length) interpreted = { ...again, widenedFrom: interpreted.trips.map((trip) => trip.id) };
+      }
+    }
     const need = parseModelNeed(parsed.need, parsed.need_evidence, input.text);
     return interpreted ? { ...interpreted, evidence, ...(need ? { need } : {}) } : null;
   } catch { return null; }
+}
+
+/**
+ * The direction a failed requirement is re-checked on: the trips the customer's own place words name
+ * (directionTripsNamedIn) in this message, else in their latest earlier message that named a direction
+ * holding the trip(s) in focus. Null when no such direction is wider than the focus: a trip the
+ * customer only tapped or named by a word no other trip holds has no wider direction to search.
+ */
+function directionForUnmetRequirement(input: { text: string; history: UnderstandingHistory }, focus: TravelTrip[], catalog: TravelTrip[]): TravelTrip[] | null {
+  const prior = input.history.at(-1)?.role === "user" && input.history.at(-1)?.text.trim() === input.text.trim()
+    ? input.history.slice(0, -1) : input.history;
+  const texts = [input.text, ...prior.slice(-HISTORY_TURNS).filter((message) => message.role === "user").map((message) => message.text).reverse()];
+  const focusIds = new Set(focus.map((trip) => trip.id));
+  for (const text of texts) {
+    const direction = directionTripsNamedIn(text, catalog);
+    if (!direction) continue;
+    if (focusIds.size && !direction.some((trip) => focusIds.has(trip.id))) continue;
+    return direction.length > focus.length ? direction : null;
+  }
+  return null;
+}
+
+/**
+ * Heading above trips found by checking the customer's direction after the trip in focus failed the
+ * requirement ("is there a ground trip?" under a flight trip): says plainly that such trips exist.
+ */
+export function widenedNote(understanding: Understanding): string | undefined {
+  if (!understanding.widenedFrom?.length) return undefined;
+  if (understanding.transport) return `Энэ чиглэлд ${TRANSPORT_LABEL[understanding.transport].toLowerCase()} аялал бий:`;
+  if (understanding.date) return `${mdLabel(understanding.date)}-нд энэ чиглэлд гарах аялал бий:`;
+  if (understanding.range) return `${mdLabel(understanding.range[0])} – ${mdLabel(understanding.range[1])}-ны хооронд энэ чиглэлд гарах аялал бий:`;
+  if (understanding.month) return `${understanding.month} сард энэ чиглэлд гарах аялал бий:`;
+  if (understanding.days) return `${understanding.days[0] === understanding.days[1] ? understanding.days[0] : understanding.days.join("-")} өдрийн аялал энэ чиглэлд бий:`;
+  return undefined;
 }
 
 /**

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { NOT_SCHEDULED_LIST_START } from "./helpers/notScheduled";
 import { createHmac } from "node:crypto";
 import test, { before } from "node:test";
 import type { Pool } from "pg";
@@ -157,7 +158,7 @@ test("Messenger date follow-ups answer only from the offered destination, never 
         // Off the offered trips' schedule: their own departures, never the other
         // destination that does leave that day; staff still get the lead.
         assert.equal(sends.length, 1);
-        assert.match(sends[0], /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/);
+        assert.match(sends[0], NOT_SCHEDULED_LIST_START);
         assert.match(sends[0], /НЕРИТ НУУРЫН АЯЛАЛ: 4 сарын 12/);
         assert.match(sends[0], /НЕРИТ УУЛЫН АЯЛАЛ: 4 сарын 16/);
         assert.doesNotMatch(sends[0], /ВЭЛМОР/);

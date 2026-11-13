@@ -18,6 +18,7 @@ import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
+import { buildScopedNotScheduledReply } from "../../lib/dateNotScheduled";
 import { hasUnsupportedOriginRequest, routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
@@ -497,6 +498,19 @@ export default async function handler(
           await appendMessage(sessionId, "user", normalizedText);
           return returnHandoff();
         }
+        // Mirrors the webhook: "that date doesn't suit me" gets the nearest other departures (dateRejection.ts).
+        if (route.dateAlternatives?.reply === "REFER") {
+          await appendMessage(sessionId, "user", normalizedText);
+          return returnHandoff();
+        }
+        if (route.dateAlternatives) {
+          const safeReply = sanitizeAssistantReply(route.dateAlternatives.reply);
+          factualScope = tripsNamedIn(safeReply, await getTrips());
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
         // Mirrors the webhook: a trip the customer named that is sold out or paused is announced
         // as such before an answer plan prices it or a list of its siblings stands in for it.
         const soldOutNamed = soldOutNamedReply({ routed: route, text: normalizedText, trips: await getTrips() });
@@ -644,6 +658,7 @@ export default async function handler(
           const archivedNotice = buildArchivedTripNotice(
             fastPathText,
             await getArchivedTrips(),
+            await getTrips(),
           );
           if (archivedNotice) {
             const safeReply = appendLeadCaptureCta(
@@ -713,7 +728,10 @@ export default async function handler(
       if (wantsDateAvailability) {
         const trips = await getTrips();
         const routed = await getRouted();
-        const dateReply = routed.unavailableDateWithinScope ? "REFER"
+        // Mirrors the webhook: a date none of the trips in scope departs on is answered with the real departures
+        // nearest to it (dateAlternatives.ts); only when there are none is it a hand-off.
+        const dateReply = routed.unavailableDateWithinScope
+          ? (routed.scopedClarify?.length ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText) : null) ?? "REFER"
           : buildDateQuestionReply(intentText, await getFastPathText(), routed.scopedClarify || trips);
         if (dateReply) {
           // Mirror the webhook: a booking-intent date question gets nudged for
@@ -921,6 +939,7 @@ export default async function handler(
         const archivedNotice = buildArchivedTripNotice(
           programFastPathText,
           await getArchivedTrips(),
+          await getTrips(),
         );
         if (archivedNotice) {
           const safeReply = appendLeadCaptureCta(

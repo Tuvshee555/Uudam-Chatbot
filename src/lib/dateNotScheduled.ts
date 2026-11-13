@@ -10,7 +10,9 @@
 
 import { holidayWindowOf } from "./askedWindow";
 import { holidayWindowListing } from "./catalogListing";
-import { DATE_NOT_SCHEDULED_HEADING, buildDateNotScheduledReply } from "./travelFastPathsPricing";
+import { DATE_NOT_SCHEDULED_HEADING, OTHER_TRIPS_LINK_LINE, buildDateNotScheduledReply } from "./travelFastPathsPricing";
+import { NEAREST_DATES_MARKER, buildNearestDatesReply } from "./dateAlternatives";
+import { filterTripsByTransportIntent } from "./travelFastPathsSearch";
 import { requestedPassengersFromText } from "./tripRequest";
 import type { TravelTrip } from "./travelTypes";
 
@@ -25,11 +27,16 @@ export function buildScopedNotScheduledReply(trips: TravelTrip[], askText: strin
       party: requestedPassengersFromText(askText) });
     if (listing) return listing.reply;
   }
-  return buildDateNotScheduledReply(trips, now);
+  // The departures closest to the asked date first (dateAlternatives.ts); the old "each trip's soonest
+  // dates" list stays only for an asked time the parser cannot place.
+  // A travel kind the customer named ("газраар", "шууд нислэгтэй") narrows the search: a flight departing that day is
+  // not "a ground trip on that date" (found by review: the reply said "no trip" and listed a wrong-kind trip).
+  const ofKind = filterTripsByTransportIntent(askText, trips);
+  return buildNearestDatesReply(ofKind.length ? ofKind : trips, askText, now, [OTHER_TRIPS_LINK_LINE]) ?? buildDateNotScheduledReply(trips, now);
 }
 
 /** A reply that told the customer the asked time is off the schedule (either wording): a window it names is not carried on. */
 export function isNotScheduledReply(reply: string): boolean {
-  return reply.startsWith(DATE_NOT_SCHEDULED_HEADING)
+  return reply.startsWith(DATE_NOT_SCHEDULED_HEADING) || reply.includes(NEAREST_DATES_MARKER)
     || /гарах аялал хуваарьт алга байна|гарах аяллын хуваарь одоогоор гараагүй/u.test(reply);
 }

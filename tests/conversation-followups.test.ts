@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { NOT_SCHEDULED_LIST_START } from "./helpers/notScheduled";
 import test from "node:test";
 import { conversationGateHarness, type FixtureTrip } from "./helpers/conversationGateHarness";
 import { isPassengerCountOnly } from "../src/lib/travelFastPathsPricing";
@@ -45,8 +46,9 @@ test("follow-ups under a trip list are answered from the data, never looped or s
       await harness.turn("date", "Лумара", several);
       const unscheduled = await harness.turn("date", "4 сарын 20-нд бга юу", { ...several, place: null, date: "2098-04-20" });
       assert.equal(unscheduled.sends.length, 1);
-      assert.match(unscheduled.sends[0].text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/);
-      assert.match(unscheduled.sends[0].text, /ЛУМАРА НИСЛЭГТЭЙ АЯЛАЛ: 3 сарын 15, 3 сарын 20/);
+      assert.match(unscheduled.sends[0].text, NOT_SCHEDULED_LIST_START);
+      // Since 2026-11-13 the rows are the departures nearest the asked date (dateAlternatives.ts): the trip's real departure is still listed.
+      assert.match(unscheduled.sends[0].text, /ЛУМАРА НИСЛЭГТЭЙ АЯЛАЛ: (?:3 сарын 15, )?3 сарын 20/);
       assert.ok(unscheduled.leads.some((lead) => lead.kind === "handoff"), "staff still hear about the wanted date");
       // The off-schedule date does not ride along into the pick that follows.
       const next = await harness.turn("date", "Лумара газрын аялал үнэ хэд вэ", { certainty: "one", tripId: "lum-land" });

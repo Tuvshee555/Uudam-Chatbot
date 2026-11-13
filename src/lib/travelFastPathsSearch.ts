@@ -4,7 +4,8 @@
  * scores trips against a query, and resolves which trip(s) a message is about.
  */
 
-import { filterFutureDepartureDates, requestedDepartureScope, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
+import { commaMonthDays, filterFutureDepartureDates, requestedDepartureScope, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
+import { isAttributeWord } from "./travelModeWords";
 import { withBookableDepartureDates } from "./departureAvailability";
 import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
@@ -451,6 +452,9 @@ function extractQueryMonthDays(text: string): MonthDay[] {
   for (const match of text.toLowerCase().matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
     push(Number(match[1]), Number(match[2]));
   }
+  // "11,19": the comma format is shared with the date parser (travelDates.ts). Only this format: reading every
+  // format the parser knows would turn the two ends of a range into two dates.
+  for (const { month, day } of commaMonthDays(text)) push(month, day);
 
   return uniqueMonthDays(values);
 }
@@ -1177,7 +1181,36 @@ export function resolveTripFromUserMessage(
   // it ships a wrong price, programme AND poster at full confidence, which is
   // how a customer ends up holding a poster for the tour they did not ask
   // about. Ask the question a human agent would ask instead.
-  const queryRouteTokens = routeContentTokens(text);
+  //
+  // Only a word some trip's name or alias holds can tell the trips apart. Any other word
+  // ("гарах", "явмаар", a bare number, a typo, a word nobody put on a stopword list) says
+  // nothing about WHICH trip, yet it used to count as a route word: no name covered it, so the
+  // shared-city test above failed and the top score was returned as "verified" (live
+  // 2026-11-13: "<date> гарах <хот>" got the one flight trip of a city with six ground trips).
+  const typedRouteTokens = routeContentTokens(text);
+  // A bare number is never a place: it matched digits inside some trip's text and picked that trip.
+  // A travel-mode word ("нисэх", "газраар") does say something about WHICH trip, so it stays.
+  //
+  // "Some trip's name holds the word" is judged word by word, never by substring: a short filler such as
+  // "гэр", "бүл" or "том" sits inside longer name words, and counted as a place it made a long family message
+  // name one trip (found by replaying 2,121 real messages old against new).
+  const nameWords = allBookable.map((trip) => {
+    const identity = tripIdentityText(trip);
+    return { words: identity.split(/\s+/).filter(Boolean), latin: phoneticLatinText(identity).split(/\s+/).filter(Boolean) };
+  });
+  const sameWord = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)));
+  const namesSomeTrip = (token: string) => {
+    const latin = phoneticLatinText(token);
+    return nameWords.some(({ words, latin: latinWords }) => words.some((word) => sameWord(word, token))
+      || (latin.length >= 4 && latinWords.some((word) => phoneticTokenMatches(latin, word))));
+  };
+  // A case-inflected generic word ("аялалд", "аялалаар", "аялалыг": "on / by / about the trip") is the generic
+  // word, never a place; without this it matched the one name that held "аялал" and a shared city collapsed to
+  // that trip (found by independent review: "<city> аялалд явна" got one trip's card instead of the question).
+  const isGenericInflection = (token: string) => !isAttributeWord(token) && token.length >= 5
+    && [...GENERIC_ROUTE_WORDS].some((word) => word.length >= 5 && token !== word && token.startsWith(word));
+  const catalogueRouteTokens = typedRouteTokens.filter((token) => !/^\d+$/.test(token) && !isGenericInflection(token) && (isAttributeWord(token) || namesSomeTrip(token)));
+  const queryRouteTokens = catalogueRouteTokens.length ? catalogueRouteTokens : typedRouteTokens;
   const indistinguishable = hasSpecificTripPreference
     ? []
     : matches.filter((match) => tripNameCoversQuery(match.trip, queryRouteTokens));
@@ -1626,6 +1659,12 @@ function routeContentTokens(query: string): string[] {
     "орсон",
     "хоол",
     "хооллолт",
+    // "<хот> руу" / "<хот> рүү явах" ("to <city>"): a postposition. Fuzzy-matched against trip names it picked
+    // a trip whose title merely held a similar sound ("<city> руу" chose one of six trips of that city).
+    "руу",
+    "рүү",
+    "ruu",
+    "ruugaa",
   ]);
   return unique(keywordTokens(query).filter((token) => !filler.has(token)));
 }

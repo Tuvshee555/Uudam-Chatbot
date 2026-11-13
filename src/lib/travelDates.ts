@@ -161,6 +161,33 @@ function daysBetween(a: DateParts, b: DateParts): number {
 //   THIS March — if it already passed, the departure is stale, not next year's.
 type YearInferenceMode = "roll-forward" | "current-year";
 
+/**
+ * "11,19": a month and a two-digit day joined by a comma. Amounts, decimals and counts ("2,5 сая", "4,5 хоног",
+ * "3,4 хүн") are excluded by the day needing two digits and by the unit lookahead.
+ */
+export const COMMA_DATE_RE = /(?<![\d.,/-])(\d{1,2}),(\d{2})(?:\s*-?\s*(?:ны|ний|нд|д|nd|nii|ni))?(?![\d.,/-])(?!\s*(?:хүн|hun|нас|nas|сая|saya|кг|kg|хоног|honog|шөнө|өдөр|udur|удаа|мянга|myanga|₮|төг|%|км|km|цаг|tsag|минут|\$|юань|usd|ам|хүүх|huuh|мин(?!\p{L})|min(?!\p{L})|хувь|ширхэг|одтой))/giu;
+
+/**
+ * A comma pair is a date unless it is a list of DAYS of a month already named ("2 сарын 3,10" means the 3rd and
+ * the 10th, not also March 10) or a count/age written beside a person word ("хүүхэд 5,10"). Found by review of the
+ * first version, which read "3,10" after a month word as a second, phantom date.
+ */
+function commaPairIsDate(text: string, index: number): boolean {
+  const before = text.slice(0, index);
+  if (/(?:сарын|сарт|сард|сар|sariin|sarin|sar|sard)\s*$/iu.test(before)) return false;
+  if (/(?:хүүхэд|huuhed|том|tom|нярай|nyarai)\s*$/iu.test(before)) return false;
+  return true;
+}
+
+/** The comma-typed month/day pairs of a customer message, for matchers that keep their own date formats. */
+export function commaMonthDays(text: string): Array<{ month: number; day: number }> {
+  const normalized = text.normalize("NFKC");
+  return [...normalized.matchAll(COMMA_DATE_RE)]
+    .filter((match) => commaPairIsDate(normalized, match.index ?? 0))
+    .map((match) => ({ month: Number(match[1]), day: Number(match[2]) }))
+    .filter(({ month, day }) => month >= 1 && month <= 12 && day >= 1 && day <= 31);
+}
+
 function explicitDateCandidates(
   text: string,
   now = new Date(),
@@ -204,6 +231,29 @@ function explicitDateCandidates(
     const month = Number(match[1]);
     const day = Number(match[2]);
     push(resolveYear(month, day), month, day);
+  }
+
+  // Customers also type the month and day with a comma ("11,19 гарах <хот>", live 2026-11-13): the date
+  // was not read, so the question lost its date and a different trip was answered. Only in what customers
+  // write (stored trip dates keep their own formats), only with a two-digit day right after the comma and
+  // no space, so decimals and amounts ("2,5 сая", "4,5 хоног", "1,290,000") are never dates.
+  if (yearMode === "roll-forward") {
+    // "12 3 хавьцаа", "12 3 havitsa" (live 2026-11-12: "around December 3" typed with spaces was not read,
+    // and the list shown held no date near it). A month and a day separated by a space are a date only when
+    // an "around" word follows: "2 3 хүн" or "5 6 настай" never are.
+    for (const match of text.matchAll(/(?<![\d.,/-])(1[0-2]|0?[1-9])\s+(\d{1,2})(?:\s*-?\s*(?:ны|ний|нд|д))?\s*(?=(?:хавьцаа|хавьд|хавиар|хавь|орчим|тойро|havi|orchim|around))/giu)) {
+      // "3 4 орчим хүн" is "about 3-4 people", not "around March 4".
+      if (/^\p{L}*\s*(?:хүн|hun|хүний|хүүхэд|huuh|нас|nas)/iu.test(text.slice((match.index ?? 0) + match[0].length))) continue;
+      const month = Number(match[1]);
+      const day = Number(match[2]);
+      push(resolveYear(month, day), month, day);
+    }
+    for (const match of text.matchAll(COMMA_DATE_RE)) {
+      if (!commaPairIsDate(text, match.index ?? 0)) continue;
+      const month = Number(match[1]);
+      const day = Number(match[2]);
+      push(resolveYear(month, day), month, day);
+    }
   }
 
   return candidates;
@@ -428,7 +478,7 @@ export function requestedDepartureScope(text: string, now = new Date()): Request
   return month ? { kind: "month", year: month.year, month: month.month } : null;
 }
 
-const AROUND_DATE_RE = /\d(?:\s*-?\s*(?:ны|ний|нд|ын|ийн|н|д))?\s*(?:хавьцаа|хавьд|хавиар|хавь|орчим\p{L}*|орчмоор|үеэр|тойро?н?|around|orchim\p{L}*|havi(?:tsaa|d|ar)?)(?!\p{L})/iu;
+const AROUND_DATE_RE = /\d(?:\s*-?\s*(?:ны|ний|нд|ын|ийн|н|д))?\s*(?:хавьцаа|хавьд|хавиар|хавь|орчим\p{L}*|орчмоор|үеэр|тойро?н?|around|orchim\p{L}*|havi(?:tsaa|tsa|d|ar)?)(?!\p{L})/iu;
 const AROUND_DATE_DAYS = 7;
 
 /**

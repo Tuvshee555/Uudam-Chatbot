@@ -16,6 +16,7 @@
  */
 
 import { isVerbOrFunctionWord } from "./placeLikeTokens";
+import { isAttributeWord } from "./travelModeWords";
 import { getTripNameHaystack, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import { isHomeCityWord, phoneticLatinText } from "./travelTextNorm";
 import type { TravelTrip } from "./travelTypes";
@@ -54,7 +55,9 @@ export async function placesMissingFromTrip(text: string, trip: TravelTrip, trip
   const words = [...new Set(String(text || "")
     .split(/[^\p{L}]+/u)
     .map((word) => word.toLowerCase())
-    .filter((word) => word.length >= MIN_PLACE_WORD && !isHomeCityWord(word) && !isVerbOrFunctionWord(word)))]
+    // A travel mode or trip kind ("газраар", "нислэгтэй", "хосолсон") is how a trip travels, never where it
+    // goes: an ended trip's own text holding "газраар" made every "<city> газраар ..." question silence.
+    .filter((word) => word.length >= MIN_PLACE_WORD && !isHomeCityWord(word) && !isVerbOrFunctionWord(word) && !isAttributeWord(word)))]
     .filter((word) => !tripHasWord(trip, word));
   if (!words.length) return [];
   const missing = words.filter((word) => namesAnotherTrip(word, trip, trips));

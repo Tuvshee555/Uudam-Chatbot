@@ -4,6 +4,7 @@ import { asksClockTime, scheduleTimeSection } from "../src/lib/scheduleTimes";
 import { conversationGateHarness, type ModelOverride as BaseOverride } from "./helpers/conversationGateHarness";
 import { closedDepartureCatalog } from "./helpers/understandingRoutingCatalogs";
 import { textOf } from "./helpers/understandingRoutingFixtures";
+import { NOT_SCHEDULED_RE } from "./helpers/notScheduled";
 
 type ModelOverride = BaseOverride & { trips?: string[]; requestedFacts?: Array<{ field: string; evidence: string }> };
 type Harness = Awaited<ReturnType<typeof conversationGateHarness>>;
@@ -16,7 +17,7 @@ const one = (tripId: string, extra: ModelOverride = {}): ModelOverride => ({ cer
  * closed (a data fact); a customer a consultant wrote to within 30 days is sold no alternatives
  * (silence plus a typed lead); a clock time is answered only from the itinerary. Invented data.
  */
-const NO_TRIP_THEN = "Тэр хугацаанд гарах аялал алга";
+// Either wording of "nothing leaves then" (tests/helpers/notScheduled.ts).
 
 /** A consultant's reply in the thread, `daysAgo` days before the mocked now (stored as role 'staff'). */
 function staffReplied(harness: Harness, senderId: string, daysAgo: number) {
@@ -33,17 +34,17 @@ test("a date that matches a closed departure is called closed, not 'no trip then
       const said = textOf(result.sends);
       assert.ok(said.includes("ВЕРДАН - ПАРКЛЭНД"), `"${text}": names the departure that exists: ${said}`);
       assert.match(said, /дүүрсэн|авах боломжгүй/, `"${text}": says it is closed: ${said}`);
-      assert.ok(!said.includes(NO_TRIP_THEN), `"${text}": a departure that exists is not 'no trip then': ${said}`);
+      assert.ok(!NOT_SCHEDULED_RE.test(said), `"${text}": a departure that exists is not 'no trip then': ${said}`);
       assert.ok(!said.includes("11 сарын 12"), `"${text}": no other dates sold to a customer asking about a closed one: ${said}`);
       assert.ok(result.leads.length > 0, `"${text}": staff get the lead`);
     }
     // Positive controls: a date with no departure at all, anywhere, is still answered with the real dates.
     const nothing = await harness.turn("rt-c16-none", "11.9 nii verdan", {});
-    assert.ok(textOf(nothing.sends).includes(NO_TRIP_THEN), `a date no departure ever had keeps the dates reply: ${textOf(nothing.sends)}`);
+    assert.ok(NOT_SCHEDULED_RE.test(textOf(nothing.sends)), `a date no departure ever had keeps the dates reply: ${textOf(nothing.sends)}`);
     assert.ok(textOf(nothing.sends).includes("11 сарын 12"));
     // A date that IS bookable is answered normally.
     const open = await harness.turn("rt-c16-open", "11.12 nii verdan", {});
-    assert.ok(!textOf(open.sends).includes(NO_TRIP_THEN) && !/дүүрсэн/.test(textOf(open.sends)), `an open date is not called closed: ${textOf(open.sends)}`);
+    assert.ok(!NOT_SCHEDULED_RE.test(textOf(open.sends)) && !/дүүрсэн/.test(textOf(open.sends)), `an open date is not called closed: ${textOf(open.sends)}`);
   } finally {
     await harness.close();
   }
@@ -64,7 +65,7 @@ test("a customer a consultant wrote to within 30 days is sold no alternatives (s
     const old = "rt-c16-old";
     staffReplied(harness, old, 45);
     const prospect = await harness.turn(old, "11.9 nii verdan", {});
-    assert.ok(textOf(prospect.sends).includes(NO_TRIP_THEN), `an old consultant message does not make an existing customer: ${textOf(prospect.sends)}`);
+    assert.ok(NOT_SCHEDULED_RE.test(textOf(prospect.sends)), `an old consultant message does not make an existing customer: ${textOf(prospect.sends)}`);
     // An exact data fact about a trip the customer names is still answered.
     const fact = "rt-c16-fact";
     staffReplied(harness, fact, 5);

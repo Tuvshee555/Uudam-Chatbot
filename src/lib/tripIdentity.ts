@@ -13,17 +13,10 @@ import type { TravelTrip } from "./travelTypes";
 import { getAliases } from "./travelFastPathsSearch";
 import { keywordTokens, normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
 import { hasReferentialHint } from "./contextualText";
+import { withoutHolidayNames } from "./holidayCalendar";
+import { isAttributeWord } from "./travelModeWords";
 
-/** How a trip travels or what kind it is: never a place, so never identity. */
-const ATTRIBUTE_WORDS: RegExp[] = [
-  /^нис(?:э|ж|н|д|л)/u, /^онгоц/u, /^галт$/u, /^тэрэг/u, /^автобус/u, /^хосолсон/u, /^хослуул/u, /^шууд/u,
-  /^газар/u, /^газрын/u, /^круз/u, /^усан$/u, /^тийз/u, /^билет/u, /^буц/u, /^хөдл/u, /^эхл/u, /^ирэх/u,
-  /^nis(?:e|j|n|d|l)/u, /^ongo/u, /^galt$/u, /^tereg/u, /^avtobus/u, /^hosols/u, /^shuu?d/u, /^gazar/u, /^gazr/u,
-  /^kruz/u, /^tiz/u, /^bilet/u, /^buts/u, /^hodl/u, /^ehl/u, /^irej/u,
-];
-
-const isAttributeWord = (word: string) => ATTRIBUTE_WORDS.some((pattern) => pattern.test(word));
-
+// How a trip travels or what kind it is: never a place, so never identity (travelModeWords.ts).
 /** Words that carry no content beyond naming something: a message made only of these and place words is a bare mention. */
 const BARE_FILLERS = new Set([
   "аялал", "аяллын", "аялалтай", "аяллууд", "аяллуудыг", "аяллаар", "хот", "хотын", "хотод", "хотоор", "байна", "байгаа",
@@ -69,6 +62,28 @@ export function tripContainedWords(trip: TravelTrip): string[] {
 const identityMatches = (word: string, candidate: string) =>
   word === candidate || (Math.min(word.length, candidate.length) >= 4 && phoneticTokenMatches(word, candidate));
 const matchesAny = (word: string, pool: string[]) => pool.some((candidate) => identityMatches(word, candidate));
+
+/**
+ * The DIRECTION a customer's words name, as trips: every live trip that holds each place word they
+ * typed that two or more trips share ("<хот>" is a direction; a word only one trip holds, such as an
+ * attraction in one title, names that trip, not a direction). Null when the text names no shared place.
+ *
+ * A requirement (a travel mode, a date, a length) that fails on the trip in focus is re-checked on the
+ * direction's trips: "is there a ground trip?" is asked about the direction, and the one flight trip on
+ * screen is not "this direction" (live 2026-11-13: "no ground trip in this direction" while six went
+ * there). Requiring EVERY shared word keeps a border town that many trips pass through from widening the
+ * direction to other countries; transport and kind words are never places (ATTRIBUTE_WORDS).
+ */
+export function directionTripsNamedIn(text: string, catalog: TravelTrip[]): TravelTrip[] | null {
+  const live = catalog.filter((trip) => trip.status === "active" || trip.status === "sold_out");
+  const rows = live.map((trip) => ({ trip, words: tripIdentityWords(trip) }));
+  const shared = identityWordsOf(withoutHolidayNames(text))
+    .filter((word) => !/\d/.test(word))
+    .filter((word) => rows.filter((row) => matchesAny(word, row.words)).length >= 2);
+  if (!shared.length) return null;
+  const direction = rows.filter((row) => shared.every((word) => matchesAny(word, row.words))).map((row) => row.trip);
+  return direction.length ? direction : null;
+}
 
 export type NewIdentity = {
   /** Words of the message that name the candidate and that none of the current trips contains. */

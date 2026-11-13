@@ -1299,6 +1299,30 @@ async function handleMessageTurn(
     return;
   }
 
+  // "That date doesn't suit me": the nearest other departures of the same kind (dateRejection.ts). Staff hear
+  // about it either way; a customer a consultant already works with is sold no other dates (dateMiss.ts rule).
+  {
+    const alternatives = (await getRouted()).dateAlternatives;
+    if (alternatives) {
+      const existing = (existingCustomer ??= await dbHasRecentStaffMessage(senderId).catch(() => false));
+      // "REFER": nothing else to offer (every other departure of that kind was already shown): staff only.
+      const nothingToOffer = alternatives.reply === "REFER";
+      await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: existing
+        ? "Зөвлөхтэй өмнө нь харилцсан хэрэглэгч санал болгосон огноо тохирохгүй гэсэн; бот өөр огноо санал болгоогүй, зөвлөх хариулна уу."
+        : nothingToOffer
+          ? "Хэрэглэгч санал болгосон огноо тохирохгүй гэсэн; санал болгох өөр гарах өдөр байхгүй тул бот хариулсангүй, зөвлөх хариулна уу."
+          : "Хэрэглэгч санал болгосон огноо тохирохгүй гэсэн; бот ойр гарах өөр өдрүүдийг хэлсэн." });
+      await deliverFastPathReply({
+        reply: existing || nothingToOffer ? "REFER" : sanitizeAssistantReply(alternatives.reply),
+        failTag: existing ? "existing_customer_date_rejection" : nothingToOffer ? "date_alternatives_none" : "date_alternatives",
+        catalogTripIds: existing || nothingToOffer ? undefined : alternatives.tripIds,
+        rememberSource: "api.webhook.date_alternatives",
+        counter: "webhook.date_alternatives_total",
+      });
+      return;
+    }
+  }
+
   // A weather question about a place several trips share, or a full trip's place, is answered as weather (placeWeather.ts).
   if (isWeatherTurn(intentText, history)) {
     const place = await placeWeatherAnswer({ routed: await getRouted(), trips: await getTrips(), text, askedText: intentText });
@@ -1410,6 +1434,10 @@ async function handleMessageTurn(
       }
       await captureLead({ kind: "handoff", contactPhone: detectedPhone || "",
         context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." });
+      // The reply lists trips by distance from the asked date: "1" / "эхнийх" under it means the first one SHOWN,
+      // not the first in catalogue order (found by review), so the pending list follows the displayed order.
+      const shownInOrder = displayedClarificationTrips(notScheduledReply, routed.scopedClarify);
+      if (shownInOrder.length) await setClarificationState(senderId, shownInOrder.map(trip => trip.id));
       await deliverFastPathReply({
         reply: notScheduledReply,
         failTag: "date_not_scheduled",
@@ -1536,6 +1564,7 @@ async function handleMessageTurn(
       const archivedNotice = buildArchivedTripNotice(
         fastPathText,
         await getArchivedTrips(),
+        await getTrips(),
       );
       if (archivedNotice) {
         await deliverFastPathReply({
@@ -1859,6 +1888,7 @@ async function handleMessageTurn(
     const archivedNotice = buildArchivedTripNotice(
       programFastPathText,
       await getArchivedTrips(),
+      await getTrips(),
     );
     if (archivedNotice) {
       await deliverFastPathReply({

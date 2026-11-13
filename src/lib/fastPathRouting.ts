@@ -25,7 +25,9 @@ import {
   clearClarificationState,
 } from "./clarificationState";
 import { customerTurn, intentTextOf, joinContextAndTurn, markNoTrip } from "./customerTurn";
-import { unmetNote, unknownRequirementNote, type Understanding } from "./tripUnderstanding";
+import { unmetNote, unknownRequirementNote, widenedNote, type Understanding } from "./tripUnderstanding";
+import { NEAREST_DATES_MARKER } from "./dateAlternatives";
+import { DATE_REJECTION_MARKER, buildDateRejectionReply, datesAlreadyOffered, doesNotSuit, isDateRejection, rejectedDates, rejectedDayOfMonth, rejectionPool, rejectionPreference } from "./dateRejection";
 import { hasReferentialHint, isLikelyContextDependentText, lastAssistantReply, pickFastPathMatchText } from "./contextualText";
 import { departureMatchesScope, hasDepartureDateAvailabilityIntent, parseDepartureDateText, requestedDepartureScope, requestsDateWindow, resolveRequestedDate, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
 import {
@@ -223,6 +225,8 @@ export type FastPathRoute = {
   requestText?: string;
   /** The trip enters the conversation this turn (no earlier selection of it): the answer names it. */
   newTrip?: boolean;
+  /** The customer turned down the date(s) on the table: the nearest other departures (dateRejection.ts). */
+  dateAlternatives?: { reply: string; tripIds: string[] };
 };
 
 /** The message asks something besides when the trip departs. */
@@ -236,7 +240,7 @@ function asksBeyondDate(text: string, trips: TravelTrip[], now: Date): boolean {
 function isTripChoiceQuestion(reply: string): boolean {
   // "Not then; these trips depart on …" keeps those trips in scope: "hoyor sard" right after it
   // asks about them and got silence once the list counted as stale (live replay 2026-10-30).
-  return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply) || reply.startsWith(DATE_NOT_SCHEDULED_HEADING);
+  return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply) || reply.startsWith(DATE_NOT_SCHEDULED_HEADING) || reply.includes(NEAREST_DATES_MARKER) || reply.includes(DATE_REJECTION_MARKER);
 }
 
 /**
@@ -385,6 +389,36 @@ async function routeFastPathTextInner(input: {
         .filter((trip): trip is TravelTrip => Boolean(trip))
     : [];
 
+  // "Өдөр нь таарахгүй байна" / "өөр өдөр байгаа юу" under a trip or a list: the date on the table is the
+  // problem, not the trip or the destination. The nearest OTHER departures of the same kind of trip in the
+  // customer's direction (dateRejection.ts), decided before the model: it used to re-send the same dates,
+  // the rejected one first (live 2026-11-13), and the model being down made it "the system is down".
+  // The rejection may also NAME the date ("2/19 тохирохгүй", "2 сарын 19 таарахгүй") or only its day ("19 нь таарахгүй").
+  const askedScope = tappedOwnButton ? null : requestedDepartureScope(intentTextOf(text, trips), now);
+  const typedDates = askedScope?.kind === "dates" && doesNotSuit(text) ? askedScope.dates : [];
+  const typedDay = !askedScope && doesNotSuit(text) ? rejectedDayOfMonth(text) : null;
+  if (!choice && !tappedOwnButton && ((isDateRejection(text) && !askedScope) || typedDates.length || typedDay)) {
+    const focus = pendingTrips.length ? pendingTrips : previousSelection ? trips.filter((trip) => trip.id === previousSelection.tripId) : [];
+    if (focus.length) {
+      const rejected = rejectedDates({ focus, typedDates, typedDay, selectionDate: pendingTrips.length ? null : previousSelection?.date ?? null, lastReply: previousReply, now });
+      // Never offered again: what an earlier "other dates" reply already showed, and the date selected for the trip.
+      const exclude = [...datesAlreadyOffered(input.history || [], now), ...(previousSelection?.date ? [previousSelection.date] : [])];
+      const built = buildDateRejectionReply({ pool: rejectionPool({ focus, history: input.history || [], catalog: trips }), rejected,
+        preference: rejectionPreference(text), now, exclude });
+      if (built) {
+        // The trip(s) in focus stay in scope beside the ones shown: the next date the customer types may be the focus
+        // trip's own other departure, which the reply did not list (it must not be answered "no departure").
+        await setClarificationState(senderId, [...new Set([...focus.map((trip) => trip.id), ...built.tripIds])]);
+        return { matchText: text, scopedClarify: null, dateAlternatives: built };
+      }
+      // The customer turned down dates and every other bookable departure of that kind is already on screen
+      // (or there is none): the bot has nothing real to offer. Staff, never a repeat of the same dates and
+      // never the model's improvisation (no data, no answer). With no known date on the table the message is
+      // an ordinary "when does it depart?" and keeps its normal path.
+      if (rejected.length) return { matchText: markNoTrip(text), scopedClarify: null, dateAlternatives: { reply: "REFER", tripIds: [] } };
+    }
+  }
+
   // "Огноо нь", "хэзээ вэ" right after a "which trip?" list: the customer wants THOSE trips' dates.
   // Nothing names a trip, so it used to fall through to silence while staff were paged.
   if (pendingTrips.length > 1 && DATES_ONLY_RE.test(text.trim())) {
@@ -524,7 +558,7 @@ async function routeFastPathTextInner(input: {
         return {
           matchText: text,
           scopedClarify: understanding.trips,
-          scopedClarifyNote: unmetNote(understanding),
+          scopedClarifyNote: unmetNote(understanding) || widenedNote(understanding),
           understanding,
         };
       }

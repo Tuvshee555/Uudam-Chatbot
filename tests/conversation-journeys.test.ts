@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { NOT_SCHEDULED_LIST_START } from "./helpers/notScheduled";
 import test from "node:test";
 import { conversationGateHarness, type FixtureTrip } from "./helpers/conversationGateHarness";
 
@@ -160,7 +161,7 @@ test("customer journeys reach their goal with grounded facts", async (context) =
     // script) got December dates, then "neg sard" got silence — Latin month words were not read.
     await context.test("a month written as a Latin number word is honoured and never answered with silence", async () => {
       const early = await say("latin-month", "norvel aylal hoyor sariin eheer sonirhoj bb", one("city"));
-      assert.match(early.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/, "nothing departs early February: said, with the real dates");
+      assert.match(early.text, NOT_SCHEDULED_LIST_START, "nothing departs early February: said, with the real dates");
       assert.match(early.text, /3 сарын 15/);
       const march = await say("latin-month", "gurav sard", one("city", { topics: [] }));
       assert.equal(march.sends.length, 1, "a month follow-up is answered");
@@ -195,11 +196,12 @@ test("customer journeys reach their goal with grounded facts", async (context) =
     // several trips, then "hoyor sard" got silence: the list no longer counted as the scope.
     await context.test("a month asked right after a 'not then' list is answered for those trips", async () => {
       const early = await say("latin-list", "lumara aylal hoyor sariin eheer sonirhoj bb");
-      assert.match(early.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/);
+      assert.match(early.text, NOT_SCHEDULED_LIST_START);
       // No trip at all departs in April, so no catalogue month list can stand in for the scope.
       const april = await say("latin-list", "dorov sard", { certainty: "none", trips: [] });
       assert.equal(april.sends.length, 1, "never silence");
-      assert.match(april.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:\n• ЛУМАРА/, "those trips' real departures again");
+      assert.match(april.text, NOT_SCHEDULED_LIST_START, "those trips' real departures again");
+      assert.match(april.text, /\n• [^\n]*ЛУМАРА/, "those trips' real departures again");
     });
 
     // "<attraction> bagtsan vne" (the price of the trip that includes the park) got the inclusions
