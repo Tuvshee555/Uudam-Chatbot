@@ -14,10 +14,12 @@
  * Used twice: appended to a trip answer that ends without a question (replyQuestion in followUp.ts),
  * and as the one follow-up message when the customer leaves the answer on seen (runFollowUpSweep).
  */
+import { BOOKING_WEBSITE_URL, publishedTripWebsiteLink } from "./bookingWebsite";
 import type { ConstraintLedger } from "./constraintLedger";
 import { withBookableDepartureDates } from "./departureAvailability";
-import { NEXT_QUESTION_BUDGET, NEXT_QUESTION_DATE, NEXT_QUESTION_DESTINATION, NEXT_QUESTION_NEXT_STEP, NEXT_QUESTION_PARTY,
-  NEXT_QUESTION_PICK, NEXT_QUESTION_PICK_UNNUMBERED, NEXT_QUESTION_WHEN } from "./nextQuestionText";
+import { FOLLOW_UP_ALL_TRIPS_WEB_LINE, FOLLOW_UP_TRIP_WEB_LINE, NEXT_QUESTION_BUDGET, NEXT_QUESTION_DATE, NEXT_QUESTION_DESTINATION,
+  NEXT_QUESTION_NEXT_STEP, NEXT_QUESTION_PARTY, NEXT_QUESTION_PICK, NEXT_QUESTION_PICK_UNNUMBERED, NEXT_QUESTION_PROGRAM,
+  NEXT_QUESTION_WHEN } from "./nextQuestionText";
 import { upcomingDepartures } from "./tripFareBlock";
 import type { TripSelection } from "./tripRequest";
 import type { TravelTrip } from "./travelTypes";
@@ -26,12 +28,18 @@ import type { TravelTrip } from "./travelTypes";
 export { NEXT_QUESTION_BUDGET, NEXT_QUESTION_DATE, NEXT_QUESTION_DESTINATION, NEXT_QUESTION_NEXT_STEP, NEXT_QUESTION_PARTY,
   NEXT_QUESTION_PICK, NEXT_QUESTION_PICK_UNNUMBERED, NEXT_QUESTION_WHEN };
 
-export type NextQuestionSlot = "destination" | "when" | "pick" | "date" | "party" | "budget" | "next_step";
+export type NextQuestionSlot = "destination" | "when" | "pick" | "date" | "party" | "budget" | "next_step" | "program";
 
 const TEXT: Record<Exclude<NextQuestionSlot, "pick">, string> = {
   destination: NEXT_QUESTION_DESTINATION, when: NEXT_QUESTION_WHEN, date: NEXT_QUESTION_DATE,
-  party: NEXT_QUESTION_PARTY, budget: NEXT_QUESTION_BUDGET, next_step: NEXT_QUESTION_NEXT_STEP,
+  party: NEXT_QUESTION_PARTY, budget: NEXT_QUESTION_BUDGET, next_step: NEXT_QUESTION_NEXT_STEP, program: NEXT_QUESTION_PROGRAM,
 };
+
+/** The programme PDF already went out (programme fast path) in this conversation. */
+const PROGRAM_SENT = /хөтөлбөрийг\s+хавсаргалаа/iu;
+/** A website link the bot already showed: not repeated in the follow-up. */
+const TRIP_LINK_SHOWN = /uudamtravel\.mn\/(?:mn\/|en\/|ko\/)?trips\//iu;
+const SITE_SHOWN = /uudamtravel\.mn/iu;
 
 export type NextQuestion = { slot: NextQuestionSlot; text: string };
 
@@ -67,6 +75,7 @@ const ASKS: Array<[NextQuestionSlot, RegExp]> = [
   ["party", /хэдэн\s+хүн|хэдүүлээ|хүүхэд\s+байвал|насыг\s+нь|хэдэн\s+том/iu],
   ["budget", /төсөв/iu],
   ["next_step", /утасны\s+дугаар|дугаараа\s+(?:үлдээ|бич)/iu],
+  ["program", /хөтөлбөрийг\s+(?:нь\s+)?(?:авах|илгээх|явуулах)\s+уу/iu],
 ];
 const QUESTION_SEGMENT = /[?？]|бичээрэй|бичнэ\s+үү|үлдээгээрэй|сонгоорой|(?:^|\s)(?:вэ|бэ|уу|үү)\s*[.!😊🙏]*$/iu;
 
@@ -120,6 +129,7 @@ export function nextQuestion(input: NextQuestionInput): NextQuestion | null {
   const candidates: NextQuestion[] = [];
   const lines = listLines(input.reply);
   const selected = input.selection ? input.trips.find((trip) => trip.id === input.selection!.tripId) || null : null;
+  const botTexts = [...input.history.filter((message) => message.role === "assistant").map((message) => message.text), input.reply].join("\n");
 
   if (input.pendingTripIds.length >= 2 && lines.numbered + lines.bulleted >= 2) {
     // (b) A list is on screen and nothing is chosen from it yet.
@@ -130,6 +140,9 @@ export function nextQuestion(input: NextQuestionInput): NextQuestion | null {
     if (selected.status !== "active") return null;
     const departures = openDepartures(selected, input.selection!, now);
     const dateSettled = Boolean(input.selection!.date) || departures.length <= 1;
+    // After silence, a consultant's first move: offer the full programme of the trip in play (with its web page),
+    // unless the programme PDF already went out.
+    if (input.purpose === "follow_up" && !PROGRAM_SENT.test(botTexts)) candidates.push({ slot: "program", text: TEXT.program });
     // (c) one trip, several open departures, none chosen; (d) the party; (f) the consultant — in an
     // answer only once trip, date and party are known; after silence also as the last thing to offer
     // when the bot's own question went unanswered.
@@ -145,9 +158,26 @@ export function nextQuestion(input: NextQuestionInput): NextQuestion | null {
     else if (!whenKnown) candidates.push({ slot: "when", text: TEXT.when });
     if (partyKnown && !priceInPlay && !budgetKnown) candidates.push({ slot: "budget", text: TEXT.budget });
   }
-  return candidates.find((candidate) => !asked.has(candidate.slot)
+  const chosen = candidates.find((candidate) => !asked.has(candidate.slot)
     // The destination question also asks the month: not after the bot just asked either.
     && !(candidate.slot === "destination" && asked.has("when"))) ?? null;
+  return chosen && input.purpose === "follow_up" ? withWebsiteLine(chosen, selected, botTexts) : chosen;
+}
+
+/**
+ * The follow-up carries the website (owner, 2026-11-13: "or sends web with it"): the trip's own page for the
+ * programme offer, the site for "which trip / where / when", once — never when the bot already showed it. The
+ * link goes ABOVE the question, so the message still ends with (and is recognised as) that question.
+ */
+function withWebsiteLine(question: NextQuestion, selected: TravelTrip | null, botTexts: string): NextQuestion {
+  if (question.slot === "program") {
+    const link = selected ? publishedTripWebsiteLink(selected) : null;
+    return link && !TRIP_LINK_SHOWN.test(botTexts) ? { ...question, text: `${FOLLOW_UP_TRIP_WEB_LINE} ${link}\n${question.text}` } : question;
+  }
+  if (["destination", "when", "pick"].includes(question.slot) && !SITE_SHOWN.test(botTexts)) {
+    return { ...question, text: `${FOLLOW_UP_ALL_TRIPS_WEB_LINE} ${BOOKING_WEBSITE_URL}\n${question.text}` };
+  }
+  return question;
 }
 
 /** A reply that already asks the customer something (any "?" counts, as the owner put it). */

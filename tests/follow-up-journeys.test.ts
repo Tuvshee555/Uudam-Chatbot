@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { conversationGateHarness, type FixtureTrip } from "./helpers/conversationGateHarness";
-import { NEXT_QUESTION_DATE, NEXT_QUESTION_NEXT_STEP, NEXT_QUESTION_PARTY, NEXT_QUESTION_TEXTS } from "../src/lib/nextQuestionText";
+import { FOLLOW_UP_TRIP_WEB_LINE, NEXT_QUESTION_DATE, NEXT_QUESTION_PARTY, NEXT_QUESTION_PROGRAM, NEXT_QUESTION_TEXTS } from "../src/lib/nextQuestionText";
 
 /**
  * Owner, 2026-11-12: "in the last 5-10 days the chatbot was not asking questions / not doing follow-up …
@@ -9,6 +9,10 @@ import { NEXT_QUESTION_DATE, NEXT_QUESTION_NEXT_STEP, NEXT_QUESTION_PARTY, NEXT_
  * they clicked 'connect to human', etc." Real shape (10 days of chats): 59 threads ended on a bot reply the
  * customer never answered, 42 of them on a reply that asked nothing — a fare card, "<date>: захиалга
  * нээлттэй.", a bare programme link.
+ *
+ * Owner, 2026-11-13: "when someone doesn't answer for 30 minute send like 'хөтөлбөр авах уу' or send the web
+ * with it": the delay is 30 minutes, and with one trip in play the follow-up offers its programme (its web page
+ * above the question, the «Хөтөлбөр үзэх» button below; a typed "тийм" is that button).
  *
  * Journeys through the real webhook and the real /api/cron/follow-up handler; only Meta, OpenAI and SQL
  * transports are mocked. The clock is mocked: the harness starts at 12:00 Ulaanbaatar. Invented trips.
@@ -27,6 +31,9 @@ const one = { certainty: "one", tripId: "norvel" };
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const ASK_PRICE = "Норвел хотын аялал үнэ";
+const NORVEL_PAGE = "https://uudamtravel.mn/trips/norvel-hotyn-aylal";
+/** The follow-up with one trip in play: its page (when the bot has not shown it yet), then the programme offer. */
+const PROGRAM_OFFER = `${FOLLOW_UP_TRIP_WEB_LINE} ${NORVEL_PAGE}\n${NEXT_QUESTION_PROGRAM}`;
 const SETTINGS = { extra: { greeting: { enabled: false }, goodbye: { enabled: false }, reminder_enabled: false, contact_phones: "1111 0000 / 2222 0000" } };
 
 test("follow-up journeys: one question after silence, never over a person, never twice", async (context) => {
@@ -65,28 +72,29 @@ test("follow-up journeys: one question after silence, never over a person, never
       assert.equal(harness.followUpState("fu-late")?.sentAt, null);
     });
 
-    await context.test("(a)+(i) a fare card gets the next question; 10 min of silence brings exactly one follow-up, never a second", async () => {
+    await context.test("(a)+(i) a fare card gets the next question; 30 min of silence brings exactly one follow-up, never a second", async () => {
       const answered = await fb("fu-seen", ASK_PRICE);
       assert.equal(answered.sends.length, 1);
       assert.ok(answered.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_DATE}`), `the fare card asks which departure: ${answered.sends[0].text}`);
       assert.match(answered.sends[0].text, /1,791,000₮/, "the answer itself is unchanged above the question");
       answeredThread("fu-seen", ASK_PRICE, answered.sends[0].text);
-      tick(9 * MIN);
+      tick(29 * MIN);
       assert.deepEqual(to(await cron(), "fu-seen"), [], "not before the delay");
       tick(2 * MIN);
       const first = await cron();
-      // The date was just asked, so the follow-up asks the next thing: how many people.
-      assert.deepEqual(to(first, "fu-seen"), [NEXT_QUESTION_PARTY]);
-      assert.equal(harness.sendMetadata().filter((send) => send.senderId === "fu-seen").at(-1)?.metadata, BOT_MESSAGE_METADATA,
-        "sent through the bot's own path: the send-time takeover guard applies");
-      assert.equal(harness.history.filter((row) => row.sender_id === "fu-seen").at(-1)?.text, NEXT_QUESTION_PARTY, "stored as the bot's message");
-      tick(11 * MIN);
+      // One trip in play, its programme not sent yet: the follow-up offers it, with the trip's web page.
+      assert.deepEqual(to(first, "fu-seen"), [PROGRAM_OFFER]);
+      const lastSend = harness.sendMetadata().filter((send) => send.senderId === "fu-seen").at(-1);
+      assert.equal(lastSend?.metadata, BOT_MESSAGE_METADATA, "sent through the bot's own path: the send-time takeover guard applies");
+      assert.deepEqual(lastSend?.quickReplies, ["Хөтөлбөр үзэх"], "with the programme button");
+      assert.equal(harness.history.filter((row) => row.sender_id === "fu-seen").at(-1)?.text, PROGRAM_OFFER, "stored as the bot's message");
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-seen"), [], "never a second follow-up for the same answer");
       // The customer answers, the bot answers again, and leaves it on seen again: still once per 24 h.
       const again = await fb("fu-seen", "3/29");
       assert.equal(again.sends.length, 1);
       answeredThread("fu-seen", "3/29", again.sends[0].text);
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-seen"), [], "at most one follow-up in 24 hours");
       await harness.settle(() => followUpLogs("fu-seen").some((log) => log.event === "follow_up.sent"));
       const sent = followUpLogs("fu-seen").find((log) => log.event === "follow_up.sent");
@@ -94,12 +102,12 @@ test("follow-up journeys: one question after silence, never over a person, never
       assert.doesNotMatch(JSON.stringify(sent), /Норвел|үнэ|3\/29/u, "no customer text in the log");
     });
 
-    await context.test("(b) the customer wrote before 10 minutes: nothing; a new answer restarts the 10 minutes", async () => {
+    await context.test("(b) the customer wrote before 30 minutes: nothing; a new answer restarts the 30 minutes", async () => {
       const answered = await fb("fu-wrote", ASK_PRICE);
       answeredThread("fu-wrote", ASK_PRICE, answered.sends[0].text);
       tick(4 * MIN);
       assert.deepEqual((await fb("fu-wrote", "😊", {})).sends, [], "an emoji is stored, not answered");
-      tick(7 * MIN);
+      tick(27 * MIN);
       assert.deepEqual(to(await cron(), "fu-wrote"), []);
       assert.equal(harness.followUpState("fu-wrote")?.slot, "", "the stale question is cleared");
 
@@ -109,29 +117,57 @@ test("follow-up journeys: one question after silence, never over a person, never
       const second = await fb("fu-restart", "3/15");
       assert.ok(second.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_PARTY}`), `a departure answer asks the party: ${second.sends[0].text}`);
       answeredThread("fu-restart", "3/15", second.sends[0].text);
-      tick(6 * MIN);
-      assert.deepEqual(to(await cron(), "fu-restart"), [], "11 minutes after the first answer, 6 after the last");
+      tick(26 * MIN);
+      assert.deepEqual(to(await cron(), "fu-restart"), [], "31 minutes after the first answer, 26 after the last");
       tick(5 * MIN);
-      // Trip and date known, the party just asked: the follow-up hands the booking to a consultant.
-      assert.deepEqual(to(await cron(), "fu-restart"), [NEXT_QUESTION_NEXT_STEP]);
+      // Trip and date known, the party just asked: the follow-up offers the programme (not sent yet).
+      assert.deepEqual(to(await cron(), "fu-restart"), [PROGRAM_OFFER]);
+    });
+
+    await context.test("(l) 'тийм' under the programme offer sends the programme; the offer never comes once it was sent", async () => {
+      const answered = await fb("fu-yes", ASK_PRICE);
+      answeredThread("fu-yes", ASK_PRICE, answered.sends[0].text);
+      tick(31 * MIN);
+      assert.deepEqual(to(await cron(), "fu-yes"), [PROGRAM_OFFER]);
+      for (const [index, yes] of ["тийм", "за", "Авъя"].entries()) {
+        const sender = `fu-yes-${index}`;
+        const card = await fb(sender, ASK_PRICE);
+        answeredThread(sender, ASK_PRICE, card.sends[0].text);
+        tick(31 * MIN);
+        assert.deepEqual(to(await cron(), sender), [PROGRAM_OFFER], `${sender}: offered`);
+        const reply = await fb(sender, yes, {});
+        assert.ok(reply.sends.length > 0, `"${yes}": answered`);
+        assert.ok(reply.sends[0].text.startsWith(NORVEL_PAGE), `"${yes}" gets the programme of the trip in play: ${reply.sends[0].text}`);
+      }
+      // A "yes" not under the offer is not the button.
+      const { programOfferAccepted } = await import("../src/lib/programOffer");
+      assert.equal(programOfferAccepted([{ role: "assistant", text: "НОРВЕЛ ХОТЫН АЯЛАЛ\n\nАль өдөр нь танд тохирох вэ?" }], "тийм"), null);
+      assert.equal(programOfferAccepted([{ role: "assistant", text: PROGRAM_OFFER }], "тийм, гэхдээ үнэ нь хэд вэ"), null, "a longer message is read as written");
+      assert.equal(programOfferAccepted([{ role: "assistant", text: PROGRAM_OFFER }], "тиймээ"), "Хөтөлбөр үзэх");
+      // The programme already went out in the conversation: the follow-up asks the next thing instead.
+      const { nextQuestion } = await import("../src/lib/nextQuestion");
+      const base = { reply: "НОРВЕЛ ХОТЫН АЯЛАЛ\nPDF хөтөлбөрийг хавсаргалаа.", history: [], customerText: "Хөтөлбөр үзэх",
+        selection: { tripId: "norvel", date: null, dateScope: null, passengers: [] } as never, pendingTripIds: [], ledger: null,
+        trips: [norvel] as never, phoneKnown: false, now: new Date("2098-02-01T04:00:00Z") };
+      assert.notEqual(nextQuestion({ ...base, purpose: "follow_up" })?.slot, "program");
     });
 
     await context.test("(c) after 'connect to a person' (hand-off pause) nothing is sent", async () => {
       assert.equal((await fb("fu-human", ASK_PRICE)).sends.length, 1);
-      assert.equal(harness.followUpState("fu-human")?.slot, "party", "the answer armed a follow-up");
+      assert.equal(harness.followUpState("fu-human")?.slot, "program", "the answer armed a follow-up");
       const handoff = await fb("fu-human", "Зөвлөхтэй холбогдох", {});
       assert.equal(handoff.sends.length, 1);
       assert.equal(harness.pauseState("fu-human")?.pause_reason, "handoff");
       assert.equal(harness.followUpState("fu-human")?.slot, "", "the hand-off reply cleared the armed question");
       assert.ok(!NEXT_QUESTION_TEXTS.some((question) => handoff.sends[0].text.includes(question)), "the hand-off reply asks nothing more");
       answeredThread("fu-human", "Зөвлөхтэй холбогдох", handoff.sends[0].text);
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-human"), []);
       // The hand-off marker written while the answer was still armed (another path paused the customer).
       const armed = await fb("fu-handoff-marker", ASK_PRICE);
       answeredThread("fu-handoff-marker", ASK_PRICE, armed.sends[0].text);
       harness.pause("fu-handoff-marker", new Date(Date.now() + HOUR).toISOString(), "handoff");
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-handoff-marker"), []);
       await harness.settle(() => followUpLogs("fu-handoff-marker").some((log) => log.event === "follow_up.skipped"));
       assert.equal(followUpLogs("fu-handoff-marker").find((log) => log.event === "follow_up.skipped")?.fields.reason, "paused:handoff");
@@ -143,7 +179,7 @@ test("follow-up journeys: one question after silence, never over a person, never
       const answered = await fb("fu-staff", ASK_PRICE);
       answeredThread("fu-staff", ASK_PRICE, answered.sends[0].text,
         [{ from: "page", text: "Сайн байна уу, зөвлөх Номин байна", agoMs: 0, source: "mobile", id: "m_fu_staff_1" }]);
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-staff"), []);
       await harness.settle(() => followUpLogs("fu-staff").some((log) => log.event === "follow_up.skipped"));
       assert.equal(followUpLogs("fu-staff").find((log) => log.event === "follow_up.skipped")?.fields.reason, "staff_in_thread");
@@ -157,7 +193,7 @@ test("follow-up journeys: one question after silence, never over a person, never
       assert.ok(!NEXT_QUESTION_TEXTS.some((question) => existing.sends[0].text.includes(question)), `no sales question: ${existing.sends[0].text}`);
       assert.equal(harness.followUpState("fu-existing")?.slot ?? "", "", "and arms no follow-up");
       answeredThread("fu-existing", ASK_PRICE, existing.sends[0].text);
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-existing"), []);
     });
 
@@ -167,7 +203,7 @@ test("follow-up journeys: one question after silence, never over a person, never
       assert.equal(thanks.sends.length, 1);
       assert.equal(harness.followUpState("fu-thanks")?.slot, "", "the thank-you reply cleared the armed question");
       answeredThread("fu-thanks", "Баярлалаа", thanks.sends[0].text);
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-thanks"), []);
     });
 
@@ -180,7 +216,7 @@ test("follow-up journeys: one question after silence, never over a person, never
       const outage = await fb("fu-outage", "Танай компани хэдэн жил ажиллаж байна", { unavailable: true });
       assert.deepEqual(outage.sends.map((send) => send.text), [AI_OUTAGE_HANDOFF_REPLY], "the outage notice is unchanged");
       answeredThread("fu-outage", "Танай компани хэдэн жил ажиллаж байна", outage.sends[0].text);
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.equal(harness.followUpState("fu-contact")?.slot, "", "the contact reply cleared the armed question");
       assert.equal(harness.followUpState("fu-outage")?.slot, "", "so did the outage notice");
       const run = await cron();
@@ -219,7 +255,7 @@ test("follow-up journeys: one question after silence, never over a person, never
       const answered = await fb("fu-race", ASK_PRICE);
       answeredThread("fu-race", ASK_PRICE, answered.sends[0].text);
       harness.onThreadRead("fu-race", () => harness.pause("fu-race", "2999-12-31T00:00:00.000Z", "manual"));
-      tick(11 * MIN);
+      tick(31 * MIN);
       assert.deepEqual(to(await cron(), "fu-race"), []);
       await harness.settle(() => followUpLogs("fu-race").some((log) => log.event === "follow_up.skipped"));
       assert.equal(followUpLogs("fu-race").find((log) => log.event === "follow_up.skipped")?.fields.reason, "paused_before_send:manual");
@@ -229,7 +265,7 @@ test("follow-up journeys: one question after silence, never over a person, never
       const answered = await fb("fu-off", ASK_PRICE);
       answeredThread("fu-off", ASK_PRICE, answered.sends[0].text);
       harness.settings({ extra: { ...SETTINGS.extra, follow_up_enabled: false } });
-      tick(11 * MIN);
+      tick(31 * MIN);
       const off = await cron();
       assert.equal(off.body.disabled, "settings");
       assert.deepEqual(to(off, "fu-off"), []);
@@ -243,21 +279,21 @@ test("follow-up journeys: one question after silence, never over a person, never
         delete process.env.FOLLOW_UP_ENABLED;
       }
       // Back on: the answer is still within its window and goes once.
-      assert.deepEqual(to(await cron(), "fu-off"), [NEXT_QUESTION_PARTY]);
+      assert.deepEqual(to(await cron(), "fu-off"), [PROGRAM_OFFER]);
     });
 
     await context.test("(f) quiet hours 22:00-09:00 Ulaanbaatar: the follow-up waits until 09:00", async () => {
       tick(Date.parse("2098-02-02T13:55:00Z") - Date.now()); // 21:55 in Ulaanbaatar
       const answered = await fb("fu-night", ASK_PRICE);
       answeredThread("fu-night", ASK_PRICE, answered.sends[0].text);
-      tick(11 * MIN); // 22:06
+      tick(31 * MIN); // 22:06
       const night = await cron();
       assert.equal(night.body.deferred, "quiet_hours");
       assert.deepEqual(to(night, "fu-night"), []);
       tick(Date.parse("2098-02-03T00:55:00Z") - Date.now()); // 08:55
       assert.deepEqual(to(await cron(), "fu-night"), []);
       tick(5 * MIN); // 09:00, 11 hours after the answer: inside the 20 h window
-      assert.deepEqual(to(await cron(), "fu-night"), [NEXT_QUESTION_PARTY]);
+      assert.deepEqual(to(await cron(), "fu-night"), [PROGRAM_OFFER]);
     });
   } finally {
     await harness.close();

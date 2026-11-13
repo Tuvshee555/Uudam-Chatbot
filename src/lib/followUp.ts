@@ -13,7 +13,7 @@
  *
  * Rules (each skip is logged with its reason, never with customer text):
  * - the bot's answer is the conversation's last message, ≥ delay minutes old (extra.follow_up_delay_minutes,
- *   default 10), the customer's last message < 20 h old (Meta's 24 h window, with room), and no follow-up
+ *   default 30 since 2026-11-13), the customer's last message < 20 h old (Meta's 24 h window, with room), and no follow-up
  *   to this sender in the last 24 h;
  * - no pause of any kind (a consultant's reply, «Би хариулна», a hand-off after "connect to a person",
  *   the booking marker), no consultant in the Messenger thread or in the stored history within 30 days
@@ -27,7 +27,8 @@
  */
 import { getEnv, pageTokenForRecipient } from "./env";
 import { classifyMessageNeed, isSocialMessage, type MessageNeed } from "./messageNeed";
-import { sendTextMessage } from "./messenger";
+import { sendQuickReplies, sendTextMessage } from "./messenger";
+import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
 import { isMetaOutboundDisabled } from "./metaOutboundKillSwitch";
 import { queryNeon } from "./neonDb";
 import { hashIdentifier, logInfo, logWarn, recordCounter } from "./observability";
@@ -40,7 +41,8 @@ import { ensureTravelSchema } from "./travelSchema";
 import { extractPhoneNumber } from "./webhookMedia";
 import { dbAppendMessage, dbGetConversationRows, dbHasRecentStaffMessage, dbPauseReason, type ConversationRow } from "./travelSessionDb";
 
-export const FOLLOW_UP_DEFAULT_DELAY_MINUTES = 10;
+/** Owner, 2026-11-13: "when someone doesn't answer for 30 minutes" (was 10). */
+export const FOLLOW_UP_DEFAULT_DELAY_MINUTES = 30;
 /** The customer's last message must be newer than this (Meta allows 24 h). */
 export const FOLLOW_UP_WINDOW_MS = 20 * 60 * 60 * 1000;
 /** At most one follow-up per sender in this time. */
@@ -245,8 +247,13 @@ async function followUpOne(candidate: Candidate, now: Date): Promise<string> {
   const raced = conversationSkipReason(await dbGetConversationRows(senderId), Date.parse(armedAt), now.getTime());
   if (raced) return skip(`before_send:${raced}`);
   try {
-    // The bot's own send path: the bot metadata makes the send-time takeover guard apply.
-    await sendTextMessage(senderId, candidate.question, page.token, { source: "api.cron.follow_up" });
+    // The bot's own send path: the bot metadata makes the send-time takeover guard apply. The programme offer
+    // carries the «Хөтөлбөр үзэх» button, which the webhook answers with the trip's programme.
+    if (candidate.slot === "program") {
+      await sendQuickReplies(senderId, candidate.question, [SMART_BUTTON_LABELS.PROGRAM], page.token, { source: "api.cron.follow_up" });
+    } else {
+      await sendTextMessage(senderId, candidate.question, page.token, { source: "api.cron.follow_up" });
+    }
   } catch (error) {
     if (isStaffTakeoverSendBlocked(error)) return skip(`takeover_blocked:${error.reason}`);
     logWarn("follow_up.send_failed", { senderHash, message: error instanceof Error ? error.message.slice(0, 160) : "unknown" });

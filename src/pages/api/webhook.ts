@@ -26,6 +26,7 @@ import {
   THANKS_REPLY,
 } from "../../lib/greetingPhrases";
 import { adultCountAnswer, optionChosenByNumber } from "../../lib/selectionAnswer";
+import { programOfferAccepted } from "../../lib/programOffer";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { asksCommercialTerm, classifyMessageNeed, extractNeedConstraints, isSocialMessage } from "../../lib/messageNeed";
@@ -391,7 +392,8 @@ async function handleMessageTurn(
     getRecentTripIds(senderId),
   ]);
   // "1" under a bulleted hotel / package / date question is that option, not a number with no list.
-  text = adultCountAnswer(history, text) ?? optionChosenByNumber(history, text) ?? text;
+  // "тийм" under the follow-up's programme offer is the «Хөтөлбөр үзэх» button (programOffer.ts).
+  text = programOfferAccepted(history, text) ?? adultCountAnswer(history, text) ?? optionChosenByNumber(history, text) ?? text;
   // "<place> биш / хэрэггүй / орохгүй / -гүй / -аас бусад" rules that place out: only the rest is matched,
   // and the trips it names are left out of this turn's catalogue (negatedTrip.ts).
   const excludedTripIds = new Set<string>();

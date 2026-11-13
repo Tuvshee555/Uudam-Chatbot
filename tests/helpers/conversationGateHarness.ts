@@ -58,7 +58,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
   // Runs once when this customer's Messenger thread is next read (e.g. a consultant takes over meanwhile).
   const threadHooks = new Map<string, () => void>();
   // The metadata each Messenger send carried (the bot's own marker makes the takeover guard apply).
-  const sendMetadata: Array<{ senderId: string; metadata: string | null }> = [];
+  const sendMetadata: Array<{ senderId: string; metadata: string | null; quickReplies: string[] }> = [];
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
   /** Waits (real time, up to 2 s) until fire-and-forget writes make `done` true. Only Date is mocked. */
   const settle = async (done: () => boolean) => {
@@ -277,7 +277,8 @@ export async function conversationGateHarness(context: TestContext, options: { e
       }
       if (body.message?.text) {
         sends.push({ senderId: String(body.recipient?.id || ""), text: body.message.text });
-        sendMetadata.push({ senderId: String(body.recipient?.id || ""), metadata: body.message.metadata ?? null });
+        sendMetadata.push({ senderId: String(body.recipient?.id || ""), metadata: body.message.metadata ?? null,
+          quickReplies: Array.isArray(body.message.quick_replies) ? body.message.quick_replies.map((reply: { payload?: string }) => String(reply.payload ?? "")) : [] });
       }
       return new Response(JSON.stringify({ recipient_id: body.recipient?.id || "fixture", message_id: `fixture-${++serial}`, data: [] }), { status: 200 });
     }

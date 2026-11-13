@@ -79,12 +79,18 @@ test("never the question the bot just asked, never one already in the reply", ()
   assert.equal(ask({ selection: select("norvel"), previousBotText: "Аль гарах өдрөөр аялах вэ?" })?.slot, "party");
   // The party was asked last time and is still unknown: a reply adds nothing more ...
   assert.equal(ask({ selection: select("norvel", { date: "2098-03-15" }), previousBotText: NEXT_QUESTION_PARTY }), null);
-  // ... and the follow-up after silence hands it to the consultant.
-  assert.equal(ask({ purpose: "follow_up", selection: select("norvel", { date: "2098-03-15" }), reply: `${FARE_CARD}\n\n${NEXT_QUESTION_PARTY}` })?.slot, "next_step");
+  // ... and the follow-up after silence offers the programme (owner, 2026-11-13), never the party again;
+  assert.equal(ask({ purpose: "follow_up", selection: select("norvel", { date: "2098-03-15" }), reply: `${FARE_CARD}\n\n${NEXT_QUESTION_PARTY}` })?.slot, "program");
+  // once the programme went out, it hands the booking to the consultant.
+  assert.equal(ask({ purpose: "follow_up", selection: select("norvel", { date: "2098-03-15" }),
+    reply: `${FARE_CARD}\nPDF хөтөлбөрийг хавсаргалаа.\n\n${NEXT_QUESTION_PARTY}` })?.slot, "next_step");
   // A party total that asked the departure ("9 том хүн" → totals + "Аль гарах өдрөөр аялах вэ?"): the same.
   const nine = select("norvel", { passengers: [{ kind: "adult", count: 9 }] });
   assert.equal(ask({ selection: nine, reply: `${FARE_CARD}\nАль гарах өдрөөр аялах вэ?\n• 3 сарын 15` }), null, "the answer itself adds nothing");
-  assert.equal(ask({ purpose: "follow_up", selection: nine, reply: `${FARE_CARD}\nАль гарах өдрөөр аялах вэ?\n• 3 сарын 15` })?.slot, "next_step");
+  assert.equal(ask({ purpose: "follow_up", selection: nine, reply: `${FARE_CARD}\nАль гарах өдрөөр аялах вэ?\n• 3 сарын 15` })?.slot, "program");
+  // The programme offer is asked once: never again right after it.
+  assert.equal(ask({ purpose: "follow_up", selection: nine, previousBotText: "Аяллын дэлгэрэнгүй хөтөлбөрийг авах уу? 😊",
+    reply: `${FARE_CARD}\nАль гарах өдрөөр аялах вэ?\n• 3 сарын 15` })?.slot, "next_step");
   // The destination question also asks the month.
   assert.equal(ask({ reply: "Хэдэн сард аялах вэ?" }), null);
 });
