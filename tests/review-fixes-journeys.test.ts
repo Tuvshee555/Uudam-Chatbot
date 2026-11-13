@@ -134,6 +134,60 @@ test("'1' under the nearest-dates reply is the first trip SHOWN, not the first i
   }
 });
 
+// Decision gate, 2026-11-13: a trip title holding ordinary words ("хөтөлбөртэй илүү боломжын үнэтэй аялал") was
+// picked for "11 нд боломжгүй байна аа" ("the 11th is not possible"), because "боломжгүй" matched "боломжын".
+const plainWordsCatalogue = () => [
+  trip("plain", "ВЕЛОРА – ТАСМИН хөтөлбөртэй илүү боломжын үнэтэй аялал", ["2098-02-14", "2098-03-14"], [2_490_000, 2_190_000, null],
+    { extra: { transport_type: "direct_flight", aliases: [], itinerary_days: days } }),
+  land("other", "ОРМИН – КЕЛВАР ХОТЫН АЯЛАЛ", ["2098-02-12", "2098-02-26"], 1_190_000),
+  land("checkup", "ЛОРВЕН ХОТЫН ЭРҮҮЛ МЭНДИЙН БҮТЭН БИЕИЙН ШИНЖИЛГЭЭТЭЙ АЯЛАЛ", ["2098-02-15", "2098-03-01"], 1_590_000),
+];
+
+test("ordinary words in a trip title (possible, more, full, a greeting) never name that trip", async () => {
+  const { resolveTripFromUserMessage } = await import("../src/lib/travelFastPaths");
+  const trips = plainWordsCatalogue();
+  const picked = (text: string) => {
+    const result = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false, includeSoldOut: true });
+    return result.status === "verified" ? result.trip.id : null;
+  };
+  for (const text of ["11 нд боломжгүй байна аа", "боломжтой аялал байна уу", "bolomjgui bn", "илүү боломжийн аялал"]) {
+    assert.notEqual(picked(text), "plain", `"${text}" names no trip`);
+  }
+  for (const text of ["Өглөөний мэнд, ticket хэзээ явуулах боломжтой вэ?", "өдрийн мэнд 2 хүний урьдчилгаа шилжүүллээ", "1, 2н бүтэн хөтөлбөрийг үзье"]) {
+    assert.notEqual(picked(text), "checkup", `"${text}" names no trip`);
+  }
+  // Each trip is still found by its own words.
+  assert.equal(picked("велора тасмин аялал"), "plain");
+  assert.equal(picked("бүтэн биеийн шинжилгээ"), "checkup");
+  assert.equal(picked("эрүүл мэндийн шинжилгээтэй аялал"), "checkup");
+});
+
+test("a fresh 'the 11th is not possible' is never answered with a trip's card, even when the model guesses that trip", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog(plainWordsCatalogue());
+  try {
+    const readings: ModelOverride[] = [
+      { unavailable: true } as ModelOverride,
+      { place: null, tripId: "plain", certainty: "one", date: "2098-02-11", topics: ["dates"] } as ModelOverride,
+      { place: null, tripId: "plain", certainty: "one", topics: ["availability"] } as ModelOverride,
+    ];
+    for (const [index, reading] of readings.entries()) {
+      for (const text of ["11 нд боломжгүй байна аа", "боломжтой аялал байна уу"]) {
+        const result = await harness.turn(`rf-plain-words-${index}-${text.length}`, text, reading);
+        const said = textOf(result.sends);
+        assert.ok(!said.includes("ВЕЛОРА"), `reading ${index}, "${text}": no trip is named on "possible / not possible": ${said}`);
+      }
+    }
+    for (const [index, text] of ["Өглөөний мэнд", "өдрийн мэнд 2 хүний урьдчилгаа шилжүүллээ", "бүтэн хөтөлбөрийг нь үзье"].entries()) {
+      const result = await harness.turn(`rf-greeting-${index}`, text, { unavailable: true } as ModelOverride);
+      const said = textOf(result.sends);
+      assert.ok(!said.includes("ЛОРВЕН"), `"${text}": a greeting or "the full programme" names no trip: ${said}`);
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
 // Independent review (C6): the journey for the cancelled-date guard passed without the guard, because the harness
 // path already strips closed dates. This unit test hands the function a trip whose closed date is still in its list.
 test("a cancelled or sold-out departure is never an alternative, even if it is still in the trip's own date list", async () => {

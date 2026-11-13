@@ -147,12 +147,12 @@ to read, and invented catalogues give sibling trips names of equal length (which
 6. **Data (client, admin):** transport type on 5 trips; a trip whose own dates are all cancelled shows an empty schedule
    while price cards sell website-only dates; one trip sells a date with no price; sold-out dates answered "no departure"
    instead of "full". See `code-reports/website-db-consistency.md`.
-7. **Mimic Myself is ON** with a tone pool that is about 40% URLs and dates. Owner decision: turn it off, or filter.
+7. ~~Mimic Myself is ON with a tone pool that is about 40% URLs and dates.~~ Turned OFF on 2026-11-13 (see 9).
 
 ## 7. Owner decisions
 
-1. Approve a push to `main` (it deploys). Until then nothing here is live.
-2. Mimic Myself: off, or digit/URL-filtered.
+1. ~~Approve a push to `main` (it deploys).~~ Approved and pushed on 2026-11-13 (a930229).
+2. ~~Mimic Myself: off, or digit/URL-filtered.~~ Off (owner left the call to us; see 9).
 3. Whether a customer a consultant wrote to within 30 days is also sold nearest dates (today: no, silence plus lead).
 4. Radius for "close" dates (default 7 days either side; `DATE_ALTERNATIVE_RADIUS_DAYS`).
 
@@ -163,3 +163,25 @@ Deployed by pushing `main`; the Vercel prebuild runs preflight, the accuracy fix
 silent reasons `no_data:date_alternatives_none`, `no_data:date_alternatives`) for 48 h; read the first real conversations
 that hit the new replies. Rollback: `git revert` the commit and push, or promote the previous deployment in Vercel.
 `DATE_ALTERNATIVE_RADIUS_DAYS` is the only new switch; the date-rejection branch has no flag (revert to remove it).
+
+## 9. Follow-up the same day (owner: "you decide")
+
+- **Mimic Myself: OFF in production** (`travel_bot_settings.extra.mimic_myself_enabled = false`; the other settings
+  were kept; settings are read per message, so it applied to the next one). Its example pool taught the bot to copy
+  links and dates from old chats, which is exactly the stale-fact failure this work removes.
+- **"Interest" lead when a customer presses «Захиалах» but gives no phone: not built.** The Leads tab is not read
+  (461 leads, none opened), the follow-up of 2026-11-12 already asks for the phone, and one durable lead per kind
+  means an early interest lead would block the later lead that carries the phone. Revisit only with a separate lead
+  kind and an admin view staff actually use.
+- **Decision-gate baseline re-saved** after reading its differences. Reading them found one more bug class, fixed in
+  the next commit: ordinary words in client-written trip titles picked that trip. The deployed code answered 22 real
+  plain greetings ("Өдрийн мэнд", "Оройн мэнд") as the one checkup trip whose title holds "мэндийн", "боломжгүй /
+  боломжтой" as the trip whose title holds "боломжын", and "the full programme" as the "бүтэн биеийн" trip. The words
+  are now generic route words. On 2,121 real messages: 55 decisions change, all read (34 one-trip guesses and 16 lists
+  become "no trip", 5 Hainan lists lose the unrelated rows). Tried and rejected: "a lone negative-score match is no
+  trip" (it dropped 14 correct romanised picks).
+- Checks for that commit: tsc clean; `npm test` 3,158 tests, 0 failed; `qa:conversations` 636, 0 failed; `npm run
+  gate` 0/25 trip-less picks, 0/305 own answers rejected; `qa:live` once: 14 journeys, 50 turns, 0 fact issues,
+  61 calls, about $0.15.
+- First 27 minutes on production after a930229: no customer messages arrived (0 outcomes, 0 errors), so the new
+  replies are not yet proven on real traffic.

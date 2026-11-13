@@ -44,6 +44,32 @@ export const GENERIC_ROUTE_WORDS = new Set([
   "program",
   "pdf",
   "хөтөлбөр",
+  "хөтөлбөртэй",
+  "хөтөлбөрийн",
+  // "Possibility" and "more" are never a destination, but a trip title can hold them ("<хот> хөтөлбөртэй илүү
+  // боломжын үнэтэй аялал"): "11 нд боломжгүй байна аа" ("the 11th is not possible") then matched that one title and
+  // was answered about that trip (found by the decision gate on 2026-11-13).
+  "боломж",
+  "боломжтой",
+  "боломжгүй",
+  "боломжийн",
+  "боломжын",
+  "bolomj",
+  "bolomjtoi",
+  "bolomjgui",
+  "bolomjiin",
+  "bolomjin",
+  "илүү",
+  "ilvv",
+  "ilvu",
+  // The greeting "Өглөөний / Өдрийн / Оройн мэнд" and "бүтэн" ("full", "whole") are never a destination, but they sit
+  // in checkup-trip titles ("эрүүл мэндийн", "бүтэн биеийн"): a good-morning message and "send the full programme"
+  // were each answered with one checkup trip. Those trips keep their own words (эрүүл, биеийн, шинжилгээ).
+  "мэнд",
+  "mend",
+  "бүтэн",
+  "butun",
+  "buten",
   // Request verbs from the "Хөтөлбөр үзэх" / "Зураг үзэх" buttons and everyday
   // phrasing. They are never part of a destination. Without this,
   // "Хөтөлбөр үзэх" matched the trip "<хот> -намрын тахилга үзэх аялал" on the
