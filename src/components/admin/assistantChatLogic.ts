@@ -83,11 +83,36 @@ export function attachmentRoute(text: string, files: AttachedFile[]): Attachment
 /* ---------------------------------------------------------------- */
 
 /** The body of one typed instruction, a typed answer (with its question) or a tapped option. */
+/** An unsaved new-trip card in this chat: the server edits it (not a saved trip) when a message is about it. */
+export type OpenProposalRef = { request_id: number; names: string[]; latest: boolean };
+
+/**
+ * The new-trip cards still open in the thread (not saved, cancelled or expired), newest first, at most
+ * three. `latest`: that card is the assistant's last word. Until 2026-11-14 a message about a trip just
+ * read («сүүлийн өдрийг нэм», «… линк») went to the saved catalogue and edited or linked another trip.
+ */
+export function openNewTripProposals(messages: AssistantChatMessage[]): OpenProposalRef[] {
+  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const open: OpenProposalRef[] = [];
+  for (let index = messages.length - 1; index >= 0 && open.length < 3; index--) {
+    const message = messages[index];
+    if (message.role !== "assistant" || message.kind !== "proposal" || message.status !== "pending" || message.expired || message.requestId == null) continue;
+    const names = (message.proposal.actions || [])
+      .filter((action) => String(action.action || "").toLowerCase() === "upsert" && !action.trip_id)
+      .map((action) => String((action.fields as Record<string, unknown> | undefined)?.route_name || "").trim().slice(0, 200))
+      .filter(Boolean);
+    if (!names.length) continue;
+    open.push({ request_id: message.requestId, names: names.slice(0, 3), latest: message === lastAssistant });
+  }
+  return open;
+}
+
 export function instructionBody(input: {
   instruction: string;
   sessionId: string;
   answerTo?: AnswerToRef | null;
   attachments?: AssistantAttachment[];
+  openProposals?: OpenProposalRef[];
 }): Record<string, unknown> {
   const attachments = (input.attachments || []).filter((item) => /^https:\/\//.test(item.url)).slice(0, MAX_AGENT_IMAGES);
   return {
@@ -95,6 +120,7 @@ export function instructionBody(input: {
     session_id: input.sessionId,
     ...(input.answerTo?.question ? { answer_to: input.answerTo } : {}),
     ...(attachments.length ? { attachments: attachments.map((item) => ({ url: item.url, kind: "image" as const })) } : {}),
+    ...(input.openProposals?.length ? { open_proposals: input.openProposals } : {}),
   };
 }
 
@@ -200,6 +226,7 @@ const STEP_WORDS: Record<string, string> = {
   resolve_link: "холбоос тодорхойлсон",
   read_web_page: "хуудас уншсан",
   host_image: "зураг байршуулсан",
+  open_card: "нээлттэй картыг зассан",
 };
 
 /** One small line under a reply ("AI туслах · аялал хайсан · аяллыг шалгасан"), or null. */

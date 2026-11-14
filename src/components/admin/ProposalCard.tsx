@@ -811,7 +811,7 @@ export function ProposalCard({
         <footer className={cx(footerCls, "bg-canvas/70 text-sm text-ink-muted")}>Өөрчлөлт буцаагдлаа. Юу ч үлдээгүй.</footer>
       )}
       {state === "cancelled" && (
-        <footer className={cx(footerCls, "bg-canvas/70 text-sm text-ink-muted")}>Цуцлагдсан. Юу ч хадгалагдаагүй.</footer>
+        <footer className={cx(footerCls, "bg-canvas/70 text-sm text-ink-muted")}>{message.resultText || "Цуцлагдсан. Юу ч хадгалагдаагүй."}</footer>
       )}
       {state === "error" && message.expired && (
         <footer className={cx(footerCls, "flex flex-wrap items-center justify-between gap-3 bg-canvas/70")}>

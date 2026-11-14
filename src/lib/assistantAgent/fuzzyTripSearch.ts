@@ -11,6 +11,7 @@
  * matching a single word. Pure: no database, no model.
  */
 import type { TravelTrip } from "../travelTypes";
+import { isGenericWord } from "../tripNameTokens";
 
 const CYRILLIC: Record<string, string> = {
   а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "yo", ж: "j", з: "z", и: "i", й: "i", к: "k", л: "l", м: "m",
@@ -59,8 +60,13 @@ function words(text: string): string[] {
   return text.split(/[^\p{L}\p{N}]+/u).map((word) => word.trim()).filter(Boolean);
 }
 
+/**
+ * The query's words that can name a trip. A three-letter place counts ("Хөх"); the words every trip name
+ * repeats do not ("шинэ жилийн … хотын аялал" matched «ХАЙНАН … ШИНЭ ЖИЛИЙН АЯЛАЛ» for a Hohhot trip, 2026-11-14).
+ */
 function queryWords(query: string): string[] {
-  return [...new Set(words(query).filter((word) => word.length >= 4 && !STOP.has(word.toLowerCase())).map(soundSkeleton).filter((skeleton) => skeleton.length >= 4))];
+  return [...new Set(words(query).filter((word) => word.length >= 3 && !STOP.has(word.toLowerCase()) && !isGenericWord(word))
+    .map(soundSkeleton).filter((skeleton) => skeleton.length >= 3))];
 }
 
 function tripWords(trip: TravelTrip): string[] {

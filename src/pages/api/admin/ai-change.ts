@@ -10,6 +10,7 @@ import {
 import { answeredInstruction, generateAssistantReply, reviseStoredProposal } from "../../../lib/assistantReply";
 import { logAssistantEvent, recentAssistantTurns } from "../../../lib/assistantLog";
 import { EXPIRED_PROPOSAL_MESSAGE, expireStaleProposals, loadChangeRequest } from "../../../lib/assistantAgent/requests";
+import { parseOpenProposals } from "../../../lib/assistantAgent/openProposals";
 import type { AgentAttachment, AnswerTo } from "../../../lib/assistantAgent/types";
 import { createQuickProposal, type QuickActionRequest } from "../../../lib/assistantQuickActions";
 import {
@@ -194,7 +195,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const turns = await recentAssistantTurns(session_id);
     await logAssistantEvent({ sessionId: session_id, role: "admin", kind: answerTo ? "clarification" : "instruction",
       text: [answerTo ? `(хариулт: ${answerTo.question.slice(0, 200)})` : "", trimmedInstruction, attachments.length ? `[${attachments.length} зураг]` : ""].filter(Boolean).join(" ") });
-    const reply = await generateAssistantReply(trimmedInstruction, { turns, answerTo, attachments });
+    const openProposals = parseOpenProposals(req.body?.open_proposals);
+    const reply = await generateAssistantReply(trimmedInstruction, { turns, answerTo, attachments, openProposals });
     if (reply.kind === "ask") {
       // One question with real choices (which trip, which day, which amount); nothing is saved yet.
       // answer_to is what the page sends back with a TYPED answer, so it is read as the answer.

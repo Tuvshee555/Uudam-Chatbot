@@ -107,7 +107,7 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
         // A new instruction may come back as a question or a note: shown in the thread as such.
         if (data.ask || (typeof data.note === "string" && data.note.trim())) {
           appendMessage(replyToMessage(data, { id: uid(), sent: instruction }));
-          setProposalMessage(message.id, { status: "cancelled" });
+          setProposalMessage(message.id, { status: "cancelled", resultText: undefined });
           return;
         }
         proposal = data.proposal;

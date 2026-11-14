@@ -36,6 +36,7 @@ import {
 import { filterFutureDepartureDates } from "./travelDates";
 import { validateTripDataChange } from "./tripDataValidation";
 import type { TripFactInput } from "./tripDataValidation";
+import { sharedDistinctive } from "./tripNameTokens";
 import {
   dateStateProblem,
   dateStatusOf,
@@ -466,7 +467,10 @@ export function validateAIChangeProposal(
       if (!tripId && !match.route_name && fieldsRoute && fieldsOperator) {
         // An archived trip of the same name is not a duplicate: a new trip is always a new
         // record (owner's rule), so only live trips are compared here.
-        const duplicateTrips = findTripMatches(existingTrips.filter((trip) => trip.status !== "archived"), fieldsOperator, fieldsRoute);
+        // Only a trip sharing a place is the same name: «Шинэ жилийн Хөх хотын аялал» and «ХАЙНАН … ШИНЭ
+        // ЖИЛИЙН АЯЛАЛ» share only generic words (tripNameTokens.ts, 2026-11-14).
+        const duplicateTrips = findTripMatches(existingTrips.filter((trip) => trip.status !== "archived"), fieldsOperator, fieldsRoute)
+          .filter((trip) => sharedDistinctive(trip.route_name, fieldsRoute) > 0);
         if (duplicateTrips.length > 0) {
           const program = (cleanedFields.extra as Record<string, unknown> | undefined)?.itinerary_days;
           if (Array.isArray(program) && program.length >= 2) {

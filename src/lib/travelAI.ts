@@ -55,6 +55,7 @@ type ProposalSource = {
 import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
 import { liftDayStates, withPricedDaysOnCalendar, withRowYearsOfCalendar } from "./tripDayStates";
 import { cleanRowHotels, cleanTripTitle, settleRowInfantFares } from "./tripRowFares";
+import { guardFileProposal } from "./fileProposalGuards";
 import { applyPriceTable, readPriceTable, type PriceTable } from "./tripPriceTable";
 
 function buildBatchSourceParts(input: {
@@ -908,6 +909,9 @@ async function createProposal(opts: {
     forbidCreate: instructionForbidsTripCreation(opts.instruction),
   }).proposal;
   if (opts.afterValidation) proposal = opts.afterValidation(proposal, trips);
+  // A file or page reading never renames an existing trip, empties its dates, or changes it from a
+  // part of a file that makes a new trip (fileProposalGuards.ts; a real save on 2026-11-14).
+  if (!instructionMode) guardFileProposal(proposal, trips);
   // After validation (which rewrites dates and rows): every priced day on the calendar and each
   // day's seat state held per day for the review (tripDayStates.ts).
   for (const action of newTripActions(proposal)) {

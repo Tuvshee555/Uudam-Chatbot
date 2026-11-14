@@ -378,3 +378,26 @@ test("with the database unreachable the admin gets one plain note, not a proposa
   assert.equal(res.body.proposal, undefined);
   assert.equal(modelCalls.length + agentCalls.length, 0);
 });
+
+test("a message about a trip still on an unsaved card changes that card, never a saved trip (2026-11-14)", async (context) => {
+  const newTrip = { action: "upsert", fields: { route_name: "Шинэ жилийн Сарнай хотын аялал", category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY",
+    duration_text: "5 өдөр 4 шөнө", departure_dates: ["2098-12-30"], adult_price: 1_990_000 } };
+  const { post, inserted, agentCalls, modelCalls } = await harness(context, { reader: [newTrip] });
+  const program = ["Шинэ жилийн Сарнай хотын аялал", "Өдөр 1: Нисэх", "Өдөр 2: Хот", "Өдөр 3: Музей", "Өдөр 4: Чөлөөт", "Үнэ: 1,990,000₮", "Гарах: 12/30", "Багтсан: буудал, хоол"].join("\n");
+  const first = await post({ instruction: program, session_id: "session-assistant-13" });
+  assert.equal(first.body.request_id, 71, JSON.stringify(first.body));
+  const open = [{ request_id: 71, names: ["Шинэ жилийн Сарнай хотын аялал"], latest: true }];
+  // "Add the last day": no saved trip named → the card just shown is read again with it.
+  const added = await post({ instruction: "сүүлийн өдрийг нэм", session_id: "session-assistant-13", open_proposals: open });
+  assert.equal(added.statusCode, 200, JSON.stringify(added.body));
+  assert.equal(added.body.request_id, 71, "the same card, revised");
+  assert.equal((added.body.proposal as { actions: Array<{ action: string }> }).actions[0]?.action, "upsert");
+  assert.equal(agentCalls.length, 0, "the saved catalogue's agent never sees it");
+  assert.equal(modelCalls.length, 2);
+  assert.match(modelCalls[1].all, /сүүлийн өдрийг нэм/);
+  // Its link: the trip has no page yet.
+  const link = await post({ instruction: "шинэ жилийн сарнай хотын аяллын линк", session_id: "session-assistant-13", open_proposals: open });
+  assert.match(String(link.body.note), /«Шинэ жилийн Сарнай хотын аялал» хараахан хадгалагдаагүй/);
+  assert.equal(modelCalls.length + agentCalls.length, 2, "answered in code");
+  assert.equal(inserted.length, 1);
+});

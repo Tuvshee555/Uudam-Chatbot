@@ -23,6 +23,7 @@ import {
 import { runAgent } from "./assistantAgent/agent";
 import { defaultAgentDeps } from "./assistantAgent/deps";
 import { identityLinks, resolveLinksInText, urlsInText } from "./assistantAgent/links";
+import { openProposalRoute, unsavedTripLinkNote, type OpenProposal } from "./assistantAgent/openProposals";
 import { isFileProposal, loadChangeRequest, saveRevisedProposal } from "./assistantAgent/requests";
 import { hasBrainTokens } from "./assistantAgent/turn";
 import type { AgentAttachment, AgentDeps, AgentOutcome, AnswerTo } from "./assistantAgent/types";
@@ -67,6 +68,8 @@ export type AssistantReplyOptions = {
   answerTo?: AnswerTo | null;
   /** Images the page already hosted, sent with the instruction. */
   attachments?: AgentAttachment[];
+  /** New-trip cards open on the page and not saved yet (assistantAgent/openProposals.ts). */
+  openProposals?: OpenProposal[];
   /** Tests: the agent's model and outside world. */
   agentDeps?: Partial<AgentDeps>;
 };
@@ -272,6 +275,12 @@ export async function generateAssistantReply(typed: string, options: AssistantRe
     }
   }
 
+  // A message about a trip still on an unsaved card changes that card, never a saved trip (2026-11-14).
+  if (!answering && !attachments.length && options.openProposals?.length) {
+    const opened = await openCardReply(instruction, options.openProposals, trips, options);
+    if (opened) return opened;
+  }
+
   const deps = { ...defaultAgentDeps(), ...(options.agentDeps || {}) } as AgentDeps;
   const run = await runAgent({ instruction, trips, turns: options.turns, answerTo: options.answerTo, attachments, today: options.now, deps });
   const outcome = run.outcome;
@@ -290,6 +299,26 @@ export async function generateAssistantReply(typed: string, options: AssistantRe
   if (outcome.kind === "ask") return { kind: "ask", ask: outcome.ask, source: "agent", steps };
   if (outcome.kind === "trip_source") return { ...(await tripSourceReply(outcome)), steps };
   return { kind: "note", text: outcome.text, steps };
+}
+
+/**
+ * The open card the message is about: its link is not there yet (a note), or the card is read
+ * again with the message. Null — the card is gone, saved or out of date, or the message is about
+ * something else — and the message goes to the agent as usual.
+ */
+async function openCardReply(instruction: string, open: OpenProposal[], trips: Trips, options: AssistantReplyOptions): Promise<AssistantReply | null> {
+  const route = openProposalRoute(instruction, open, trips);
+  if (!route) return null;
+  const loaded = await loadChangeRequest(route.target.request_id);
+  if (!loaded.ok || loaded.request.status !== "pending" || loaded.request.expired) return null;
+  if (route.kind === "link") return { kind: "note", text: unsavedTripLinkNote(route.name), steps: ["open_card"] };
+  const budget = await aiBudgetState();
+  if (budget.exceeded) return { kind: "note", text: aiBudgetMessage(budget) };
+  const revised = await reviseStoredProposal(route.target.request_id, instruction, options);
+  logInfo("assistant.open_card", { request_id: route.target.request_id, ok: revised.ok });
+  if (!revised.ok) return null;
+  if (revised.note) return { kind: "note", text: revised.note, steps: ["open_card"] };
+  return { kind: "proposal", proposal: revised.proposal, request_id: revised.request_id, source: "file", steps: ["open_card"] };
 }
 
 /* ---------------------------------------------------------------- */

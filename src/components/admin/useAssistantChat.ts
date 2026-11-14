@@ -19,7 +19,7 @@ import { MAX_AI_INPUT_CHARS, apiErrorMessage, mergeAIProposals, shortId, uid } f
 import { hasPlannedLines } from "@/lib/adminProposalUtils";
 import type { AIProposal, AIProposalResponse, AttachedFile, ProposalQuestionOption, TravelTrip } from "@/lib/adminTypes";
 import {
-  THREAD_KEY, agentProgressStages, answerToOf, attachmentRoute, displayText, instructionBody, openAskOf,
+  THREAD_KEY, agentProgressStages, answerToOf, attachmentRoute, displayText, instructionBody, openAskOf, openNewTripProposals,
   proposalMessage, replyToMessage, restoreThread, serializeThread, unlockSave, zeroActionMessage, type ProgressStage,
 } from "./assistantChatLogic";
 import type { AssistantAskMsg, AssistantAttachment, AssistantChatMessage, AssistantProposalMsg, AssistantResponse } from "./assistantChatTypes";
@@ -218,6 +218,15 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
 
   function pushReply(data: AssistantResponse, sent: string) {
     const message = replyToMessage(data, { id: uid(), sent });
+    // A revised reading of an open card replaces it: only the newest copy can be saved.
+    if (message.role === "assistant" && message.kind === "proposal" && message.requestId != null) {
+      const requestId = message.requestId;
+      setMessages((prev) => prev.map((old) => (
+        old.role === "assistant" && old.kind === "proposal" && old.requestId === requestId && old.status === "pending"
+          ? { ...old, status: "cancelled", resultText: "Энэ саналыг доорх шинэчилсэн хувилбар орлосон." }
+          : old
+      )));
+    }
     pushMessage(message);
     if (message.role === "assistant" && message.kind === "proposal") void loadTripDetails(message.proposal);
   }
@@ -285,6 +294,8 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
         sessionId: session.current,
         answerTo: ask && !override ? answerToOf(ask) : null,
         attachments,
+        // A typed message may be about a new trip read but not saved yet: the server edits that card.
+        openProposals: ask ? [] : openNewTripProposals(messages),
       }));
       pushReply(data, text);
     } catch (err) {
