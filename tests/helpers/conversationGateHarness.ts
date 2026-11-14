@@ -55,6 +55,9 @@ export async function conversationGateHarness(context: TestContext, options: { e
   // The follow-up columns of travel_senders (followUp.ts) and each sender's platform (dbTrackSender).
   const followUps = new Map<string, { slot: string; question: string; armedAt: string | null; sentAt: string | null }>();
   const senderPlatform = new Map<string, string>();
+  // «Get Started» taps (dbMarkGetStarted) and when each was handled by the nudge sweep (getStartedNudge.ts).
+  const getStarted = new Map<string, { tappedAt: string; nudgedAt: string | null }>();
+  const iso = (value: unknown) => new Date(String(value)).toISOString();
   // Runs once when this customer's Messenger thread is next read (e.g. a consultant takes over meanwhile).
   const threadHooks = new Map<string, () => void>();
   // The metadata each Messenger send carried (the bot's own marker makes the takeover guard apply).
@@ -95,6 +98,24 @@ export async function conversationGateHarness(context: TestContext, options: { e
       if (!fresh) return result();
       Object.assign(state, { sentAt: new Date(String(params[2])).toISOString(),
         ...(sql.includes("follow_up_slot = ''") ? { slot: "", question: "" } : {}) });
+      return result([{ sender_id: sender }]);
+    }
+    if (/INSERT INTO travel_senders \(sender_id, platform, last_seen, msg_count, get_started_at/i.test(sql)) {
+      senderPlatform.set(sender, String(params[1] ?? ""));
+      getStarted.set(sender, { tappedAt: new Date().toISOString(), nudgedAt: getStarted.get(sender)?.nudgedAt ?? null });
+      return result();
+    }
+    if (/SELECT sender_id, get_started_at AS tapped_at FROM travel_senders/i.test(sql)) {
+      const [dueBy, windowStart, limit] = params;
+      return result([...getStarted.entries()].filter(([id, state]) => senderPlatform.get(id) === "facebook" && !id.startsWith("demo:")
+        && state.tappedAt <= iso(dueBy) && state.tappedAt > iso(windowStart) && (!state.nudgedAt || state.nudgedAt < state.tappedAt))
+        .sort((a, b) => a[1].tappedAt.localeCompare(b[1].tappedAt)).slice(0, Number(limit))
+        .map(([id, state]) => ({ sender_id: id, tapped_at: state.tappedAt })));
+    }
+    if (/UPDATE travel_senders SET get_started_nudge_at = \$3/i.test(sql)) {
+      const state = getStarted.get(sender);
+      if (!state || state.tappedAt !== iso(params[1]) || (state.nudgedAt && state.nudgedAt >= state.tappedAt)) return result();
+      state.nudgedAt = iso(params[2]);
       return result([{ sender_id: sender }]);
     }
     if (/INSERT INTO travel_outbound_messages/i.test(sql)) {
@@ -202,7 +223,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
     if (/INSERT INTO travel_senders \(sender_id, platform,/i.test(sql)) {
       senderPlatform.set(sender, String(params[1] ?? ""));
       seen.set(sender, (seen.get(sender) || 0) + 1);
-      return result([{ msg_count: seen.get(sender), prev_msg_at: null, get_started_at: null }]);
+      return result([{ msg_count: seen.get(sender), prev_msg_at: null, get_started_at: getStarted.get(sender)?.tappedAt ?? null }]);
     }
     // A customer image is receipted before the webhook acks (customerImageIngest); classification
     // itself never runs here — its claim UPDATE finds nothing.
@@ -346,6 +367,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
   return { turn, demoTurn, history, leads, models, blockedNetwork, logs, runFollowUpCron,
     /** The follow-up columns of travel_senders for this customer (followUp.ts). */
     followUpState(senderId: string) { return followUps.get(senderId) ?? null; },
+    getStartedState(senderId: string) { return getStarted.get(senderId) ?? null; },
     /** Runs `hook` once, when this customer's Messenger thread is next read. */
     onThreadRead(senderId: string, hook: () => void) { threadHooks.set(senderId, hook); },
     /** The metadata of every Messenger text send so far. */

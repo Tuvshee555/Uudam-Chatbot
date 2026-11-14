@@ -607,6 +607,11 @@ export async function ensureTravelSchema() {
           ADD COLUMN IF NOT EXISTS follow_up_armed_at TIMESTAMPTZ NULL,
           ADD COLUMN IF NOT EXISTS follow_up_sent_at  TIMESTAMPTZ NULL;
       `);
+      // The one message after a «Get Started» tap nobody followed (getStartedNudge.ts): when the last tap was
+      // handled (sent or ruled out). A later tap (get_started_at newer than this) is handled again.
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS get_started_nudge_at TIMESTAMPTZ NULL;
+      `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_follow_up
           ON travel_senders (follow_up_armed_at) WHERE follow_up_slot <> '';

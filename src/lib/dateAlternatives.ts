@@ -126,7 +126,33 @@ function offsetWords(offsetDays: number): string {
  * Null when the asked time cannot be placed or the pool has no bookable departure (the caller keeps its
  * own answer or hands over).
  */
-export function buildNearestDatesReply(pool: TravelTrip[], askText: string, now = new Date(), closingLines: string[] = []): string | null {
+/** The heading of the second list: other trips that leave around the asked date. */
+export const SIMILAR_TRIPS_MARKER = "Тэр үеэр гарах өөр аяллууд:";
+/** How far from the asked date another trip's departure still counts as "around then". */
+const SIMILAR_RADIUS_DAYS = 3;
+const MAX_SIMILAR_ROWS = 3;
+/** The far side of the asked date is offered only within this many days (a date months away is not "near"). */
+const OTHER_SIDE_MAX_DAYS = 31;
+
+const transportOf = (trip: TravelTrip) => String(trip.extra?.transport_type ?? "");
+
+/**
+ * Other trips (outside the asked direction) that leave within a few days of the asked date, one row each: the
+ * same travel kind as the asked trips first, then the nearest. A human consultant does this (owner, 2026-11-14:
+ * "12.27 шанхай" got one Shanghai date while seven other trips left on 12/27: "give him similar trips").
+ */
+export function similarTripsAround(pool: TravelTrip[], others: TravelTrip[], window: AskedWindow, now = new Date()): DateAlternative[] {
+  const poolIds = new Set(pool.map((trip) => trip.id));
+  const kinds = new Set(pool.map(transportOf).filter(Boolean));
+  const rows = nearestDepartureAlternatives(others.filter((trip) => !poolIds.has(trip.id)), window, now, { max: 200, perTrip: 1 })
+    .filter((row) => Math.abs(row.offsetDays) <= SIMILAR_RADIUS_DAYS);
+  const sameKind = (row: DateAlternative) => (kinds.has(transportOf(row.trip)) ? 0 : 1);
+  return rows.sort((a, b) => sameKind(a) - sameKind(b) || Math.abs(a.offsetDays) - Math.abs(b.offsetDays) || a.date.localeCompare(b.date))
+    .slice(0, MAX_SIMILAR_ROWS);
+}
+
+export function buildNearestDatesReply(pool: TravelTrip[], askText: string, now = new Date(), closingLines: string[] = [],
+  options: { /** The rest of the customer-visible catalogue: other trips around the asked date are offered too. */ others?: TravelTrip[] } = {}): string | null {
   // "20-оос 25", "20 эсвэл 21": the parser keeps only the first day, so the label would drop the second one.
   if (/\d\s*(?:-?\s*(?:оос|өөс|аас|ээс)|эсвэл|esvel|esvl)\s*\d/iu.test(askText)) return null;
   const window = askedWindowOf(requestedDepartureScope(askText, now), now);
@@ -139,12 +165,28 @@ export function buildNearestDatesReply(pool: TravelTrip[], askText: string, now 
   // Close dates exist: only those (a departure two weeks off is noise beside one a day away). None close:
   // the nearest few in calendar order (a list that runs backwards reads as broken), said to be the next ones.
   const alternatives = close ? ranked.filter((row) => Math.abs(row.offsetDays) <= radius) : [...ranked.slice(0, 3)].sort((a, b) => a.date.localeCompare(b.date));
+  // Close dates only on one side of the asked date: the nearest one on the other side too, within a month
+  // (a customer who cannot leave earlier is not served by earlier dates alone; owner, 2026-11-14: "more options").
+  if (close) {
+    const hasBefore = alternatives.some((row) => row.offsetDays < 0);
+    const hasAfter = alternatives.some((row) => row.offsetDays > 0);
+    if (hasBefore !== hasAfter) {
+      const wide = nearestDepartureAlternatives(pool, window, now, { max: 200, perTrip: 200 });
+      const otherSide = wide.find((row) => (hasBefore ? row.offsetDays > 0 : row.offsetDays < 0) && Math.abs(row.offsetDays) <= OTHER_SIDE_MAX_DAYS);
+      if (otherSide) alternatives.push(otherSide);
+    }
+  }
+  const similar = options.others?.length ? similarTripsAround(pool, options.others, window, now) : [];
+  const rows = alternatives.length + similar.length;
   return [
-    `${window.label} гарах аялал алга.`,
+    // Other trips DO leave then: the heading says the asked direction has none, not that nothing leaves.
+    `${similar.length ? "Энэ чиглэлд " : ""}${window.label} гарах аялал алга.`,
     NEAREST_DATES_MARKER,
     // "1 хоногийн өмнө" helps beside a near miss; beside a date weeks away it is noise.
     ...alternatives.map((row) => `• ${row.trip.route_name}: ${customerDate(row.date, now)}${close ? ` (${offsetWords(row.offsetDays)})` : ""}`),
+    ...(similar.length ? ["", SIMILAR_TRIPS_MARKER, ...similar.map((row) => `• ${row.trip.route_name}: ${customerDate(row.date, now)}`)] : []),
     ...(closingLines.length ? ["", ...closingLines] : []),
-    alternatives.length === 1 ? "Энэ өдөр танд тохирох уу? 😊" : close ? "Эдгээр өдрөөс аль нь танд тохирох вэ? 😊" : "Өөр хугацаа танд тохирох уу? 😊",
+    rows === 1 ? "Энэ өдөр танд тохирох уу? 😊" : similar.length ? "Эдгээрээс аль нь танд тохирох вэ? 😊"
+      : close ? "Эдгээр өдрөөс аль нь танд тохирох вэ? 😊" : "Өөр хугацаа танд тохирох уу? 😊",
   ].join("\n");
 }

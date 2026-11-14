@@ -95,6 +95,26 @@ test("never the question the bot just asked, never one already in the reply", ()
   assert.equal(ask({ reply: "Хэдэн сард аялах вэ?" }), null);
 });
 
+test("the phone ask (owner, 2026-11-14: 'wanted numbers most'): from the first answer, at most every third message", async () => {
+  const { phoneInvite } = await import("../src/lib/nextQuestion");
+  const { PHONE_INVITE, PARTY_AND_PHONE_INVITE } = await import("../src/lib/nextQuestionText");
+  const base: NextQuestionInput = { purpose: "reply", reply: FARE_CARD, previousBotText: null, history: [], customerText: "", selection: select("norvel"),
+    pendingTripIds: [], ledger: null, trips: TRIPS, phoneKnown: false, now };
+  const earlier = [{ role: "user", text: "норвел" }, { role: "assistant", text: FARE_CARD }];
+  assert.equal(phoneInvite(base, null)?.text, PARTY_AND_PHONE_INVITE, "the first answer asks too (most who leave, leave after it)");
+  assert.equal(phoneInvite({ ...base, history: earlier }, null)?.text, PARTY_AND_PHONE_INVITE, "party unknown: one line asks both");
+  assert.equal(phoneInvite({ ...base, history: earlier }, { slot: "party", text: NEXT_QUESTION_PARTY })?.text, PHONE_INVITE, "the party is being asked: the phone only");
+  assert.equal(phoneInvite({ ...base, history: earlier, customerText: "2 том хүн" }, null)?.text, PHONE_INVITE, "party known: the phone only");
+  assert.equal(phoneInvite({ ...base, history: earlier, phoneKnown: true }, null), null, "a phone already given");
+  const askedLastTime = [...earlier, { role: "user", text: "3/15" }, { role: "assistant", text: `${FARE_CARD}\n\n${PHONE_INVITE}` }];
+  assert.equal(phoneInvite({ ...base, history: askedLastTime }, null), null, "asked in the last message");
+  const askedTwoAgo = [...askedLastTime, { role: "user", text: "хоол багтсан уу" }, { role: "assistant", text: "Өглөөний хоол багтсан." }];
+  assert.equal(phoneInvite({ ...base, history: askedTwoAgo }, null), null, "asked two messages ago");
+  const askedThreeAgo = [...askedTwoAgo, { role: "user", text: "зочид буудал" }, { role: "assistant", text: "4 одтой зочид буудал." }];
+  assert.ok(phoneInvite({ ...base, history: askedThreeAgo }, null), "asked again on the third message");
+  assert.equal(phoneInvite({ ...base, history: earlier, purpose: "follow_up" }, null), null, "never on the follow-up itself");
+});
+
 test("null: a full or unknown trip is not sold further; nothing worth asking is nothing", () => {
   assert.equal(ask({ selection: select("dalan") }), null, "a sold-out trip");
   assert.equal(ask({ selection: select("missing") }), null, "a trip no longer in the catalogue");

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { conversationGateHarness, type FixtureTrip } from "./helpers/conversationGateHarness";
-import { FOLLOW_UP_TRIP_WEB_LINE, NEXT_QUESTION_DATE, NEXT_QUESTION_PARTY, NEXT_QUESTION_PROGRAM, NEXT_QUESTION_TEXTS } from "../src/lib/nextQuestionText";
+import { FOLLOW_UP_TRIP_WEB_LINE, NEXT_QUESTION_DATE, NEXT_QUESTION_PARTY, NEXT_QUESTION_PROGRAM, NEXT_QUESTION_TEXTS, PARTY_AND_PHONE_INVITE,
+  PHONE_INVITE } from "../src/lib/nextQuestionText";
+/** The phone ask beside a question that already carries the one emoji. */
+const PHONE_ASK = PHONE_INVITE.replace(/\s*😊$/u, "");
 
 /**
  * Owner, 2026-11-12: "in the last 5-10 days the chatbot was not asking questions / not doing follow-up …
@@ -75,8 +78,10 @@ test("follow-up journeys: one question after silence, never over a person, never
     await context.test("(a)+(i) a fare card gets the next question; 30 min of silence brings exactly one follow-up, never a second", async () => {
       const answered = await fb("fu-seen", ASK_PRICE);
       assert.equal(answered.sends.length, 1);
-      assert.ok(answered.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_DATE}`), `the fare card asks which departure: ${answered.sends[0].text}`);
-      assert.match(answered.sends[0].text, /1,791,000₮/, "the answer itself is unchanged above the question");
+      // Which departure, then how many and the phone in one line (owner, 2026-11-14: "wanted numbers most").
+      assert.ok(answered.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_DATE}\n\n${PARTY_AND_PHONE_INVITE}`),
+        `the fare card asks which departure, how many and the phone: ${answered.sends[0].text}`);
+      assert.match(answered.sends[0].text, /1,791,000₮/, "the answer itself is unchanged above the questions");
       answeredThread("fu-seen", ASK_PRICE, answered.sends[0].text);
       tick(29 * MIN);
       assert.deepEqual(to(await cron(), "fu-seen"), [], "not before the delay");
@@ -115,7 +120,10 @@ test("follow-up journeys: one question after silence, never over a person, never
       answeredThread("fu-restart", ASK_PRICE, first.sends[0].text);
       tick(5 * MIN);
       const second = await fb("fu-restart", "3/15");
-      assert.ok(second.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_PARTY}`), `a departure answer asks the party: ${second.sends[0].text}`);
+      // The first answer just asked how many and the phone: the departure answer does not ask them again.
+      assert.match(second.sends[0].text, /^3 сарын 15: захиалга нээлттэй/u);
+      assert.ok(!second.sends[0].text.includes(NEXT_QUESTION_PARTY) && !second.sends[0].text.includes("утасны дугаар"),
+        `never the question the bot just asked: ${second.sends[0].text}`);
       answeredThread("fu-restart", "3/15", second.sends[0].text);
       tick(26 * MIN);
       assert.deepEqual(to(await cron(), "fu-restart"), [], "31 minutes after the first answer, 26 after the last");
@@ -234,20 +242,25 @@ test("follow-up journeys: one question after silence, never over a person, never
       assert.equal(conversationSkipReason(rows("НОРВЕЛ ХОТЫН АЯЛАЛ\nТом хүн 1,791,000₮"), Date.parse(at(0)), Date.parse(at(11))), null);
     });
 
-    await context.test("(i) a bare programme link and a departure answer get a question; a list that already asks gets none", async () => {
-      await fb("fu-program", "Норвел хотын аялал");
+    await context.test("(i) answers right after the questions do not re-ask them; a list that already asks gets only the phone ask", async () => {
+      // The first answer asks which departure, how many and the phone ((a) above). Right after it, the programme link
+      // asks nothing again (never the question the bot just asked; the follow-up after silence offers the programme).
+      const opening = await fb("fu-program", "Норвел хотын аялал");
+      assert.ok(opening.sends[0].text.endsWith(PARTY_AND_PHONE_INVITE), opening.sends[0].text);
       const program = await fb("fu-program", "hutulbur", { ...one, topics: ["program"] });
-      assert.equal(program.sends[0].text, `https://uudamtravel.mn/trips/norvel-hotyn-aylal\n\n${NEXT_QUESTION_PARTY}`);
+      assert.equal(program.sends[0].text, "https://uudamtravel.mn/trips/norvel-hotyn-aylal");
       await fb("fu-date", ASK_PRICE);
       const date = await fb("fu-date", "3/15");
       assert.match(date.sends[0].text, /^3 сарын 15: захиалга нээлттэй/u);
-      assert.ok(date.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_PARTY}`), date.sends[0].text);
+      assert.ok(!date.sends[0].text.includes(NEXT_QUESTION_PARTY) && !date.sends[0].text.includes("утасны дугаар"), date.sends[0].text);
       const list = await fb("fu-list", "3 сарын аялал", {});
-      assert.match(list.sends[0].text, /Аль аяллыг нь сонирхож байна вэ\?\n1 эсвэл 2 гэж бичээрэй 😊$/u, "the list asks already");
-      assert.ok(!NEXT_QUESTION_TEXTS.some((question) => list.sends[0].text.includes(question)), "nothing added to it");
-      // Instagram: the same answer asks the same question, but is never followed up (no takeover guard there).
+      assert.match(list.sends[0].text, /Аль аяллыг нь сонирхож байна вэ\?\n1 эсвэл 2 гэж бичээрэй 😊/u, "the list asks already");
+      const ownQuestions = NEXT_QUESTION_TEXTS.filter((question) => question !== PHONE_INVITE && question !== PARTY_AND_PHONE_INVITE);
+      assert.ok(!ownQuestions.some((question) => list.sends[0].text.includes(question)), "no second 'which one?' added to it");
+      assert.ok(list.sends[0].text.endsWith(PARTY_AND_PHONE_INVITE.replace(/\s*😊$/u, "")), `only the phone ask follows: ${list.sends[0].text}`);
+      // Instagram: the same answer asks the same questions, but is never followed up (no takeover guard there).
       const instagram = await harness.turn("fu-instagram", ASK_PRICE, one);
-      assert.ok(instagram.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_DATE}`));
+      assert.ok(instagram.sends[0].text.endsWith(`\n\n${NEXT_QUESTION_DATE}\n\n${PARTY_AND_PHONE_INVITE}`), instagram.sends[0].text);
       assert.ok(!harness.followUpState("fu-instagram")?.slot, "an Instagram answer arms nothing");
     });
 

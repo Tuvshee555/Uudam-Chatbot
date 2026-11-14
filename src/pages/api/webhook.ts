@@ -1416,8 +1416,9 @@ async function handleMessageTurn(
   // the date the customer wanted, in case another one can be arranged.
   {
     const routed = await getRouted();
+    const catalogueNow = await getTrips();
     const notScheduledReply = routed.unavailableDateWithinScope && routed.scopedClarify?.length
-      ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText) : null;
+      ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText, new Date(), catalogueNow) : null;
     if (notScheduledReply && routed.scopedClarify) {
       // Not "no trip then" for a departure that exists and is closed, and no alternatives sold to a
       // customer a consultant is already working with (dateMiss.ts).
@@ -1438,12 +1439,14 @@ async function handleMessageTurn(
         context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." });
       // The reply lists trips by distance from the asked date: "1" / "эхнийх" under it means the first one SHOWN,
       // not the first in catalogue order (found by review), so the pending list follows the displayed order.
-      const shownInOrder = displayedClarificationTrips(notScheduledReply, routed.scopedClarify);
+      // The shown rows include other trips leaving around the asked date (dateAlternatives.ts similarTripsAround).
+      const shownInOrder = displayedClarificationTrips(notScheduledReply, [...routed.scopedClarify,
+        ...catalogueNow.filter((trip) => !routed.scopedClarify!.some((scoped) => scoped.id === trip.id))]);
       if (shownInOrder.length) await setClarificationState(senderId, shownInOrder.map(trip => trip.id));
       await deliverFastPathReply({
         reply: notScheduledReply,
         failTag: "date_not_scheduled",
-        catalogTripIds: routed.scopedClarify.map(trip => trip.id),
+        catalogTripIds: [...new Set([...routed.scopedClarify.map(trip => trip.id), ...shownInOrder.map(trip => trip.id)])],
         rememberSource: "api.webhook.date_not_scheduled",
         counter: "webhook.date_not_scheduled_total",
       });

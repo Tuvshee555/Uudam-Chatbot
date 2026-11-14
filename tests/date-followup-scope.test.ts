@@ -155,13 +155,18 @@ test("Messenger date follow-ups answer only from the offered destination, never 
         assert.doesNotMatch(sends[0], /ВЭЛМОР/);
         assert.equal(leads.length, priorLeads);
       } else {
-        // Off the offered trips' schedule: their own departures, never the other
-        // destination that does leave that day; staff still get the lead.
+        // Off the offered trips' schedule: their own departures; staff still get the lead. The other
+        // destination that does leave that day is never in the asked destination's list. Since 2026-11-14
+        // (owner: "give him similar trips … more options") it may be offered only under its own heading,
+        // as another trip, after "none in this direction".
         assert.equal(sends.length, 1);
         assert.match(sends[0], NOT_SCHEDULED_LIST_START);
         assert.match(sends[0], /НЕРИТ НУУРЫН АЯЛАЛ: 4 сарын 12/);
         assert.match(sends[0], /НЕРИТ УУЛЫН АЯЛАЛ: 4 сарын 16/);
-        assert.doesNotMatch(sends[0], /ВЭЛМОР/);
+        const otherTrips = sends[0].indexOf("Тэр үеэр гарах өөр аяллууд:");
+        const ownList = otherTrips >= 0 ? sends[0].slice(0, otherTrips) : sends[0];
+        assert.doesNotMatch(ownList, /ВЭЛМОР/, "never in the asked destination's list");
+        if (/ВЭЛМОР/.test(sends[0])) assert.match(sends[0], /^Энэ чиглэлд /u, "offered only as another trip, under 'none in this direction'");
         assert.equal(leads.length, priorLeads + 1);
       }
       await cleanup(sender);

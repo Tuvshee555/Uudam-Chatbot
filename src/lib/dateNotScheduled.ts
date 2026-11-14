@@ -20,7 +20,9 @@ import type { TravelTrip } from "./travelTypes";
  * @param trips the trips the question is about (the ones on screen, or the ones it named)
  * @param askText what the customer asked, to read the window from
  */
-export function buildScopedNotScheduledReply(trips: TravelTrip[], askText: string, now = new Date()): string | null {
+export function buildScopedNotScheduledReply(trips: TravelTrip[], askText: string, now = new Date(),
+  /** The customer-visible catalogue: other trips leaving around the asked date are offered too (2026-11-14). */
+  catalogue: TravelTrip[] = []): string | null {
   const holiday = holidayWindowOf(askText, now);
   if (holiday) {
     const listing = holidayWindowListing({ pool: trips.filter((trip) => trip.status === "active"), resolution: holiday, now, choice: trips.length > 1,
@@ -32,7 +34,10 @@ export function buildScopedNotScheduledReply(trips: TravelTrip[], askText: strin
   // A travel kind the customer named ("газраар", "шууд нислэгтэй") narrows the search: a flight departing that day is
   // not "a ground trip on that date" (found by review: the reply said "no trip" and listed a wrong-kind trip).
   const ofKind = filterTripsByTransportIntent(askText, trips);
-  return buildNearestDatesReply(ofKind.length ? ofKind : trips, askText, now, [OTHER_TRIPS_LINK_LINE]) ?? buildDateNotScheduledReply(trips, now);
+  // Other trips of the catalogue, of the kind the customer named if they named one (never a flight for "газраар").
+  const others = filterTripsByTransportIntent(askText, catalogue.filter((trip) => trip.status === "active"));
+  return buildNearestDatesReply(ofKind.length ? ofKind : trips, askText, now, [OTHER_TRIPS_LINK_LINE], { others })
+    ?? buildDateNotScheduledReply(trips, now);
 }
 
 /** A reply that told the customer the asked time is off the schedule (either wording): a window it names is not carried on. */

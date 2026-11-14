@@ -33,7 +33,7 @@ import { isMetaOutboundDisabled } from "./metaOutboundKillSwitch";
 import { queryNeon } from "./neonDb";
 import { hashIdentifier, logInfo, logWarn, recordCounter } from "./observability";
 import type { NextQuestion } from "./nextQuestion";
-import { isNextQuestionText } from "./nextQuestionText";
+import { isNextQuestionText, withoutNextQuestion } from "./nextQuestionText";
 import { classifyThread, fetchThreadMessages, latestStaffReply, staffMessagesInThread, takeoverContext, takeoverRisk } from "./staffTakeover";
 import { isStaffTakeoverSendBlocked } from "./takeoverGuard";
 import { getBotControl, getTravelBotSettings, isPagePaused } from "./travelOps";
@@ -140,7 +140,10 @@ export function conversationSkipReason(rows: ConversationRow[], armedAt: number,
   if (rows.some((row) => row.role === "staff" && now - at(row) < EXISTING_CUSTOMER_DAYS * 86_400_000)) return "existing_customer";
   // The bot said something after the answer that armed this (it did not re-arm): that is the last word.
   if (at(lastAnswer) > armedAt + 5_000) return "bot_spoke_after";
-  if (isNextQuestionText(lastAnswer.text) || NOT_AN_ANSWER.some((pattern) => pattern.test(lastAnswer.text))) return "bot_last_not_answer";
+  // Judged on the answer itself: the phone ask added after a trip answer (nextQuestion.ts phoneInvite) does not make
+  // it a "leave your number" message.
+  const body = withoutNextQuestion(lastAnswer.text);
+  if (!body.trim() || isNextQuestionText(lastAnswer.text) || NOT_AN_ANSWER.some((pattern) => pattern.test(body))) return "bot_last_not_answer";
   const said = lastUser.text.trim();
   if (!said || /^\[Хэрэглэгч\s[^\]]*илгээсэн\]$/u.test(said)) return "customer_file";
   if (extractPhoneNumber(said)) return "customer_phone";

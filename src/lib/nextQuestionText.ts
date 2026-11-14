@@ -18,13 +18,20 @@ export const NEXT_QUESTION_NEXT_STEP = "Захиалах бол утасны д�
  * "тийм" / "за" under it is that button (programOffer.ts).
  */
 export const NEXT_QUESTION_PROGRAM = "Аяллын дэлгэрэнгүй хөтөлбөрийг авах уу? 😊";
+/**
+ * The phone ask added beside a trip answer's own question (owner, 2026-11-14: "the client wants the bot to ask
+ * more questions, and wants numbers most: how many are going, which direction"). With the party unknown, one line
+ * asks both.
+ */
+export const PHONE_INVITE = "Дэлгэрэнгүй мэдээлэл авах бол утасны дугаараа үлдээгээрэй, манай аяллын зөвлөх тантай холбогдоно 😊";
+export const PARTY_AND_PHONE_INVITE = "Хэдэн хүн явахаа бичээд утасны дугаараа үлдээгээрэй, манай аяллын зөвлөх тантай холбогдоно 😊";
 /** The line above a follow-up that carries a website link (the question stays last, so it is still recognised). */
 export const FOLLOW_UP_TRIP_WEB_LINE = "Аяллын мэдээлэл, зургийг вэбээс ч харж болно:";
 export const FOLLOW_UP_ALL_TRIPS_WEB_LINE = "Бүх аяллыг эндээс харж болно:";
 
 export const NEXT_QUESTION_TEXTS: readonly string[] = [NEXT_QUESTION_DESTINATION, NEXT_QUESTION_WHEN, NEXT_QUESTION_PICK,
   NEXT_QUESTION_PICK_UNNUMBERED, NEXT_QUESTION_DATE, NEXT_QUESTION_PARTY, NEXT_QUESTION_BUDGET, NEXT_QUESTION_NEXT_STEP,
-  NEXT_QUESTION_PROGRAM];
+  NEXT_QUESTION_PROGRAM, PHONE_INVITE, PARTY_AND_PHONE_INVITE];
 
 /** The last line of a message is the programme offer (with or without its emoji). */
 export function endsWithProgramOffer(text: string | null | undefined): boolean {
@@ -48,11 +55,15 @@ export function isNextQuestionText(text: string): boolean {
  * people?"): an "ok" under one is not its answer, so the need gate reads the answer before it.
  */
 export function withoutNextQuestion(text: string): string {
-  const value = (text || "").trimEnd();
-  for (const question of NEXT_QUESTION_TEXTS) {
-    for (const form of [question, withoutEmoji(question)]) {
-      if (value.endsWith(form)) return value.slice(0, value.length - form.length).trimEnd();
+  let value = (text || "").trimEnd();
+  // A reply may end with two (its question, then the phone ask): both go.
+  for (let round = 0; round < 2; round += 1) {
+    const before = value;
+    for (const question of NEXT_QUESTION_TEXTS) {
+      const form = [question, withoutEmoji(question)].find((candidate) => value.endsWith(candidate));
+      if (form) { value = value.slice(0, value.length - form.length).trimEnd(); break; }
     }
+    if (value === before) break;
   }
   return value;
 }

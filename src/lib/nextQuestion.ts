@@ -19,7 +19,7 @@ import type { ConstraintLedger } from "./constraintLedger";
 import { withBookableDepartureDates } from "./departureAvailability";
 import { FOLLOW_UP_ALL_TRIPS_WEB_LINE, FOLLOW_UP_TRIP_WEB_LINE, NEXT_QUESTION_BUDGET, NEXT_QUESTION_DATE, NEXT_QUESTION_DESTINATION,
   NEXT_QUESTION_NEXT_STEP, NEXT_QUESTION_PARTY, NEXT_QUESTION_PICK, NEXT_QUESTION_PICK_UNNUMBERED, NEXT_QUESTION_PROGRAM,
-  NEXT_QUESTION_WHEN } from "./nextQuestionText";
+  NEXT_QUESTION_WHEN, PARTY_AND_PHONE_INVITE, PHONE_INVITE } from "./nextQuestionText";
 import { upcomingDepartures } from "./tripFareBlock";
 import type { TripSelection } from "./tripRequest";
 import type { TravelTrip } from "./travelTypes";
@@ -178,6 +178,23 @@ function withWebsiteLine(question: NextQuestion, selected: TravelTrip | null, bo
     return { ...question, text: `${FOLLOW_UP_ALL_TRIPS_WEB_LINE} ${BOOKING_WEBSITE_URL}\n${question.text}` };
   }
   return question;
+}
+
+/**
+ * The phone ask added to a trip answer beside its own question (owner, 2026-11-14: "ask more questions … wanted
+ * numbers most: how many are going …"). From the first trip answer (most customers who leave do so after it), never
+ * when a phone is already known, and never when the bot asked for the phone in this reply or its last two
+ * messages, so at most every third message asks. With the party unknown and not being asked, one line asks both.
+ */
+export function phoneInvite(input: NextQuestionInput, appended: NextQuestion | null): NextQuestion | null {
+  if (input.purpose !== "reply" || input.phoneKnown) return null;
+  const botMessages = input.history.filter((message) => message.role === "assistant");
+  const recent = [...botMessages.slice(-2).map((message) => message.text), input.reply, appended?.text ?? ""];
+  if (recent.some((text) => askedSlots(text).has("next_step") || /утасны\s+дугаар/iu.test(text))) return null;
+  const partyKnown = Boolean(input.selection?.passengers.length || input.ledger?.passengers.length || input.ledger?.groupSize)
+    || customerSaid(input, PARTY_WORDS);
+  const partyAsked = appended?.slot === "party" || askedSlots(input.reply).has("party");
+  return { slot: "next_step", text: partyKnown || partyAsked ? PHONE_INVITE : PARTY_AND_PHONE_INVITE };
 }
 
 /** A reply that already asks the customer something (any "?" counts, as the owner put it). */

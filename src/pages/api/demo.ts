@@ -731,7 +731,7 @@ export default async function handler(
         // Mirrors the webhook: a date none of the trips in scope departs on is answered with the real departures
         // nearest to it (dateAlternatives.ts); only when there are none is it a hand-off.
         const dateReply = routed.unavailableDateWithinScope
-          ? (routed.scopedClarify?.length ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText) : null) ?? "REFER"
+          ? (routed.scopedClarify?.length ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText, new Date(), trips) : null) ?? "REFER"
           : buildDateQuestionReply(intentText, await getFastPathText(), routed.scopedClarify || trips);
         if (dateReply) {
           // Mirror the webhook: a booking-intent date question gets nudged for
@@ -744,7 +744,7 @@ export default async function handler(
             enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(`${dateReply}${bookingNudge}`))),
             phoneAlreadyRequested,
           );
-          factualScope = tripsNamedIn(safeReply, routed.scopedClarify || trips);
+          factualScope = tripsNamedIn(safeReply, routed.unavailableDateWithinScope ? trips : routed.scopedClarify || trips);
           await appendMessage(sessionId, "user", normalizedText);
           if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);

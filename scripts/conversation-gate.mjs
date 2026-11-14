@@ -30,7 +30,8 @@ const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test
   "tests/understanding-next-question.test.ts", "tests/follow-up-journeys.test.ts",
   // Consultant-grade date handling (2026-11-13): a comma date, a city shared by several trips, the nearest
   // real departures when none matches, "the date doesn't suit me", and the ended-trip notice staying in its lane.
-  "tests/destination-alternatives-journeys.test.ts", "tests/archived-notice-journeys.test.ts", "tests/customer-number-formats.test.ts", "tests/review-fixes-journeys.test.ts"],
+  "tests/destination-alternatives-journeys.test.ts", "tests/archived-notice-journeys.test.ts", "tests/customer-number-formats.test.ts", "tests/review-fixes-journeys.test.ts",
+  "tests/get-started-nudge-journeys.test.ts", "tests/more-options-journeys.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

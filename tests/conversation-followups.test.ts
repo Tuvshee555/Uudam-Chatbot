@@ -94,7 +94,10 @@ test("a trip list is numbered cards, and the picked trip gets the full card with
     assert.match(card, /^✈️ ЛУМАРА-ГАЗАР НИСЛЭГ ХОСОЛСОН\n\n🗓 Хугацаа: 9 өдөр 8 шөнө\n\n💰 Үнэ:/);
     assert.match(card, /Нярай \/0-23 сар\/: 351,000₮/);
     assert.doesNotMatch(card, /Энэ нь газар \+ нислэг хосолсон аялал/, "the title already says it");
-    assert.doesNotMatch(card, /дугаараа/, "no phone request on a trip card");
+    // The card itself asks for no phone; since 2026-11-14 (owner: "wanted numbers most") the separate phone ask may
+    // follow it as the last line (nextQuestion.ts phoneInvite), never inside the card.
+    const { withoutNextQuestion } = await import("../src/lib/nextQuestionText");
+    assert.doesNotMatch(withoutNextQuestion(card), /дугаараа/, "no phone request inside the trip card");
   } finally {
     await harness.close();
   }

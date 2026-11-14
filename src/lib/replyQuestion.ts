@@ -15,7 +15,7 @@
 import { getClarificationState } from "./clarificationState";
 import { getConstraintLedger } from "./constraintLedger";
 import { armFollowUp } from "./followUp";
-import { appendNextQuestion, nextQuestion, replyAsksSomething, type NextQuestion } from "./nextQuestion";
+import { appendNextQuestion, nextQuestion, phoneInvite, replyAsksSomething, type NextQuestion } from "./nextQuestion";
 import { recordCounter } from "./observability";
 import { getTripSelection } from "./tripSelectionState";
 import type { TravelTrip } from "./travelTypes";
@@ -37,6 +37,11 @@ const FOLLOW_ONLY_TAGS: ReadonlySet<string> = new Set(["generic_trip_request", "
 
 export function nextQuestionDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return /^(?:off|false|0|no)$/i.test(String(env.NEXT_QUESTION ?? "").trim());
+}
+
+/** Off switch for the phone ask alone (PHONE_INVITE=off). */
+export function phoneInviteDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(?:off|false|0|no)$/i.test(String(env.PHONE_INVITE ?? "").trim());
 }
 
 export type ReplyQuestionInput = {
@@ -76,11 +81,21 @@ export async function planReplyQuestion(input: ReplyQuestionInput): Promise<Repl
       previousBotText: input.history.findLast((message) => message.role === "assistant")?.text ?? null,
     };
     let reply = input.reply;
+    let appended: NextQuestion | null = null;
     if (appendable && !replyAsksSomething(reply)) {
       const question = nextQuestion({ ...base, purpose: "reply", reply });
       if (question) {
         reply = appendNextQuestion(reply, question);
+        appended = question;
         recordCounter("reply_question.appended_total", 1, { slot: question.slot, path: input.failTag });
+      }
+    }
+    // The phone (and the party, when unknown) is asked beside the answer's own question (owner, 2026-11-14).
+    if (appendable && !phoneInviteDisabledByEnv()) {
+      const invite = phoneInvite({ ...base, purpose: "reply", reply: input.reply }, appended);
+      if (invite) {
+        reply = appendNextQuestion(reply, invite);
+        recordCounter("reply_question.phone_invite_total", 1, { path: input.failTag });
       }
     }
     // Facebook only: Instagram's send path has no takeover guard and no thread check.
