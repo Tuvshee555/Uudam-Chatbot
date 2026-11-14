@@ -236,7 +236,7 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
    * `requestAsk` is the question that option belongs to when that question sits on a stored
    * proposal: the answer then goes to that request.
    */
-  async function sendAssistant(override?: { instruction: string; shown: string; requestAsk?: AssistantAskMsg }) {
+  async function sendAssistant(override?: { instruction: string; shown: string; requestAsk?: AssistantAskMsg; answers?: AssistantAskMsg }) {
     const text = override ? override.instruction.trim() : aiInput.trim();
     const files = override ? [] : attachedFiles;
     const driveFileIds = override ? [] : extractGoogleDriveFileIds(text);
@@ -292,7 +292,10 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
       const data = await postAssistant(instructionBody({
         instruction: text,
         sessionId: session.current,
-        answerTo: ask && !override ? answerToOf(ask) : null,
+        // A tapped option travels with the question and its first instruction, like a typed answer: on
+        // 2026-11-14 a tapped «хүүхэд ор эзлэхгүй» was read alone and the adult price and «the other
+        // departures like 12/4» from the first message were lost.
+        answerTo: override?.answers ? answerToOf(override.answers) : ask && !override ? answerToOf(ask) : null,
         attachments,
         // A typed message may be about a new trip read but not saved yet: the server edits that card.
         openProposals: ask ? [] : openNewTripProposals(messages),
@@ -387,7 +390,7 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
   function chooseAskOption(message: AssistantAskMsg, option: ProposalQuestionOption) {
     if (busyKey === "ai-send") return;
     patchMessage(message.id, { answered: option.label });
-    void sendAssistant({ instruction: option.answer, shown: option.label, ...(message.requestId != null ? { requestAsk: message } : {}) });
+    void sendAssistant({ instruction: option.answer, shown: option.label, ...(message.requestId != null ? { requestAsk: message } : { answers: message }) });
   }
 
   /** An expired proposal's instruction sent again for a fresh proposal on today's data. */

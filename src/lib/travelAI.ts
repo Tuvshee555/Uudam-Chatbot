@@ -54,7 +54,7 @@ type ProposalSource = {
 
 import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
 import { liftDayStates, withPricedDaysOnCalendar, withRowYearsOfCalendar } from "./tripDayStates";
-import { cleanRowHotels, cleanTripTitle, settleRowInfantFares } from "./tripRowFares";
+import { cleanRowHotels, cleanTripTitle, settleRowInfantFares, unsetZeroFares } from "./tripRowFares";
 import { guardFileProposal, mergeSameFileNewTrips } from "./fileProposalGuards";
 import { applyPriceTable, readPriceTable, type PriceTable } from "./tripPriceTable";
 
@@ -916,7 +916,7 @@ async function createProposal(opts: {
   // day's seat state held per day for the review (tripDayStates.ts).
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Record<string, unknown>;
-    const scheduled = liftDayStates(withPricedDaysOnCalendar(withRowYearsOfCalendar(settleRowInfantFares(cleanRowHotels(cleanTripTitle(fields))))));
+    const scheduled = liftDayStates(withPricedDaysOnCalendar(withRowYearsOfCalendar(settleRowInfantFares(unsetZeroFares(cleanRowHotels(cleanTripTitle(fields)))))));
     if (scheduled !== fields) Object.assign(fields, { route_name: scheduled.route_name, departure_dates: scheduled.departure_dates, infant_price: scheduled.infant_price, extra: scheduled.extra });
   }
 

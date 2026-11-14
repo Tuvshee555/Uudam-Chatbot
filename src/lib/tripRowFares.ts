@@ -50,6 +50,41 @@ export function cleanTripTitle(fields: Row): Row {
   return clean && clean !== title ? { ...fields, route_name: clean } : fields;
 }
 
+const FREE_NOTE = "Үнэгүй";
+const unsetZero = (value: unknown) => (value === 0 ? null : value);
+
+/**
+ * A 0₮ the reader wrote for a fare the source does not give is "not set", not free (2026-11-14: a
+ * Chongqing file had prices for one date only; the other rows came back adult 0₮, the assistant read
+ * them as free and would not price them). An adult fare is never free; a child band is free only when
+ * marked «Үнэгүй». Infant fares are left alone (0 there is usually free). Pure.
+ */
+export function unsetZeroFares(fields: Row): Row {
+  const extra = record(fields.extra);
+  let changed = false;
+  const rows = (key: string) => records(extra[key]).map((row) => {
+    const bands = records(row.passenger_prices).map((band) => {
+      if (band.price !== 0 || text(band.note) === FREE_NOTE || /нярай|infant/i.test(text(band.label))) return band;
+      changed = true;
+      return { ...band, price: null };
+    });
+    if (row.adult_price === 0) changed = true;
+    return { ...row, adult_price: unsetZero(row.adult_price), ...(Array.isArray(row.passenger_prices) ? { passenger_prices: bands } : {}) };
+  });
+  const priceGroups = rows("price_groups");
+  const dateGroups = rows("departure_date_groups");
+  if (!changed && fields.adult_price !== 0) return fields;
+  return {
+    ...fields,
+    adult_price: unsetZero(fields.adult_price),
+    extra: {
+      ...extra,
+      ...(Array.isArray(extra.price_groups) ? { price_groups: priceGroups } : {}),
+      ...(Array.isArray(extra.departure_date_groups) ? { departure_date_groups: dateGroups } : {}),
+    },
+  };
+}
+
 /** Every row's hotel and the trip's hotel line cleaned (cleanHotelList). */
 export function cleanRowHotels(fields: Row): Row {
   const extra = record(fields.extra);

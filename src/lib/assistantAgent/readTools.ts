@@ -155,11 +155,12 @@ export function priceRowsOf(trip: TravelTrip, now: Date) {
       ...(text(row.hotel) ? { hotel: text(row.hotel) } : {}),
       ...(text(row.package_id) ? { package_id: text(row.package_id) } : {}),
       dates: pricingDays(row, now),
-      adult: money(row.adult_price),
+      // 0 is "not set yet" for an adult, and for a child tier not marked «Үнэгүй» (unsetZeroFares).
+      adult: money(row.adult_price) || null,
       child: money(row.child_price),
       infant: money(row.infant_price),
       ...(money(row.single_price) != null ? { single: money(row.single_price) } : {}),
-      ...(tiers.length ? { passengers: tiers.map((tier) => ({ label: text(tier.label), age_range: text(tier.age_range), price: money(tier.price) })) } : {}),
+      ...(tiers.length ? { passengers: tiers.map((tier) => ({ label: text(tier.label), age_range: text(tier.age_range), price: money(tier.price) === 0 && text(tier.note) !== "Үнэгүй" && !/нярай|infant/i.test(text(tier.label)) ? null : money(tier.price) })) } : {}),
     };
   });
 }
