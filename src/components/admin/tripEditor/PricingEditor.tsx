@@ -50,7 +50,16 @@ export function formatAgeRange(min: string, max: string, unit: "сар" | "на�
   return `${min || max} ${unit}`;
 }
 
-/** A date chip list with a picker to add one. Used for the trip's departures and a price group's dates. */
+/** The calendar day as YYYY-MM-DD (local date, not UTC). */
+export function isoDay(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * A date chip list with a picker to add one. Used for the trip's departures and a price group's dates.
+ * A picked day is stored with its year (YYYY-MM-DD). Until 2026-11-14 it was stored as «12 сарын 30»:
+ * a price row that already held "2026-12-20" read only its dated days, so the picked day vanished.
+ */
 export function DateChips({
   dates,
   onChange,
@@ -80,7 +89,7 @@ export function DateChips({
           </span>
         ))}
         <span className="ml-auto">
-          <DatePicker onSelect={(formatted) => add(formatted)} placeholder={addLabel} className="w-44" />
+          <DatePicker onSelect={(_formatted, date) => add(isoDay(date))} placeholder={addLabel} className="w-44" />
         </span>
       </div>
     </div>
@@ -236,8 +245,11 @@ export function TripDatePriceEditor({ groups, onChange }: { groups: PriceGroup[]
             <DateChips
               dates={selected.date ? [selected.date] : group.dates}
               onChange={(dates) => {
+                const shown = selected.date ? [selected.date] : group.dates;
+                // A day just added is shown at once (it becomes its own row on the left).
+                const added = dates.find((date) => !shown.includes(date));
                 update({ dates, display_dates: dates, date_keys: dates });
-                setSelection(`${dates[0] || ""}|${selected.groupIndex + (pricingDates(records[selected.groupIndex]).length > 1 && selected.date ? 1 : 0)}`);
+                setSelection(`${added || dates[0] || ""}|${selected.groupIndex + (pricingDates(records[selected.groupIndex]).length > 1 && selected.date ? 1 : 0)}`);
               }}
             />
           </Field>

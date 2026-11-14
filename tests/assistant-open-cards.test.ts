@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { guardFileProposal, sourceFileBase } from "../src/lib/fileProposalGuards";
+import { guardFileProposal, mergeSameFileNewTrips, sourceFileBase } from "../src/lib/fileProposalGuards";
 import { distinctiveTokens, sharedDistinctive } from "../src/lib/tripNameTokens";
 import { soundAlikeTrips } from "../src/lib/assistantAgent/fuzzyTripSearch";
 import { openProposalRoute, parseOpenProposals, type OpenProposal } from "../src/lib/assistantAgent/openProposals";
@@ -39,6 +39,45 @@ test("a split file's part names its file", () => {
   assert.equal(sourceFileBase("Аялал.docx.part-002-of-002.txt"), "Аялал.docx");
   assert.equal(sourceFileBase("Аялал.pdf.parsed-text-001-of-003.txt"), "Аялал.pdf");
   assert.equal(sourceFileBase("Аялал.pdf"), "Аялал.pdf");
+  // The labels the page really gives a long PDF (2026-11-06): text parts of the parsed text, and a page picture.
+  assert.equal(sourceFileBase("Аялал(3).pdf.parsed-text-001-of-001.txt.part-002-of-002.txt"), "Аялал(3).pdf");
+  assert.equal(sourceFileBase("Аялал(3).pdf.visual-page-001.jpg"), "Аялал(3).pdf");
+  assert.equal(sourceFileBase("Аялал.pdf.part-001.page-002.jpg"), "Аялал.pdf");
+});
+
+const piece = (label: string, fields: Record<string, unknown>) => ({ action: "upsert", fields: { ...fields, extra: { ...(fields.extra as object), source_file_name: label } } });
+const days = (n: number) => Array.from({ length: n }, (_, i) => ({ day: i + 1, title: `Өдөр ${i + 1}` }));
+
+test("pieces of one file under one name become one new trip, whatever length each piece guessed (2026-11-06)", () => {
+  const p = proposal([
+    piece("Норвел(3).pdf.parsed-text-001-of-001.txt.part-001-of-002.txt", { route_name: "Норвел арлын аялал", duration_text: "8 өдөр 7 шөнө", adult_price: 2_000_000, departure_dates: ["2098-11-14", "2098-11-28"], extra: { itinerary_days: days(8), price_groups: [{ label: "A" }, { label: "B" }] } }),
+    piece("Норвел(3).pdf.parsed-text-001-of-001.txt.part-002-of-002.txt", { route_name: "Норвел Арлын аялал", duration_text: "9 өдөр 8 шөнө", adult_price: null, departure_dates: [], extra: { itinerary_days: days(9), included_items: ["Буудал"] } }),
+    piece("Норвел(3).pdf.visual-page-001.jpg", { route_name: "Норвел арлын аялал", duration_text: "5 өдөр 4 шөнө", adult_price: 2_000_000, departure_dates: ["2098-11-14", "2098-12-12"], photo_urls: ["https://x/1.jpg"], extra: { itinerary_days: days(5) } }),
+    { action: "upsert", fields: { route_name: "Велмор аялал", extra: { source_file_name: "Норвел(3).pdf.visual-page-001.jpg" } } },
+  ]);
+  mergeSameFileNewTrips(p);
+  assert.equal(p.actions.length, 2, "the three pieces are one trip; a differently named trip stays");
+  const fields = p.actions[0].fields as Record<string, unknown> & { extra: Record<string, unknown> };
+  assert.equal(fields.duration_text, "9 өдөр 8 шөнө", "the longest program and its length");
+  assert.equal((fields.extra.itinerary_days as unknown[]).length, 9);
+  assert.equal(fields.adult_price, 2_000_000);
+  assert.deepEqual(fields.departure_dates, ["2098-11-14", "2098-11-28", "2098-12-12"]);
+  assert.equal((fields.extra.price_groups as unknown[]).length, 2);
+  assert.deepEqual(fields.extra.included_items, ["Буудал"]);
+  assert.deepEqual(fields.photo_urls, ["https://x/1.jpg"]);
+  assert.ok(p.conflict_items?.some((item) => item.type === "file_pieces_merged" && /3 хэсгээс/.test(item.text)));
+});
+
+test("same name from different files, or different names from one file, are not merged here", () => {
+  const p = proposal([
+    piece("А.pdf", { route_name: "Норвел аялал", duration_text: "5 өдөр" }),
+    piece("Б.pdf", { route_name: "Норвел аялал", duration_text: "8 өдөр" }),
+    piece("В.pdf.part-001-of-002.txt", { route_name: "Норвел 5 өдөр" }),
+    piece("В.pdf.part-002-of-002.txt", { route_name: "Норвел 8 өдөр" }),
+  ]);
+  mergeSameFileNewTrips(p);
+  assert.equal(p.actions.length, 4);
+  assert.equal(p.conflict_items?.length ?? 0, 0);
 });
 
 const proposal = (actions: unknown[]): AIChangeProposal => ({ summary: "", actions, conflicts: [], conflict_items: [], needs_confirmation: true } as unknown as AIChangeProposal);

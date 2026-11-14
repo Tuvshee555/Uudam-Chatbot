@@ -55,7 +55,7 @@ type ProposalSource = {
 import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
 import { liftDayStates, withPricedDaysOnCalendar, withRowYearsOfCalendar } from "./tripDayStates";
 import { cleanRowHotels, cleanTripTitle, settleRowInfantFares } from "./tripRowFares";
-import { guardFileProposal } from "./fileProposalGuards";
+import { guardFileProposal, mergeSameFileNewTrips } from "./fileProposalGuards";
 import { applyPriceTable, readPriceTable, type PriceTable } from "./tripPriceTable";
 
 function buildBatchSourceParts(input: {
@@ -1687,6 +1687,8 @@ export async function generateAIProposalFromContentBatched(input: {
       const merged = mergeBatchProposals(proposals, batches.length);
 
       keepFileProgramsNew(merged);
+      // Pieces of one file under one name are one trip, whatever length each guessed (fileProposalGuards.ts).
+      mergeSameFileNewTrips(merged);
       // One trip = one action, even when it arrived as several poster slices.
       mergeDuplicateTripActions(merged);
       // A price or a year read from the picture is not in the document's text; the guard
