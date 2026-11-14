@@ -27,6 +27,7 @@ import {
 } from "../../lib/greetingPhrases";
 import { adultCountAnswer, optionChosenByNumber } from "../../lib/selectionAnswer";
 import { programOfferAccepted } from "../../lib/programOffer";
+import { scheduleSweepsFromTraffic } from "../../lib/trafficSweep";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { asksCommercialTerm, classifyMessageNeed, extractNeedConstraints, isSocialMessage } from "../../lib/messageNeed";
@@ -3010,6 +3011,8 @@ export default async function handler(
             }
           }
         }
+        // The follow-up and get-started sweeps also run on traffic (GitHub's schedule ran them hours late).
+        scheduleSweepsFromTraffic();
         return res.status(200).json({ ok: true });
       } catch (err) {
         if (isRetryableWebhookError(err)) {

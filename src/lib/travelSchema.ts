@@ -612,6 +612,10 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS get_started_nudge_at TIMESTAMPTZ NULL;
       `);
+      // One row: when the sweeps last ran from customer traffic (trafficSweep.ts), so they run once per few minutes.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_sweep_lock (id INT PRIMARY KEY, last_run_at TIMESTAMPTZ NOT NULL);
+      `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_follow_up
           ON travel_senders (follow_up_armed_at) WHERE follow_up_slot <> '';

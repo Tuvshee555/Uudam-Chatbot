@@ -58,6 +58,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
   // «Get Started» taps (dbMarkGetStarted) and when each was handled by the nudge sweep (getStartedNudge.ts).
   const getStarted = new Map<string, { tappedAt: string; nudgedAt: string | null }>();
   const iso = (value: unknown) => new Date(String(value)).toISOString();
+  let sweepLockAt: number | null = null;
   // Runs once when this customer's Messenger thread is next read (e.g. a consultant takes over meanwhile).
   const threadHooks = new Map<string, () => void>();
   // The metadata each Messenger send carried (the bot's own marker makes the takeover guard apply).
@@ -99,6 +100,13 @@ export async function conversationGateHarness(context: TestContext, options: { e
       Object.assign(state, { sentAt: new Date(String(params[2])).toISOString(),
         ...(sql.includes("follow_up_slot = ''") ? { slot: "", question: "" } : {}) });
       return result([{ sender_id: sender }]);
+    }
+    // The traffic sweep's one-row lock (trafficSweep.ts): one claim per 4 minutes of the mocked clock.
+    if (/INSERT INTO travel_sweep_lock/i.test(sql)) {
+      const minutes = Number(params[0] || 4);
+      if (sweepLockAt !== null && Date.now() - sweepLockAt < minutes * 60_000) return result();
+      sweepLockAt = Date.now();
+      return result([{ id: 1 }]);
     }
     if (/INSERT INTO travel_senders \(sender_id, platform, last_seen, msg_count, get_started_at/i.test(sql)) {
       senderPlatform.set(sender, String(params[1] ?? ""));
