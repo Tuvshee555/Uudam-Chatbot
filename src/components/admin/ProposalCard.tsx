@@ -11,6 +11,7 @@ import { actionView, describeAction, hasPlannedLines, isRedundantDetail, proposa
 import { diffTripFields, type TripExtraDiff } from "@/lib/tripExtraSchema";
 import { REVIEW_INLINE_ITEMS, departureDays, formatYmd, hasPrice, removePhoto, reviewFacts, reviewIssues, tripPhotos } from "@/lib/tripReview";
 import { NewTripReview } from "./tripReview/NewTripReview";
+import { DamageNotice, damagedActions, withAcknowledgedDamage } from "./ProposalDamage";
 import { mergeEditorResult } from "@/lib/tripEditorState";
 import { withSuggestedHotelProfiles } from "@/lib/tripHotelNames";
 import { thumb } from "./tripReview/photoThumb";
@@ -231,6 +232,8 @@ export function ProposalCard({
   const [customChosen, setCustomChosen] = useState<Record<string, boolean>>({});
   const [showAllActions, setShowAllActions] = useState(false);
   const [showAllNotes, setShowAllNotes] = useState(false);
+  // The tick holds for exactly the damage it was given on: a revised card asks again.
+  const [damageOkFor, setDamageOkFor] = useState("");
   // What the admin changed in the review, per action. It belongs to one reading of the
   // file: an answered question brings a new proposal and starts the review afresh.
   const [edits, setEdits] = useState<{ proposal: AIProposal; drafts: Record<number, Row>; open: Record<number, boolean> }>({ proposal: message.proposal, drafts: {}, open: {} });
@@ -375,8 +378,15 @@ export function ProposalCard({
   const saveBlock = issues.find((issue) => issue.blocks === "save");
   const publishBlock = saveBlock ?? issues.find((issue) => issue.blocks === "publish");
   const tripTag = (index: number) => (creates.length > 1 ? `«${described[index]?.target || `Аялал ${index + 1}`}»: ` : "");
+  /* ---- a change that would break a saved trip: said in red, saved only once ticked (ProposalDamage.tsx) ---- */
+  const damaged = damagedActions(proposal, (index) => described[index]?.target || "Аялал");
+  const damageKey = damaged.map((item) => `${item.index}:${item.lines.join(" ")}`).join("|");
+  const damageOk = damageKey !== "" && damageOkFor === damageKey;
+  const damageBlocks = damaged.length > 0 && !damageOk;
+  const acknowledged = (next: AIProposal) => (damaged.length > 0 && damageOk ? withAcknowledgedDamage(next) : next);
   // What is on screen is what is saved, the opening hotels included.
-  const save = (mode: "draft" | "publish") => onApply({ ...message, proposal: reviewedProposal(proposal, Object.fromEntries(creates.map((index) => [index, fieldsOf(index)])), mode), reviewed: true, savedAs: mode });
+  const save = (mode: "draft" | "publish") => onApply({ ...message, proposal: acknowledged(reviewedProposal(proposal, Object.fromEntries(creates.map((index) => [index, fieldsOf(index)])), mode)), reviewed: true, savedAs: mode });
+  const saveEdit = () => onApply(damaged.length > 0 && damageOk ? { ...message, proposal: acknowledged(message.proposal), reviewed: true } : message);
 
   /* ---- clarification drafts ---- */
   const answerFor = (q: ClarificationQuestion) =>
@@ -439,6 +449,7 @@ export function ProposalCard({
           </p>
         )}
       </header>
+      {isPending && <DamageNotice items={damaged} checked={damageOk} onToggle={(next) => setDamageOkFor(next ? damageKey : "")} disabled={applyBusy} />}
 
       {/* ---------- body ---------- */}
       <div className={cx("mt-4 divide-y divide-line", (!none || showNotesSection || message.clarificationAnswers.length > 0) && "border-t border-line")}>
@@ -711,8 +722,13 @@ export function ProposalCard({
           {applyBusy && <div className="mb-2"><SaveWaitHint /></div>}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             {/* On a phone the «ready» line is left out so the footer stays one row; what still blocks is always said. */}
-            <p className={cx("min-w-0 flex-1 basis-56 text-[13px] leading-5", !publishBlock && "hidden sm:block")} aria-live="polite">
-              {publishBlock ? (
+            <p className={cx("min-w-0 flex-1 basis-56 text-[13px] leading-5", !publishBlock && !damageBlocks && "hidden sm:block")} aria-live="polite">
+              {damageBlocks ? (
+                <span className="flex items-start gap-1.5 font-medium text-danger">
+                  <Icons.alert size={14} className="mt-0.5 shrink-0" />
+                  <span>Дээрх улаан хэсгийг уншаад тэмдэглэсний дараа хадгална.</span>
+                </span>
+              ) : publishBlock ? (
                 <span className="flex items-start gap-1.5 font-medium text-warning">
                   <Icons.alert size={14} className="mt-0.5 shrink-0" />
                   <span>{tripTag(publishBlock.index)}{publishBlock.text}{publishBlock.blocks === "publish" && !saveBlock ? " Ноорог болгон хадгалж болно." : ""}</span>
@@ -726,10 +742,10 @@ export function ProposalCard({
             </p>
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <Button size="sm" variant="ghost" disabled={applyBusy} onClick={() => onCancelProposal(message.id)}>Болих</Button>
-              <Button size="sm" variant="secondary" loading={applyBusy && message.savedAs === "draft"} disabled={applyBusy || locked || Boolean(saveBlock)} onClick={() => save("draft")}>
+              <Button size="sm" variant="secondary" loading={applyBusy && message.savedAs === "draft"} disabled={applyBusy || locked || Boolean(saveBlock) || damageBlocks} onClick={() => save("draft")}>
                 Ноорог хадгалах
               </Button>
-              <Button size="sm" loading={applyBusy && message.savedAs !== "draft"} disabled={applyBusy || locked || Boolean(publishBlock)} onClick={() => save("publish")}>
+              <Button size="sm" loading={applyBusy && message.savedAs !== "draft"} disabled={applyBusy || locked || Boolean(publishBlock) || damageBlocks} onClick={() => save("publish")}>
                 <Icons.check size={15} /> Нийтлэх
               </Button>
             </div>
@@ -753,7 +769,7 @@ export function ProposalCard({
             )}
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" disabled={applyBusy} onClick={() => onCancelProposal(message.id)}>Болих</Button>
-              <Button size="sm" loading={applyBusy} disabled={applyBusy || locked} onClick={() => onApply(message)}>
+              <Button size="sm" loading={applyBusy} disabled={applyBusy || locked || damageBlocks} onClick={saveEdit}>
                 <Icons.check size={15} /> {locked && !applyBusy ? "Хүлээж байна…" : "Хадгалах"}
               </Button>
             </div>

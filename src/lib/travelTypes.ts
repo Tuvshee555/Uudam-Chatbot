@@ -146,6 +146,13 @@ export type AITripAction = {
   /** A short Mongolian line for the proposal card, written by whoever built the action. */
   summary?: string;
   /**
+   * What this patch would break on the saved trip (tripDamage.ts): its name replaced, the trip off
+   * the website, every price row gone, its program cut. Marked by validation, shown in red on the card.
+   */
+  damage?: Array<{ kind: "rename" | "off_site" | "prices_emptied" | "program_cut"; text: string }>;
+  /** The damage kinds the admin ticked on the card; save refuses any marked kind not in here. */
+  acknowledged_damage?: string[];
+  /**
    * set_date_price: the fare per passenger ({set} or {delta}).
    * set_age_bands: the band text instead ("0-23 сар", "2-11 нас", "12+ нас").
    */

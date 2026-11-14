@@ -401,3 +401,24 @@ test("a message about a trip still on an unsaved card changes that card, never a
   assert.equal(modelCalls.length + agentCalls.length, 2, "answered in code");
   assert.equal(inserted.length, 1);
 });
+
+test("a change that would break a saved trip (a rename) is refused at save until the admin ticks it (2026-11-14)", async (context) => {
+  const { post, inserted } = await harness(context, { agent: [
+    () => [{ name: "search_trips", args: { query: "вэлмор" } }],
+    () => [{ name: "get_trip", args: { trip_id: "t-velmor" } }],
+    () => [{ name: "propose_changes", args: { reply_text: "", actions: [{ action: "patch", trip_id: "t-velmor", fields: { route_name: "ВЭЛМОР – ШИНЭ НЭР" }, summary: "Нэр солино" }] } }],
+  ] });
+  const res = await post({ instruction: "вэлмор аяллын нэрийг солих", session_id: "session-assistant-14" });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const card = res.body.proposal as { actions: Array<{ damage?: Array<{ kind: string }> }> };
+  assert.deepEqual(card.actions[0].damage?.map((item) => item.kind), ["rename"], "the card shows it in red before any save");
+  const refused = await post({ request_id: 71, apply: true, confirm: true, session_id: "session-assistant-14" });
+  assert.equal(refused.statusCode, 409, JSON.stringify(refused.body));
+  assert.equal(refused.body.retry, true);
+  assert.equal(refused.body.damage, true);
+  assert.match((refused.body.results as string[]).join("\n"), /«ВЭЛМОР АРЛЫН АЯЛАЛ»: Нэр солигдоно: «ВЭЛМОР АРЛЫН АЯЛАЛ» → «ВЭЛМОР – ШИНЭ НЭР»/);
+  // Ticked on the card: the same change goes past the check.
+  const ticked = { ...inserted[0].proposal, actions: (inserted[0].proposal.actions as Array<Record<string, unknown>>).map((action) => ({ ...action, acknowledged_damage: ["rename"] })) };
+  const saved = await post({ request_id: 71, apply: true, confirm: true, proposal_edit: ticked, session_id: "session-assistant-14" });
+  assert.notEqual(saved.body.damage, true, JSON.stringify(saved.body));
+});

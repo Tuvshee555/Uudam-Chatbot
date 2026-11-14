@@ -10,6 +10,7 @@
  * the server has certainly stopped; a second Save of a stored request then reports "already
  * saved" instead of saving twice.
  */
+import { withServerDamage } from "./ProposalDamage";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { APPLY_WAIT_MS, applyOutcome, proposalApplyBody } from "@/lib/adminProposalApply";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
@@ -204,7 +205,10 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
       }
       if (outcome.kind === "retry") {
         // Nothing was saved: the proposal stays open with what the admin corrected, to fix and save again.
-        setProposalMessage(message.id, { saveError: outcome.text, saveLockedUntil: undefined });
+        // Refused for damage to a saved trip: the server's marks go on the card, so the red notice asks for the tick.
+        const marked = json && typeof json === "object" && (json as { damage?: unknown }).damage === true
+          ? { proposal: withServerDamage(message.proposal, (json as { proposal?: unknown }).proposal) } : {};
+        setProposalMessage(message.id, { saveError: outcome.text, saveLockedUntil: undefined, ...marked });
         toast.error("Хадгалагдсангүй. Засаад дахин хадгална уу.");
         return;
       }

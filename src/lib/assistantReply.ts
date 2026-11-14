@@ -36,6 +36,7 @@ import { crossCheckProposal } from "./partnerWatch/crossCheck";
 import { ensureTravelSchema, findTripMatches, listTrips } from "./travelDb";
 import { generateAIProposal, generateAIProposalFromContentBatched, persistProposal, reviseAIRequest } from "./travelAI";
 import { validateAIChangeProposal } from "./travelAIValidation";
+import { markTripDamage } from "./tripDamage";
 import type { AIChangeProposal, AITripAction, TravelTrip } from "./travelTypes";
 
 export type AssistantReply = (
@@ -231,6 +232,14 @@ async function tripSourceReply(outcome: Extract<AgentOutcome, { kind: "trip_sour
 export async function generateAssistantReply(typed: string, options: AssistantReplyOptions = {}): Promise<AssistantReply> {
   const trips = await readCatalogue();
   if (!trips) return { kind: "note", text: DB_DOWN_NOTE };
+  const reply = await replyFromCatalogue(typed, trips, options);
+  // Whatever built the card (agent, brain, file reading, partner check), a change that would break a
+  // saved trip is marked on it in red; save refuses it until ticked (tripDamage.ts, 2026-11-14).
+  if (reply.kind === "proposal") markTripDamage(reply.proposal.actions, trips, options.now);
+  return reply;
+}
+
+async function replyFromCatalogue(typed: string, trips: Trips, options: AssistantReplyOptions): Promise<AssistantReply> {
   // A tapped «Хуваарь, суудлыг шинэчлэх»: the partner watch checks that trip's page now (no model).
   const checkTripId = watchCheckTripId(typed);
   if (checkTripId) {
@@ -356,6 +365,7 @@ export async function reviseStoredProposal(requestId: number, clarification: str
   });
   const outcome = run.outcome;
   if (outcome.kind === "proposal") {
+    markTripDamage(outcome.proposal.actions, trips, options.now);
     await saveRevisedProposal(requestId, outcome.proposal);
     return { ok: true, proposal: outcome.proposal, request_id: requestId, requires_confirmation: true };
   }

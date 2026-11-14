@@ -35,6 +35,10 @@ import type { PosterWrite } from "./connectedTripStore";
 import type { DepartureRowState, DepartureStateChange, DepartureStateRow } from "./websiteTripSync";
 import { savedTripLinks, type SavedTripInput, type SavedTripLink } from "./savedTripLinks";
 import { newWebsiteTripSlug } from "./websiteTripSlug";
+import { unacknowledgedDamage } from "./tripDamage";
+
+/** The first line of a save refused for unticked damage (tripDamage.ts); one line per trip follows. */
+export const DAMAGE_REFUSED = "Энэ өөрчлөлт хадгалагдсан аяллыг эвдэнэ. Карт дээрх улаан хэсгийг уншаад, үнэхээр хүсвэл тэмдэглээд дахин хадгална уу.";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => (value && typeof value === "object" && !Array.isArray(value) ? (value as Row) : {});
@@ -617,6 +621,12 @@ export async function applyAIRequest(requestId: number, reviewed?: AIChangePropo
   if (problems.length > 0) {
     return { ok: false, message: "Хадгалахын өмнө засах зүйл байна.", results: problems, proposal: validation.proposal, retry: true };
   }
+  // A change that would break a saved trip (renamed, off the website, prices or program gone) is
+  // written only once the admin ticked it on the card — checked against the trip as it is now.
+  const unticked = unacknowledgedDamage(validation.proposal.actions, trips);
+  if (unticked.length > 0) {
+    return { ok: false, message: DAMAGE_REFUSED, results: [DAMAGE_REFUSED, ...unticked], proposal: validation.proposal, retry: true, damage: true };
+  }
 
   // One save at a time: a second tab, or a repeat press while the first save is still running,
   // is refused instead of applying the same changes twice. A claim older than 5 minutes is a
@@ -707,6 +717,10 @@ export async function applyAIProposalDirect(
   const problems = newTripSaveProblems(normalised);
   if (problems.length > 0) {
     return { ok: false, message: "Хадгалахын өмнө засах зүйл байна.", results: problems, proposal: normalised, retry: true };
+  }
+  const unticked = unacknowledgedDamage(normalised.actions, trips);
+  if (unticked.length > 0) {
+    return { ok: false, message: DAMAGE_REFUSED, results: [DAMAGE_REFUSED, ...unticked], proposal: normalised, retry: true, damage: true };
   }
   const { results, snapshots, failed } = await runActions(normalised.actions);
 

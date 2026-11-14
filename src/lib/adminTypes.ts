@@ -267,6 +267,9 @@ export type AIAction = {
   /** set_date_state: the departure day (YYYY-MM-DD) and what it becomes. */
   date?: string;
   state?: "open" | "low" | "full";
+  /** What this change would break on the saved trip (src/lib/tripDamage.ts); shown in red, saved only once ticked. */
+  damage?: Array<{ kind: string; text: string }>;
+  acknowledged_damage?: string[];
 };
 
 export type ProposalQuestionOption = {

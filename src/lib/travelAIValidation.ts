@@ -37,6 +37,7 @@ import { filterFutureDepartureDates } from "./travelDates";
 import { validateTripDataChange } from "./tripDataValidation";
 import type { TripFactInput } from "./tripDataValidation";
 import { sharedDistinctive } from "./tripNameTokens";
+import { isDamageKind, markTripDamage } from "./tripDamage";
 import {
   dateStateProblem,
   dateStatusOf,
@@ -551,6 +552,7 @@ export function validateAIChangeProposal(
       ...(Object.keys(cleanedFields).length > 0 ? { fields: cleanedFields } : {}),
       ...(typeof rawAction.expected_updated_at === "string" && rawAction.expected_updated_at ? { expected_updated_at: rawAction.expected_updated_at } : {}),
       ...(typeof rawAction.summary === "string" && rawAction.summary.trim() ? { summary: rawAction.summary.trim().slice(0, 500) } : {}),
+      ...(Array.isArray(rawAction.acknowledged_damage) ? { acknowledged_damage: rawAction.acknowledged_damage.filter(isDamageKind) } : {}),
     };
     sanitizedActions.push(sanitizedAction);
   }
@@ -612,6 +614,8 @@ export function validateAIChangeProposal(
     ...newBlockingItems,
   ];
 
+  // What a change would break on a saved trip is marked for the card; save checks it again (tripDamage.ts).
+  markTripDamage(finalActions, existingTrips, options?.now);
   const finalProposal: AIChangeProposal = {
     ...normalized,
     needs_confirmation: needsConfirmation,
