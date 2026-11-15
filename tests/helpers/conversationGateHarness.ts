@@ -108,21 +108,28 @@ export async function conversationGateHarness(context: TestContext, options: { e
       sweepLockAt = Date.now();
       return result([{ id: 1 }]);
     }
+    // Postgres NOW() keeps MICROseconds; a value read back into a JavaScript Date keeps milliseconds. The tap time is
+    // held at microsecond precision here so an exact "=" against the read-back value fails, as it does in production.
     if (/INSERT INTO travel_senders \(sender_id, platform, last_seen, msg_count, get_started_at/i.test(sql)) {
       senderPlatform.set(sender, String(params[1] ?? ""));
-      getStarted.set(sender, { tappedAt: new Date().toISOString(), nudgedAt: getStarted.get(sender)?.nudgedAt ?? null });
+      getStarted.set(sender, { tappedAt: `${new Date().toISOString().slice(0, 23)}417Z`, nudgedAt: getStarted.get(sender)?.nudgedAt ?? null });
       return result();
     }
     if (/SELECT sender_id, get_started_at AS tapped_at FROM travel_senders/i.test(sql)) {
       const [dueBy, windowStart, limit] = params;
+      const at = (value: unknown) => Date.parse(String(value));
       return result([...getStarted.entries()].filter(([id, state]) => senderPlatform.get(id) === "facebook" && !id.startsWith("demo:")
-        && state.tappedAt <= iso(dueBy) && state.tappedAt > iso(windowStart) && (!state.nudgedAt || state.nudgedAt < state.tappedAt))
+        && at(state.tappedAt) <= at(dueBy) && at(state.tappedAt) > at(windowStart) && (!state.nudgedAt || at(state.nudgedAt) < at(state.tappedAt)))
         .sort((a, b) => a[1].tappedAt.localeCompare(b[1].tappedAt)).slice(0, Number(limit))
-        .map(([id, state]) => ({ sender_id: id, tapped_at: state.tappedAt })));
+        // pg hands back a Date: milliseconds only.
+        .map(([id, state]) => ({ sender_id: id, tapped_at: new Date(state.tappedAt) })));
     }
     if (/UPDATE travel_senders SET get_started_nudge_at = \$3/i.test(sql)) {
       const state = getStarted.get(sender);
-      if (!state || state.tappedAt !== iso(params[1]) || (state.nudgedAt && state.nudgedAt >= state.tappedAt)) return result();
+      if (!state) return result();
+      const exact = /get_started_at = \$2::timestamptz/i.test(sql);
+      const matches = exact ? state.tappedAt === String(params[1]) : Math.abs(Date.parse(state.tappedAt) - Date.parse(String(params[1]))) < 1;
+      if (!matches || (state.nudgedAt && Date.parse(state.nudgedAt) >= Date.parse(state.tappedAt))) return result();
       state.nudgedAt = iso(params[2]);
       return result([{ sender_id: sender }]);
     }

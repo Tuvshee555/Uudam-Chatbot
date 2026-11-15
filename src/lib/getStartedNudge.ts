@@ -80,11 +80,16 @@ async function dueCandidates(now: Date, delayMs: number): Promise<Candidate[]> {
   return result?.rows ?? [];
 }
 
-/** Atomic: marks this tap handled (sent or ruled out), once. A later tap makes the customer eligible again. */
+/**
+ * Atomic: marks this tap handled (sent or ruled out), once. A later tap makes the customer eligible again.
+ * The tap time is matched within a millisecond: Postgres keeps microseconds, the value read back into a JavaScript
+ * Date keeps milliseconds, so an exact "=" never matched and no nudge was ever sent (production 2026-11-14/15).
+ */
 async function claimTap(senderId: string, tappedAt: string, now: Date): Promise<boolean> {
   const result = await queryNeon<{ sender_id: string }>(
     `UPDATE travel_senders SET get_started_nudge_at = $3::timestamptz
-      WHERE sender_id = $1 AND get_started_at = $2::timestamptz
+      WHERE sender_id = $1
+        AND get_started_at > $2::timestamptz - interval '1 millisecond' AND get_started_at < $2::timestamptz + interval '1 millisecond'
         AND (get_started_nudge_at IS NULL OR get_started_nudge_at < get_started_at)
       RETURNING sender_id`,
     [senderId, tappedAt, now.toISOString()],
