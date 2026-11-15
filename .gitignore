@@ -47,8 +47,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Claude Code local files
-.claude/
+# Claude Code local files. Only the shared git auto-sync hook is committed: settings.local.json holds
+# this machine's permission rules (they have held connection strings) and must never be committed.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 .codex-logs/
 
 # scratch dir — QA logs, sample exports, never committed

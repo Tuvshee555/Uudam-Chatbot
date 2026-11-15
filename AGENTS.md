@@ -7,6 +7,11 @@
 - If the worktree contains unrelated changes, stage only the files Codex intentionally changed for the current task.
 - If pushing is not possible because of authentication, branch state, remote configuration, failing checks, or unclear ownership of changes, state the blocker clearly instead of pretending it was pushed.
 - If the user explicitly says not to commit or push for a task, follow the user's latest instruction.
+- Claude Code sessions (every machine and the cloud) run `.claude/hooks/git-sync.mjs`: it pulls from GitHub at
+  session start and before each message (fast-forward, or rebase of a clean tree; a conflicting rebase is
+  aborted and reported), and at the end of a turn sends Claude back once to commit and push unpushed work.
+  It never commits or pushes by itself. `node .claude/hooks/git-sync.mjs install` turns it on for every repo
+  on a machine; `git config claude.gitsync false` turns it off for one repo, `CLAUDE_GIT_SYNC=off` everywhere.
 
 ## Verification
 
