@@ -13,6 +13,15 @@
   It never commits or pushes by itself. `node .claude/hooks/git-sync.mjs install` turns it on for every repo
   on a machine; `git config claude.gitsync false` turns it off for one repo, `CLAUDE_GIT_SYNC=off` everywhere.
 
+## Branches: only `main` (owner's permanent rule)
+
+- Only `main` exists, locally and on GitHub. Work on `main` directly when possible; any other branch is temporary.
+- When the job on a branch is done: merge it into `main`, push `main`, delete the branch locally and on `origin`,
+  remove its worktree, and switch back to `main`. Always, without asking.
+- Delete branches already fully merged into `main` whenever you find them. A branch with work not in `main` that is
+  not yours may be another session's work in progress: ask the owner before deleting it.
+- Never delete tags: the 11 `archive/*` tags stay forever.
+
 ## Verification
 
 - Before reporting a change as done, run the relevant checks for the scope of the change.

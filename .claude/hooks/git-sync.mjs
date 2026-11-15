@@ -7,7 +7,11 @@
  *   prompt   (UserPromptSubmit)  the same before each message (at most once a minute); silent unless
  *                                something was pulled or could not be.
  *   stop     (Stop)              if work is left unpushed or uncommitted, send Claude back once to
- *                                check, commit and push it (unless the user said not to).
+ *                                check, commit and push it (unless the user said not to); on a side
+ *                                branch, remind it once to merge into main and delete the branch.
+ *
+ * The owner's rule is "only main": session start lists leftover branches (merged ones to delete,
+ * unmerged ones to finish or ask about). The hook itself never deletes anything.
  *   install                      copy this script to ~/.claude/hooks and register it in
  *                                ~/.claude/settings.json, so every repository on this machine gets it.
  *
@@ -23,7 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = 1;
+const VERSION = 2;
 const MODE = process.argv[2] || "";
 const SELF = fileURLToPath(import.meta.url);
 const PROMPT_EVERY_MS = 60_000;
@@ -54,7 +58,7 @@ function git(args, { timeout = 15_000, cwd = ROOT } = {}) {
 
 const lines = (text) => text.split("\n").filter(Boolean);
 const firstLine = (text) => String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 const list = (items) =>
   items.length <= LIST_MAX ? items.join(", ") : `${items.slice(0, LIST_MAX).join(", ")} (+${items.length - LIST_MAX} more)`;
 
@@ -118,6 +122,27 @@ function defaultBranch(remote) {
     if (git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${name}`]).ok) return `${remote}/${name}`;
   }
   return null;
+}
+
+/** Every branch but the default one, split into fully merged (to delete) and holding work not in it. */
+function otherBranches(info, def) {
+  const defName = def.slice(info.remote.length + 1);
+  const defTip = git(["rev-parse", def]).out;
+  const refs = [
+    ...lines(git(["for-each-ref", "--format=%(refname:short)", "refs/heads"]).out).filter((b) => b !== defName),
+    // origin/HEAD shows up as "origin" or "origin/HEAD" depending on the git version.
+    ...lines(git(["for-each-ref", "--format=%(refname:short)", `refs/remotes/${info.remote}`]).out)
+      .filter((r) => r !== def && r !== info.remote && r !== `${info.remote}/HEAD`),
+  ].slice(0, 40);
+  const merged = [];
+  const unmerged = [];
+  for (const ref of refs) {
+    const own = Number(git(["rev-list", "--count", `${def}..${ref}`]).out) || 0;
+    if (own) unmerged.push(`${ref} (${plural(own, "commit")} not in ${defName})`);
+    // A branch sitting exactly on the default tip has most likely just been created: leave it.
+    else if (ref !== info.branch && git(["rev-parse", ref]).out !== defTip) merged.push(ref);
+  }
+  return { defName, merged, unmerged };
 }
 
 function counts(range) {
@@ -275,6 +300,18 @@ function syncTurn({ input, gitDir, state, sid }) {
     if (ahead || dirty.length) {
       notes.push("Unless the user says otherwise: check that work (build/type-check, no secrets such as .env files or keys), commit it, git pull --rebase, then git push. If it looks like someone's unfinished work, ask before committing.");
     }
+    if (def) {
+      const { defName, merged, unmerged } = otherBranches(info, def);
+      notes.push(`Owner's standing rule (every machine, every repo): only ${defName} should exist. When the job on a branch is done, merge it into ${defName}, push ${defName}, delete the branch locally and on ${info.remote}, remove its worktree, and switch back to ${defName}, without asking. Never delete tags (archive/* stay forever).`);
+      if (merged.length) {
+        notes.push(`Branches already merged into ${def}: ${list(merged)}. Delete them now, locally (git branch -d) and on ${info.remote} (git push ${info.remote} --delete <name>).`);
+        shown.push(`git: ${plural(merged.length, "merged branch", "merged branches")} to delete`);
+      }
+      if (unmerged.length) {
+        notes.push(`Branches with work not in ${defName}: ${list(unmerged)}. If a branch's job is done, merge it into ${defName} and delete it. If it may be another session's work in progress, ask the owner before deleting it.`);
+        shown.push(`git: ${plural(unmerged.length, "other branch", "other branches")} with unmerged work`);
+      }
+    }
     if (!shown.length) shown.push(`git: ${info.branch} is up to date with ${info.upstream || info.remote}`);
     if (!refreshUserCopy() && !process.env.CLAUDE_CODE_REMOTE && inside(SELF, ROOT) && !readState(state("hinted"))) {
       writeState(state("hinted"), String(Date.now()));
@@ -292,24 +329,42 @@ function stop({ gitDir, state, sid }) {
   if (!info.branch || !info.remote) return null;
   const dirty = dirtyEntries();
   const ahead = unpushed(info);
-  if (!ahead && !dirty.length) return null;
-  const changedThisTurn = readState(state(`turn-${sid}`)) !== fingerprint(info.head, dirty);
-  const firstReminder = !fs.existsSync(state(`nag-${sid}`));
-  if (!changedThisTurn && !firstReminder) return null;
-  writeState(state(`nag-${sid}`), String(Date.now()));
-  const reason = [`Git auto-sync: work on ${info.branch} is not on ${info.upstream || info.remote} yet.`];
-  if (ahead) reason.push(`- ${plural(ahead, "commit")} not pushed: ${subjects(unpushedRange(info), 5).join("; ")}`);
-  if (dirty.length) reason.push(`- Uncommitted changes: ${list(dirty.map((d) => d.file))}`);
-  const behind = info.upstream ? counts(`HEAD...${info.upstream}`)?.behind : 0;
-  if (behind) reason.push(`- ${info.upstream} has ${plural(behind, "new commit")}: git pull --rebase before pushing, keeping both sides' work.`);
-  reason.push(`Check it (build/type-check, no secrets such as .env files or keys), commit only the files that belong to this work, git pull --rebase, then git push${info.upstream ? "" : ` -u ${info.remote} ${info.branch}`}. If the user said not to commit or push, or the work is unfinished, say that in one line and stop.`);
+  const def = defaultBranch(info.remote);
+  const defName = def ? def.slice(info.remote.length + 1) : null;
+  let branchLine = null;
+  if (defName && info.branch !== defName && !fs.existsSync(state(`branch-nag-${sid}`))) {
+    const own = Number(git(["rev-list", "--count", `${def}..HEAD`]).out) || 0;
+    branchLine = own
+      ? `- You are on branch ${info.branch} (${plural(own, "commit")} not in ${defName}). Owner's rule: when its job is done, merge it into ${defName}, push ${defName}, delete ${info.branch} locally and on ${info.remote}, and switch back to ${defName}.`
+      : `- Branch ${info.branch} holds nothing that ${defName} lacks. Owner's rule: switch back to ${defName} and delete ${info.branch} locally and on ${info.remote}, unless its job has only just started.`;
+  }
+  const pending = ahead > 0 || dirty.length > 0;
+  const workReminder = pending
+    && (readState(state(`turn-${sid}`)) !== fingerprint(info.head, dirty) || !fs.existsSync(state(`nag-${sid}`)));
+  if (!workReminder && !branchLine) return null;
+  if (workReminder) writeState(state(`nag-${sid}`), String(Date.now()));
+  if (branchLine) writeState(state(`branch-nag-${sid}`), String(Date.now()));
+
+  const reason = [workReminder
+    ? `Git auto-sync: work on ${info.branch} is not on ${info.upstream || info.remote} yet.`
+    : "Git auto-sync:"];
+  if (workReminder) {
+    if (ahead) reason.push(`- ${plural(ahead, "commit")} not pushed: ${subjects(unpushedRange(info), 5).join("; ")}`);
+    if (dirty.length) reason.push(`- Uncommitted changes: ${list(dirty.map((d) => d.file))}`);
+    const behind = info.upstream ? counts(`HEAD...${info.upstream}`)?.behind : 0;
+    if (behind) reason.push(`- ${info.upstream} has ${plural(behind, "new commit")}: git pull --rebase before pushing, keeping both sides' work.`);
+  }
+  if (branchLine) reason.push(branchLine);
+  reason.push(workReminder
+    ? `Check it (build/type-check, no secrets such as .env files or keys), commit only the files that belong to this work, git pull --rebase, then git push${info.upstream ? "" : ` -u ${info.remote} ${info.branch}`}. If the user said not to commit or push, or the work is unfinished, say that in one line and stop.`
+    : "If the job on this branch is not done yet, say that in one line and stop.");
   return { decision: "block", reason: reason.join("\n") };
 }
 
 function cleanOldState(dir) {
   try {
     for (const name of fs.readdirSync(dir)) {
-      if (!/^(turn|nag)-/.test(name)) continue;
+      if (!/^(turn|nag|branch-nag)-/.test(name)) continue;
       const file = path.join(dir, name);
       if (Date.now() - fs.statSync(file).mtimeMs > 3 * 24 * 3600_000) fs.rmSync(file, { force: true });
     }
