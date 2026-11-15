@@ -1,0 +1,1509 @@
+{
+ "version": "2026-11-16",
+ "sources": {
+  "bali-30": {
+   "subject": "Canton Tower night",
+   "title": "Canton Tower at Night 20230722.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Canton_Tower_at_Night_20230722.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/76/Canton_Tower_at_Night_20230722.jpg/1920px-Canton_Tower_at_Night_20230722.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Tim Wu",
+   "provider": "Wikimedia Commons"
+  },
+  "bali-7": {
+   "subject": "Pandawa Beach",
+   "title": "Pandawa Beach, Nusa Dua, Bali, Indonesia.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Pandawa_Beach,_Nusa_Dua,_Bali,_Indonesia.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/eb/Pandawa_Beach%2C_Nusa_Dua%2C_Bali%2C_Indonesia.jpg/1920px-Pandawa_Beach%2C_Nusa_Dua%2C_Bali%2C_Indonesia.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Michellewinardi",
+   "provider": "Wikimedia Commons"
+  },
+  "bangkok-2": {
+   "subject": "Wat Arun",
+   "title": "Templo Wat Arun, Bangkok, Tailandia, 2013-08-22, DD 37.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Templo_Wat_Arun,_Bangkok,_Tailandia,_2013-08-22,_DD_37.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/8e/Templo_Wat_Arun%2C_Bangkok%2C_Tailandia%2C_2013-08-22%2C_DD_37.jpg/1920px-Templo_Wat_Arun%2C_Bangkok%2C_Tailandia%2C_2013-08-22%2C_DD_37.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "Diego Delso",
+   "provider": "Wikimedia Commons"
+  },
+  "bangkok-8": {
+   "subject": "Grand Palace Bangkok",
+   "title": "Temple of the Emerald Buddha.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Temple_of_the_Emerald_Buddha.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b5/Temple_of_the_Emerald_Buddha.jpg/1920px-Temple_of_the_Emerald_Buddha.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Nawit science",
+   "provider": "Wikimedia Commons"
+  },
+  "pattaya-31": {
+   "subject": "Nong Nooch Garden",
+   "title": "Overview Nong Nooch Botanical Garden.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Overview_Nong_Nooch_Botanical_Garden.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3c/Overview_Nong_Nooch_Botanical_Garden.jpg/1920px-Overview_Nong_Nooch_Botanical_Garden.jpg",
+   "license": "CC BY 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/4.0",
+   "author": "Christoph Jackel (WMDE)",
+   "provider": "Wikimedia Commons"
+  },
+  "pattaya-1": {
+   "subject": "Sanctuary of Truth Pattaya",
+   "title": "Sanctuary of Truth 2016-02-19-02.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Sanctuary_of_Truth_2016-02-19-02.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/cf/Sanctuary_of_Truth_2016-02-19-02.jpg/1920px-Sanctuary_of_Truth_2016-02-19-02.jpg",
+   "license": "CC BY 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+   "author": "Rolf Heinrich, Köln",
+   "provider": "Wikimedia Commons"
+  },
+  "bangkok-6": {
+   "subject": "Wat Arun",
+   "title": "Wat Arun 03-2012-01.JPG",
+   "page": "https://commons.wikimedia.org/wiki/File:Wat_Arun_03-2012-01.JPG",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3d/Wat_Arun_03-2012-01.JPG/1920px-Wat_Arun_03-2012-01.JPG",
+   "license": "CC BY 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+   "author": "Rolf Heinrich, Köln",
+   "provider": "Wikimedia Commons"
+  },
+  "bangkok-37": {
+   "subject": "Chao Phraya Bangkok sunset",
+   "title": "Chao Phraya river sunset.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Chao_Phraya_river_sunset.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/aa/Chao_Phraya_river_sunset.jpg/1920px-Chao_Phraya_river_sunset.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "TomaszSwatowski",
+   "provider": "Wikimedia Commons"
+  },
+  "tianjin-34": {
+   "subject": "Zhangjiakou",
+   "title": "Juyongguanfromnorth.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Juyongguanfromnorth.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a0/Juyongguanfromnorth.jpg/1920px-Juyongguanfromnorth.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Charlie fong",
+   "provider": "Wikimedia Commons"
+  },
+  "beijing-1": {
+   "subject": "Great Wall Mutianyu",
+   "title": "Great Wall of China July 2006.JPG",
+   "page": "https://commons.wikimedia.org/wiki/File:Great_Wall_of_China_July_2006.JPG",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/fa/Great_Wall_of_China_July_2006.JPG/1920px-Great_Wall_of_China_July_2006.JPG",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Velatrix",
+   "provider": "Wikimedia Commons"
+  },
+  "tianjin-6": {
+   "subject": "Tianjin Eye",
+   "title": "天津之眼Tianjin Eye.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:%E5%A4%A9%E6%B4%A5%E4%B9%8B%E7%9C%BCTianjin_Eye.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/60/%E5%A4%A9%E6%B4%A5%E4%B9%8B%E7%9C%BCTianjin_Eye.jpg/1920px-%E5%A4%A9%E6%B4%A5%E4%B9%8B%E7%9C%BCTianjin_Eye.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "KangTyngrwey",
+   "provider": "Wikimedia Commons"
+  },
+  "tianjin-9": {
+   "subject": "Tianjin Haihe night",
+   "title": "Tianjin Haihe Italian Business Park, Hebei, Tianjin, China, 300000 - panoramio (8).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Tianjin_Haihe_Italian_Business_Park,_Hebei,_Tianjin,_China,_300000_-_panoramio_(8).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e4/Tianjin_Haihe_Italian_Business_Park%2C_Hebei%2C_Tianjin%2C_China%2C_300000_-_panoramio_%288%29.jpg/1920px-Tianjin_Haihe_Italian_Business_Park%2C_Hebei%2C_Tianjin%2C_China%2C_300000_-_panoramio_%288%29.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "Steffan Chen",
+   "provider": "Wikimedia Commons"
+  },
+  "danang-23": {
+   "subject": "My Khe Beach",
+   "title": "My Khe Beach Danang Coastline.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:My_Khe_Beach_Danang_Coastline.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e5/My_Khe_Beach_Danang_Coastline.jpg/1920px-My_Khe_Beach_Danang_Coastline.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Jpatokal",
+   "provider": "Wikimedia Commons"
+  },
+  "danang-31": {
+   "subject": "Hoi An lanterns",
+   "title": "Hội An, Ancient Town, 2020-01 CN-11.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:H%E1%BB%99i_An,_Ancient_Town,_2020-01_CN-11.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d6/H%E1%BB%99i_An%2C_Ancient_Town%2C_2020-01_CN-11.jpg/1920px-H%E1%BB%99i_An%2C_Ancient_Town%2C_2020-01_CN-11.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Steffen Schmitz (more photos)",
+   "provider": "Wikimedia Commons"
+  },
+  "danang-13": {
+   "subject": "Dragon Bridge Da Nang",
+   "title": "Da Nang Dragon Bridge 2020 IMG 4019.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Da_Nang_Dragon_Bridge_2020_IMG_4019.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9c/Da_Nang_Dragon_Bridge_2020_IMG_4019.jpg/1920px-Da_Nang_Dragon_Bridge_2020_IMG_4019.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Kuroczynski",
+   "provider": "Wikimedia Commons"
+  },
+  "danang-2": {
+   "subject": "Golden Bridge Ba Na Hills",
+   "title": "Aerial view of the Golden Bridge, Ba Na Hills, Da Nang, Vietnam.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Aerial_view_of_the_Golden_Bridge,_Ba_Na_Hills,_Da_Nang,_Vietnam.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/98/Aerial_view_of_the_Golden_Bridge%2C_Ba_Na_Hills%2C_Da_Nang%2C_Vietnam.jpg/1920px-Aerial_view_of_the_Golden_Bridge%2C_Ba_Na_Hills%2C_Da_Nang%2C_Vietnam.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Vivu Vietnam",
+   "provider": "Wikimedia Commons"
+  },
+  "wutai-16": {
+   "subject": "Xiantong Temple",
+   "title": "Entrance Paifang of Xiantong Temple, Wutaishan (20240608090712).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Entrance_Paifang_of_Xiantong_Temple,_Wutaishan_(20240608090712).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/af/Entrance_Paifang_of_Xiantong_Temple%2C_Wutaishan_%2820240608090712%29.jpg/1920px-Entrance_Paifang_of_Xiantong_Temple%2C_Wutaishan_%2820240608090712%29.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "N509FZ",
+   "provider": "Wikimedia Commons"
+  },
+  "innermongolia-12": {
+   "subject": "Ulanqab",
+   "title": "Yurts.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Yurts.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b8/Yurts.jpg/1920px-Yurts.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "Fanghong",
+   "provider": "Wikimedia Commons"
+  },
+  "innermongolia-17": {
+   "subject": "Genghis Khan Mausoleum Ordos",
+   "title": "GhinggisKhanMausoleum.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:GhinggisKhanMausoleum.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c3/GhinggisKhanMausoleum.jpg/1920px-GhinggisKhanMausoleum.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "Fanghong",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-34": {
+   "subject": "Xilitu Zhao Hohhot",
+   "title": "Xilitu Zhao (53724498277).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Xilitu_Zhao_(53724498277).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/38/Xilitu_Zhao_%2853724498277%29.jpg/1920px-Xilitu_Zhao_%2853724498277%29.jpg",
+   "license": "CC BY 2.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+   "author": "xiquinhosilva",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-13": {
+   "subject": "Five Pagoda Temple Hohhot",
+   "title": "Wuta Si (Five Pagoda Temple) - 19741370235.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Wuta_Si_(Five_Pagoda_Temple)_-_19741370235.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ac/Wuta_Si_%28Five_Pagoda_Temple%29_-_19741370235.jpg/1920px-Wuta_Si_%28Five_Pagoda_Temple%29_-_19741370235.jpg",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Gary Todd",
+   "provider": "Wikimedia Commons"
+  },
+  "innermongolia-14": {
+   "subject": "Genghis Khan Mausoleum Ordos",
+   "title": "Genghis khan mausoleum.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Genghis_khan_mausoleum.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/08/Genghis_khan_mausoleum.jpg/1920px-Genghis_khan_mausoleum.jpg",
+   "license": "CC BY 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+   "author": "Samxli (talk)",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-12": {
+   "subject": "Five Pagoda Temple Hohhot",
+   "title": "Wuta Si (Five Pagoda Temple) - 19741281905.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Wuta_Si_(Five_Pagoda_Temple)_-_19741281905.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c6/Wuta_Si_%28Five_Pagoda_Temple%29_-_19741281905.jpg/1920px-Wuta_Si_%28Five_Pagoda_Temple%29_-_19741281905.jpg",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Gary Todd",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-31": {
+   "subject": "Xilitu Zhao Hohhot",
+   "title": "Xilitu Zhao (53725401566).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Xilitu_Zhao_(53725401566).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e4/Xilitu_Zhao_%2853725401566%29.jpg/1920px-Xilitu_Zhao_%2853725401566%29.jpg",
+   "license": "CC BY 2.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+   "author": "xiquinhosilva",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-30": {
+   "subject": "Xilitu Zhao Hohhot",
+   "title": "Xilitu Zhao (53725402871).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Xilitu_Zhao_(53725402871).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6b/Xilitu_Zhao_%2853725402871%29.jpg/1920px-Xilitu_Zhao_%2853725402871%29.jpg",
+   "license": "CC BY 2.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+   "author": "xiquinhosilva",
+   "provider": "Wikimedia Commons"
+  },
+  "beijing-13": {
+   "subject": "Great Wall Badaling",
+   "title": "Badaling China Great-Wall-of-China-02.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Badaling_China_Great-Wall-of-China-02.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5b/Badaling_China_Great-Wall-of-China-02.jpg/1920px-Badaling_China_Great-Wall-of-China-02.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "CEphoto, Uwe Aranas",
+   "provider": "Wikimedia Commons"
+  },
+  "beijing-15": {
+   "subject": "Temple of Heaven",
+   "title": "Hall of Prayer for Good Harvest.JPG",
+   "page": "https://commons.wikimedia.org/wiki/File:Hall_of_Prayer_for_Good_Harvest.JPG",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b7/Hall_of_Prayer_for_Good_Harvest.JPG/1920px-Hall_of_Prayer_for_Good_Harvest.JPG",
+   "license": "Public domain",
+   "licenseUrl": "",
+   "author": "Fong Chen",
+   "provider": "Wikimedia Commons"
+  },
+  "nhatrang-9": {
+   "subject": "Nha Trang bay",
+   "title": "Hòn Nội, Nha Trang Bay, Vietnam.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:H%C3%B2n_N%E1%BB%99i,_Nha_Trang_Bay,_Vietnam.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/55/H%C3%B2n_N%E1%BB%99i%2C_Nha_Trang_Bay%2C_Vietnam.jpg/1920px-H%C3%B2n_N%E1%BB%99i%2C_Nha_Trang_Bay%2C_Vietnam.jpg",
+   "license": "Public domain",
+   "licenseUrl": "",
+   "author": "Minh Duc Ly",
+   "provider": "Wikimedia Commons"
+  },
+  "nhatrang-27": {
+   "subject": "Hon Tam island",
+   "title": "Khu nghỉ dưỡng trên đảo Hòn Tằm.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Khu_ngh%E1%BB%89_d%C6%B0%E1%BB%A1ng_tr%C3%AAn_%C4%91%E1%BA%A3o_H%C3%B2n_T%E1%BA%B1m.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/68/Khu_ngh%E1%BB%89_d%C6%B0%E1%BB%A1ng_tr%C3%AAn_%C4%91%E1%BA%A3o_H%C3%B2n_T%E1%BA%B1m.jpg/1920px-Khu_ngh%E1%BB%89_d%C6%B0%E1%BB%A1ng_tr%C3%AAn_%C4%91%E1%BA%A3o_H%C3%B2n_T%E1%BA%B1m.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Phanmin",
+   "provider": "Wikimedia Commons"
+  },
+  "nhatrang-15": {
+   "subject": "Po Nagar",
+   "title": "Tháp Bà PONAGAR - panoramio.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Th%C3%A1p_B%C3%A0_PONAGAR_-_panoramio.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/12/Th%C3%A1p_B%C3%A0_PONAGAR_-_panoramio.jpg/1920px-Th%C3%A1p_B%C3%A0_PONAGAR_-_panoramio.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "Makarenko Sasha",
+   "provider": "Wikimedia Commons"
+  },
+  "pattaya-11": {
+   "subject": "Pattaya beach",
+   "title": "Pattaya Beach, Pattaya Bay, Thailand.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Pattaya_Beach,_Pattaya_Bay,_Thailand.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/90/Pattaya_Beach%2C_Pattaya_Bay%2C_Thailand.jpg/1920px-Pattaya_Beach%2C_Pattaya_Bay%2C_Thailand.jpg",
+   "license": "CC BY 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/4.0",
+   "author": "Vyacheslav Argenberg",
+   "provider": "Wikimedia Commons"
+  },
+  "pattaya-22": {
+   "subject": "Pattaya bay night",
+   "title": "DFC 4634 Pattaya skyline glowing at night - city lights reflecting on the bay with trees and parks in the foreground.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:DFC_4634_Pattaya_skyline_glowing_at_night_-_city_lights_reflecting_on_the_bay_with_trees_and_parks_in_the_foreground.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a0/DFC_4634_Pattaya_skyline_glowing_at_night_-_city_lights_reflecting_on_the_bay_with_trees_and_parks_in_the_foreground.jpg/1920px-DFC_4634_Pattaya_skyline_glowing_at_night_-_city_lights_reflecting_on_the_bay_with_trees_and_parks_in_the_foreground.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "PattayaPatrol",
+   "provider": "Wikimedia Commons"
+  },
+  "pattaya-20": {
+   "subject": "Ko Lan Pattaya",
+   "title": "KOH LAN ISLAND THAILAND FEB2013 (8504318382).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:KOH_LAN_ISLAND_THAILAND_FEB2013_(8504318382).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a6/KOH_LAN_ISLAND_THAILAND_FEB2013_%288504318382%29.jpg/1920px-KOH_LAN_ISLAND_THAILAND_FEB2013_%288504318382%29.jpg",
+   "license": "CC BY-SA 2.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/2.0",
+   "author": "calflier001",
+   "provider": "Wikimedia Commons"
+  },
+  "antalya-1": {
+   "subject": "Kaleiçi Antalya harbour",
+   "title": "Antalya kaleiçi 2.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Antalya_kalei%C3%A7i_2.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/75/Antalya_kalei%C3%A7i_2.jpg/1920px-Antalya_kalei%C3%A7i_2.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "REHBER0770",
+   "provider": "Wikimedia Commons"
+  },
+  "antalya-11": {
+   "subject": "Hadrian's Gate Antalya",
+   "title": "2023-01-17 Hadrian's Gate in Antalya 2.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:2023-01-17_Hadrian%27s_Gate_in_Antalya_2.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/79/2023-01-17_Hadrian%27s_Gate_in_Antalya_2.jpg/1920px-2023-01-17_Hadrian%27s_Gate_in_Antalya_2.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Maksym Kozlenko",
+   "provider": "Wikimedia Commons"
+  },
+  "antalya-29": {
+   "subject": "Pamukkale travertine",
+   "title": "Pamukkale 01.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Pamukkale_01.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9f/Pamukkale_01.jpg/1920px-Pamukkale_01.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "Bernard Gagnon",
+   "provider": "Wikimedia Commons"
+  },
+  "antalya-45": {
+   "subject": "Hierapolis",
+   "title": "Basilica Baths, Hierapolis 02.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Basilica_Baths,_Hierapolis_02.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c7/Basilica_Baths%2C_Hierapolis_02.jpg/1920px-Basilica_Baths%2C_Hierapolis_02.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Bernard Gagnon",
+   "provider": "Wikimedia Commons"
+  },
+  "shanghai-22": {
+   "subject": "Lujiazui night",
+   "title": "Lujiazui from the Bund in night 20250503.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Lujiazui_from_the_Bund_in_night_20250503.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2f/Lujiazui_from_the_Bund_in_night_20250503.jpg/1920px-Lujiazui_from_the_Bund_in_night_20250503.jpg",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Suicasmo",
+   "provider": "Wikimedia Commons"
+  },
+  "shanghai-8": {
+   "subject": "Yu Garden Shanghai",
+   "title": "Shanghai - Yu Garden - 0035.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Shanghai_-_Yu_Garden_-_0035.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/45/Shanghai_-_Yu_Garden_-_0035.jpg/1920px-Shanghai_-_Yu_Garden_-_0035.jpg",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+   "author": "Stefan Fussan",
+   "provider": "Wikimedia Commons"
+  },
+  "shanghai-1": {
+   "subject": "The Bund night",
+   "title": "Pudong Shanghai November 2017 HDR panorama.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Pudong_Shanghai_November_2017_HDR_panorama.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/32/Pudong_Shanghai_November_2017_HDR_panorama.jpg/1920px-Pudong_Shanghai_November_2017_HDR_panorama.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "King of Hearts",
+   "provider": "Wikimedia Commons"
+  },
+  "haikou-13": {
+   "subject": "Haikou Century Bridge",
+   "title": "Haikou Century Bridge from southwest shore 01.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Haikou_Century_Bridge_from_southwest_shore_01.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/24/Haikou_Century_Bridge_from_southwest_shore_01.jpg/1920px-Haikou_Century_Bridge_from_southwest_shore_01.jpg",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Anna Frodesiak",
+   "provider": "Wikimedia Commons"
+  },
+  "sanya-37": {
+   "subject": "Sanya Bay sunset",
+   "title": "三亞灣日落4.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:%E4%B8%89%E4%BA%9E%E7%81%A3%E6%97%A5%E8%90%BD4.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2f/%E4%B8%89%E4%BA%9E%E7%81%A3%E6%97%A5%E8%90%BD4.jpg/1920px-%E4%B8%89%E4%BA%9E%E7%81%A3%E6%97%A5%E8%90%BD4.jpg",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Kitabc12345",
+   "provider": "Wikimedia Commons"
+  },
+  "sanya-22": {
+   "subject": "Tianya Haijiao",
+   "title": "Beach of Tianya-Haijiao near Tianya Rock (20230325134441).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Beach_of_Tianya-Haijiao_near_Tianya_Rock_(20230325134441).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6e/Beach_of_Tianya-Haijiao_near_Tianya_Rock_%2820230325134441%29.jpg/1920px-Beach_of_Tianya-Haijiao_near_Tianya_Rock_%2820230325134441%29.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "N509FZ",
+   "provider": "Wikimedia Commons"
+  },
+  "haikou-19": {
+   "subject": "Holiday Beach Haikou",
+   "title": "Holiday Beach 01.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Holiday_Beach_01.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f4/Holiday_Beach_01.jpg/1920px-Holiday_Beach_01.jpg",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Anna Frodesiak",
+   "provider": "Wikimedia Commons"
+  },
+  "sanya-15": {
+   "subject": "Wuzhizhou Island",
+   "title": "Wuzhizhou Island - 01.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Wuzhizhou_Island_-_01.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/19/Wuzhizhou_Island_-_01.jpg/1920px-Wuzhizhou_Island_-_01.jpg",
+   "license": "CC0",
+   "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "author": "Lovelanlan",
+   "provider": "Wikimedia Commons"
+  },
+  "sanya-1": {
+   "subject": "Yalong Bay",
+   "title": "三亚太阳湾公路旁海滩 20260115.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:%E4%B8%89%E4%BA%9A%E5%A4%AA%E9%98%B3%E6%B9%BE%E5%85%AC%E8%B7%AF%E6%97%81%E6%B5%B7%E6%BB%A9_20260115.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d3/%E4%B8%89%E4%BA%9A%E5%A4%AA%E9%98%B3%E6%B9%BE%E5%85%AC%E8%B7%AF%E6%97%81%E6%B5%B7%E6%BB%A9_20260115.jpg/1920px-%E4%B8%89%E4%BA%9A%E5%A4%AA%E9%98%B3%E6%B9%BE%E5%85%AC%E8%B7%AF%E6%97%81%E6%B5%B7%E6%BB%A9_20260115.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Steven Sun",
+   "provider": "Wikimedia Commons"
+  },
+  "sanya-23": {
+   "subject": "Tianya Haijiao",
+   "title": "Nantian Yizhu Rock at Tianya-Haijiao (20230325135141).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Nantian_Yizhu_Rock_at_Tianya-Haijiao_(20230325135141).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/cc/Nantian_Yizhu_Rock_at_Tianya-Haijiao_%2820230325135141%29.jpg/1920px-Nantian_Yizhu_Rock_at_Tianya-Haijiao_%2820230325135141%29.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "N509FZ",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-29": {
+   "subject": "Xilitu Zhao Hohhot",
+   "title": "Xilitu Zhao (53725404201).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Xilitu_Zhao_(53725404201).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/80/Xilitu_Zhao_%2853725404201%29.jpg/1920px-Xilitu_Zhao_%2853725404201%29.jpg",
+   "license": "CC BY 2.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+   "author": "xiquinhosilva",
+   "provider": "Wikimedia Commons"
+  },
+  "haikou-23": {
+   "subject": "Haikou",
+   "title": "Altstadt von Haikou (Hainan).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Altstadt_von_Haikou_(Hainan).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3e/Altstadt_von_Haikou_%28Hainan%29.jpg/1920px-Altstadt_von_Haikou_%28Hainan%29.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Yolanda Yao",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-2": {
+   "subject": "Dazhao Temple Hohhot",
+   "title": "Eight pagodas, Dazhao Temple 20230730.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Eight_pagodas,_Dazhao_Temple_20230730.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/87/Eight_pagodas%2C_Dazhao_Temple_20230730.jpg/1920px-Eight_pagodas%2C_Dazhao_Temple_20230730.jpg",
+   "license": "CC BY 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/4.0",
+   "author": "Huangdan2060",
+   "provider": "Wikimedia Commons"
+  },
+  "chongqing-6": {
+   "subject": "Chongqing skyline night",
+   "title": "Chongqing Skyline At Night.png",
+   "page": "https://commons.wikimedia.org/wiki/File:Chongqing_Skyline_At_Night.png",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f5/Chongqing_Skyline_At_Night.png/1920px-Chongqing_Skyline_At_Night.png",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "Maple Doctor",
+   "provider": "Wikimedia Commons"
+  },
+  "chongqing-5": {
+   "subject": "Hongyadong night",
+   "title": "重庆洪崖洞.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:%E9%87%8D%E5%BA%86%E6%B4%AA%E5%B4%96%E6%B4%9E.jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/ce/%E9%87%8D%E5%BA%86%E6%B4%AA%E5%B4%96%E6%B4%9E.jpg/1920px-%E9%87%8D%E5%BA%86%E6%B4%AA%E5%B4%96%E6%B4%9E.jpg",
+   "license": "CC BY-SA 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+   "author": "GeoffLeng",
+   "provider": "Wikimedia Commons"
+  },
+  "chongqing-29": {
+   "subject": "Jiefangbei",
+   "title": "Chongqing Jiefangbei CBD.jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Chongqing_Jiefangbei_CBD.jpg",
+   "url": "https://upload.wikimedia.org/wikipedia/commons/e/ee/Chongqing_Jiefangbei_CBD.jpg",
+   "license": "CC BY-SA 2.5",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/2.5",
+   "author": "Baycrest",
+   "provider": "Wikimedia Commons"
+  },
+  "hohhot-35": {
+   "subject": "Xilitu Zhao Hohhot",
+   "title": "Xilitu Zhao (53725845195).jpg",
+   "page": "https://commons.wikimedia.org/wiki/File:Xilitu_Zhao_(53725845195).jpg",
+   "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/57/Xilitu_Zhao_%2853725845195%29.jpg/1920px-Xilitu_Zhao_%2853725845195%29.jpg",
+   "license": "CC BY 2.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+   "author": "xiquinhosilva",
+   "provider": "Wikimedia Commons"
+  }
+ },
+ "trips": [
+  {
+   "n": 1,
+   "title": "БАЛИ АРЛЫН АЯЛАЛ",
+   "sourceTripId": "trip-poster-bali-shenzhen-guangzhou-2026-2027",
+   "posterId": "poster-bali-shenzhen-guangzhou-2026-2027",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793427456/uudam-travel-trips/brbvla8emyys5sn8qqkw.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793427454/uudam-travel-trips/yebcaarmupdeu8zhxniz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793427455/uudam-travel-trips/bonijkgbc8kbgikalvsz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793427455/uudam-travel-trips/yy4vlvlxev8b42nt4l3o.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793427457/uudam-travel-trips/ylbuk7xfptotczfrizjs.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781047/uudam-travel-trips/l4rfd68jheek0ieoahou.jpg"
+   ],
+   "days": {
+    "3": "src:bali-30",
+    "4": "src:bali-7"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793427454/uudam-travel-trips/yebcaarmupdeu8zhxniz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793427455/uudam-travel-trips/bonijkgbc8kbgikalvsz.jpg"
+   ]
+  },
+  {
+   "n": 2,
+   "title": "БАНГКОК – ПАТТАЯ хөтөлбөртэй илүү боломжын үнэтэй аялал МИАТ шууд нислэг",
+   "sourceTripId": "trip-563d0f85-7044-4e41-807a-aa46ea6d99b2",
+   "posterId": "poster-for-trip-563d0f85-7044-4e41-807a-aa46ea6d99b2",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390165/uudam-travel-trips/v6nebrcvze4kiilvppgn.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390168/uudam-travel-trips/z4vjkdlu2szswsxr9oov.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390164/uudam-travel-trips/kmenajxmnqcbyyyzjr7z.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390165/uudam-travel-trips/yylkmzsf4o5nzuysfxwt.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390168/uudam-travel-trips/ui0eke85zr7m1fkh7oak.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390168/uudam-travel-trips/nswr6uav4qdti0jjadtm.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390170/uudam-travel-trips/tmrpcucmtqg3kswhbfey.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390170/uudam-travel-trips/vvpjf37wyadvxeirydin.jpg"
+   ],
+   "cover": "src:bangkok-2",
+   "days": {
+    "1": "src:bangkok-2",
+    "2": "src:bangkok-8",
+    "3": "src:pattaya-31",
+    "6": "src:pattaya-1",
+    "7": "src:bangkok-6",
+    "8": "src:bangkok-37"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390165/uudam-travel-trips/v6nebrcvze4kiilvppgn.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390168/uudam-travel-trips/z4vjkdlu2szswsxr9oov.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390164/uudam-travel-trips/kmenajxmnqcbyyyzjr7z.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390168/uudam-travel-trips/nswr6uav4qdti0jjadtm.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390170/uudam-travel-trips/tmrpcucmtqg3kswhbfey.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390170/uudam-travel-trips/vvpjf37wyadvxeirydin.jpg"
+   ]
+  },
+  {
+   "n": 3,
+   "title": "Бээжин - Жинин – Жанжакоу - Эрээн – 4 ХОТЫН АЯЛАЛ",
+   "sourceTripId": "trip-a5eb3b21-e809-4743-9eb9-21c4d5170f2d",
+   "posterId": "a5eb3b21-e809-4743-9eb9-21c4d5170f2d",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033488/uudam-travel-trips/twscrv2vxb1xmaodlpfr.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791534301/uudam/trips/ekf30ujpxv7mx4ca7bbu.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791534288/uudam/trips/pbxxkw0hzaugxwuavzvy.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791534301/uudam/trips/vxqra14ypkzi7yrtqvvi.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962159/uudam-connected-trips/3a497a05ffc5b8086876803aaa26016eb22849a932a1a609de982eca82653554.jpg"
+   ],
+   "days": {
+    "6": "src:tianjin-34",
+    "7": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962159/uudam-connected-trips/3a497a05ffc5b8086876803aaa26016eb22849a932a1a609de982eca82653554.jpg"
+   ],
+   "add": [
+    "src:beijing-1"
+   ]
+  },
+  {
+   "n": 4,
+   "title": "Бээжин - Цанжоу - Тяньжин - Жанжакоу аялал",
+   "sourceTripId": "trip-beijing-cangzhou-tianjin-zhangjiakou-2026",
+   "posterId": "poster-for-trip-beijing-cangzhou-tianjin-zhangjiakou-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034386/uudam-travel-trips/o6blxucoc0vmsgx5r6ps.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962267/uudam-connected-trips/a364ebb7927bd52f885ad07af9e61637f02019eec9af5b983b187b20f93db89c.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791534301/uudam/trips/ekf30ujpxv7mx4ca7bbu.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962329/uudam-connected-trips/f086b7760d3b69247ff6fbb022fdfe768f217e0701e0d4a589f1e8286a31970c.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962331/uudam-connected-trips/6922592e61ff2ddec39258e578b9c9ecebce7702a19924239e6abda3618024f9.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg"
+   ],
+   "cover": "src:tianjin-6",
+   "days": {
+    "1": "src:tianjin-6",
+    "5": "src:tianjin-9",
+    "6": "src:tianjin-34",
+    "7": "src:tianjin-6"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034386/uudam-travel-trips/o6blxucoc0vmsgx5r6ps.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962331/uudam-connected-trips/6922592e61ff2ddec39258e578b9c9ecebce7702a19924239e6abda3618024f9.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg"
+   ],
+   "add": [
+    "src:beijing-1"
+   ]
+  },
+  {
+   "n": 6,
+   "title": "ВЬЕТНАМ — ДАНАНГ АЯЛАЛ",
+   "sourceTripId": "trip-poster-gazarchin-vietnam-danang-2026-2027",
+   "posterId": "poster-gazarchin-vietnam-danang-2026-2027",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021230/uudam-travel-trips/ykttaylemlvzy2fwh4fb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021237/uudam-travel-trips/xqnfofovltne69ith4ys.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021247/uudam-travel-trips/x8b58hcwqv1vuvpubdlm.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021254/uudam-travel-trips/pasukqcoy5agdskbzecz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021329/uudam-travel-trips/qa0hiszvyzwudwzrixq4.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021290/uudam-travel-trips/d6u59cvhlfllilufwqq5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021257/uudam-travel-trips/xmly0jw8rmykrlnk72a5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021261/uudam-travel-trips/n6tx1wgr0cihl8xae77h.jpg"
+   ],
+   "cover": "src:danang-2",
+   "days": {
+    "6": "src:danang-23",
+    "7": "src:danang-31",
+    "8": "src:danang-13"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021230/uudam-travel-trips/ykttaylemlvzy2fwh4fb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021257/uudam-travel-trips/xmly0jw8rmykrlnk72a5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791021261/uudam-travel-trips/n6tx1wgr0cihl8xae77h.jpg"
+   ]
+  },
+  {
+   "n": 8,
+   "title": "ЖИНИН – УТАЙ – ИНЧУАН – ГҮМБЭН – ИНЧУАН – ОРДОС",
+   "sourceTripId": "trip-poster-partner-utai-kumbum-2026",
+   "posterId": "poster-partner-utai-kumbum-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972722/uudam-travel-trips/partner-kumbum.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-whitestupa.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792217466/uudam-connected-trips/152c148670f3b5d06a81ba4748c97ea97f03d9bbfe6052f987754401bced9461.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972723/uudam-travel-trips/partner-mausoleum.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792217468/uudam-connected-trips/039054070797cfda3cea57d2d3c223123f87544db60773dc256c90822fa1b79b.jpg"
+   ],
+   "days": {
+    "2": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "3": "src:wutai-16",
+    "10": "src:innermongolia-12"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792217468/uudam-connected-trips/039054070797cfda3cea57d2d3c223123f87544db60773dc256c90822fa1b79b.jpg"
+   ]
+  },
+  {
+   "n": 9,
+   "title": "ЖИНИН – УТАЙ – ХӨХ ХОТ ШИНЖИЛГЭЭТЭЙ АЯЛАЛ",
+   "sourceTripId": "trip-poster-partner-utai-hohhot-checkup-2026",
+   "posterId": "poster-partner-utai-hohhot-checkup-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972718/uudam-travel-trips/partner-pusading.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-whitestupa.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972721/uudam-travel-trips/partner-hohhotstreet.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781093/uudam-travel-trips/cvqflcwggv04liqqus95.jpg"
+   ],
+   "days": {
+    "2": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "3": "src:wutai-16"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg"
+   ]
+  },
+  {
+   "n": 10,
+   "title": "ЖИНИН – ХӨХ ХОТ - ОРДОС ХОТЫН ЭРҮҮЛ МЭНДИЙН ШИНЖИЛГЭЭТЭЙ АЯЛАЛ",
+   "sourceTripId": "trip-b658be86-52f7-4247-ad0f-65a92e9e4eb2",
+   "posterId": "b658be86-52f7-4247-ad0f-65a92e9e4eb2",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411229/uudam-connected-trips/d2e22346d8f2eb09d144d885cc67bea5e4e475acd03631434175ece4ba501041.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033654/uudam-travel-trips/sctmqoogsvij6jbxwabc.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033656/uudam-travel-trips/l8s5vjshslehey7r2n9k.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411229/uudam-connected-trips/f6833751ca425f31cc91098f7823174313fd1245f9dffa9378fe10d245152803.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033659/uudam-travel-trips/iuira64ofhzrh9agj14g.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033662/uudam-travel-trips/ohs6rf5sdwvrbvuoghza.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033670/uudam-travel-trips/slfbfuholaaaw1s37t3m.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033672/uudam-travel-trips/kti6avtdqducwxme1prd.jpg"
+   ],
+   "cover": "src:innermongolia-17",
+   "days": {
+    "1": null,
+    "2": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "4": "src:innermongolia-17",
+    "5": "src:hohhot-34",
+    "6": "src:hohhot-13"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033659/uudam-travel-trips/iuira64ofhzrh9agj14g.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033670/uudam-travel-trips/slfbfuholaaaw1s37t3m.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033672/uudam-travel-trips/kti6avtdqducwxme1prd.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411229/uudam-connected-trips/d2e22346d8f2eb09d144d885cc67bea5e4e475acd03631434175ece4ba501041.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033654/uudam-travel-trips/sctmqoogsvij6jbxwabc.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033656/uudam-travel-trips/l8s5vjshslehey7r2n9k.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411229/uudam-connected-trips/f6833751ca425f31cc91098f7823174313fd1245f9dffa9378fe10d245152803.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg"
+   ],
+   "add": [
+    "src:innermongolia-14"
+   ]
+  },
+  {
+   "n": 11,
+   "title": "ЖИНИН-МИНИ АВАТАР-ХӨХ ХОТЫН АЯЛАЛ",
+   "sourceTripId": "trip-e57f3ce7-fd2f-4c49-b372-f4ac0ecf9ded",
+   "posterId": "e57f3ce7-fd2f-4c49-b372-f4ac0ecf9ded",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034454/uudam-travel-trips/rbmuy9f4dgdacsz7sbjb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411229/uudam-connected-trips/d2e22346d8f2eb09d144d885cc67bea5e4e475acd03631434175ece4ba501041.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962159/uudam-connected-trips/3a497a05ffc5b8086876803aaa26016eb22849a932a1a609de982eca82653554.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781407/uudam-travel-trips/midql5hujv2hwemusmlg.jpg"
+   ],
+   "cover": "src:hohhot-31",
+   "days": {
+    "1": null,
+    "4": "src:hohhot-12",
+    "5": "src:hohhot-34",
+    "6": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034454/uudam-travel-trips/rbmuy9f4dgdacsz7sbjb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411229/uudam-connected-trips/d2e22346d8f2eb09d144d885cc67bea5e4e475acd03631434175ece4ba501041.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962159/uudam-connected-trips/3a497a05ffc5b8086876803aaa26016eb22849a932a1a609de982eca82653554.jpg"
+   ],
+   "add": [
+    "src:hohhot-30"
+   ]
+  },
+  {
+   "n": 12,
+   "title": "ЖИНИНЬ • БЭЭЖИН",
+   "sourceTripId": "trip-poster-8eb72174-3c8a-496f-9a10-15add9bbced9",
+   "posterId": "poster-8eb72174-3c8a-496f-9a10-15add9bbced9",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955070/uudam-travel-trips/jinin-beejin-greatwall.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962267/uudam-connected-trips/a364ebb7927bd52f885ad07af9e61637f02019eec9af5b983b187b20f93db89c.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791534301/uudam/trips/ekf30ujpxv7mx4ca7bbu.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955073/uudam-travel-trips/jinin-beejin-aquarium.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955074/uudam-travel-trips/jinin-beejin-dinosaur.jpg"
+   ],
+   "cover": "src:beijing-1",
+   "days": {
+    "1": null,
+    "6": "src:beijing-13",
+    "7": null,
+    "8": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955070/uudam-travel-trips/jinin-beejin-greatwall.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955074/uudam-travel-trips/jinin-beejin-dinosaur.jpg"
+   ],
+   "add": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962267/uudam-connected-trips/a364ebb7927bd52f885ad07af9e61637f02019eec9af5b983b187b20f93db89c.jpg",
+    "src:beijing-15"
+   ]
+  },
+  {
+   "n": 14,
+   "title": "НА ТРАНГ хотын хөтөлбөртэй аялал",
+   "sourceTripId": "trip-c41da162-b1b9-45b8-9cdf-e084d8876970",
+   "posterId": "poster-for-trip-c41da162-b1b9-45b8-9cdf-e084d8876970",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390404/uudam-travel-trips/wn1hl0hqvt1zlcmtrqpi.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390404/uudam-travel-trips/xmyq26xqatpdp9ikp9v9.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390415/uudam-travel-trips/dowmnowab2auogrybdsp.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390415/uudam-travel-trips/jlv7rbrhuq5aewb16wun.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390404/uudam-travel-trips/jeepcrvvtk8eax8lteh7.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390415/uudam-travel-trips/z3e5fxx5jiqzjpmtbxij.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390423/uudam-travel-trips/qel2tlgmksrdvl17elzl.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390423/uudam-travel-trips/bdqulqz79itbcp94txca.jpg"
+   ],
+   "days": {
+    "7": "src:nhatrang-9"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390423/uudam-travel-trips/qel2tlgmksrdvl17elzl.jpg"
+   ]
+  },
+  {
+   "n": 15,
+   "title": "НА ТРАНГ хотын чөлөөт аялал МИАТ чартер нислэг",
+   "sourceTripId": "trip-ca9287a4-a980-4246-b5b5-16368ba7417a",
+   "posterId": "poster-for-trip-ca9287a4-a980-4246-b5b5-16368ba7417a",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390483/uudam-travel-trips/vbse7oegigyfs0nepxps.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390483/uudam-travel-trips/zwbctpq88dvsl1stj2rk.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390483/uudam-travel-trips/ijhqw7pjojfjzha9hliv.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390492/uudam-travel-trips/ibcefcrkloswkq2eglvk.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390492/uudam-travel-trips/bwh8a0c07zcgnixdcrrw.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390493/uudam-travel-trips/uv0xjztmgjvehrsz96uw.jpg"
+   ],
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390492/uudam-travel-trips/ibcefcrkloswkq2eglvk.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390493/uudam-travel-trips/uv0xjztmgjvehrsz96uw.jpg"
+   ],
+   "add": [
+    "src:nhatrang-27",
+    "src:nhatrang-15"
+   ]
+  },
+  {
+   "n": 16,
+   "title": "Паттая – Бангкок хотуудын хөтөлбөртэй аялал",
+   "sourceTripId": "trip-b997ad2b-273f-4b86-8183-d27f2bfb6a88",
+   "posterId": "poster-for-trip-b997ad2b-273f-4b86-8183-d27f2bfb6a88",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390089/uudam-travel-trips/ymxtak3dztu1apvobidz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390089/uudam-travel-trips/kqdx8p3by2ouoaaw3tjh.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390092/uudam-travel-trips/x2kmxkhtanyjmtfc1axj.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390092/uudam-travel-trips/evudnppdeb72l97uaeu0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390088/uudam-travel-trips/rmiqrywhdhjngf7ab5wx.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390094/uudam-travel-trips/eanygwahdtpb0lcjv1k2.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390092/uudam-travel-trips/swdihrkosrxfmk0x3ons.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390094/uudam-travel-trips/vcf0szow78j8psjqivu5.jpg"
+   ],
+   "cover": "src:pattaya-1",
+   "days": {
+    "3": "src:pattaya-31",
+    "7": "src:pattaya-11",
+    "8": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390092/uudam-travel-trips/x2kmxkhtanyjmtfc1axj.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390092/uudam-travel-trips/swdihrkosrxfmk0x3ons.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794390094/uudam-travel-trips/vcf0szow78j8psjqivu5.jpg"
+   ]
+  },
+  {
+   "n": 17,
+   "title": "ТАЙЛАНД – Улаанбаатар - Паттаяа нислэг",
+   "sourceTripId": "trip-poster-2e475b2f-3ef9-4ea9-9c7d-94bce967068f",
+   "posterId": "poster-2e475b2f-3ef9-4ea9-9c7d-94bce967068f",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753928/uudam-connected-trips/68fb34f84cde3c41881b4eb1c53be56cfb7a5ffc05f9cf1833acf962d913e673.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753930/uudam-connected-trips/6ec8e94005ba000df27f682662675ee7733df3fd41a262ac056215c598a83587.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753930/uudam-connected-trips/1f31abc780a432af24429e7c1e0c7874f6eb8e70c6d6ae3895d8cb6c4e87edd2.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753930/uudam-connected-trips/66d0675d0a8a10ffd19a4cae6a0afe7b37bd9338ea99209575bc527acdc6bb74.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753931/uudam-connected-trips/1751d67893df7c5f22a790ba6d0dc84463d20107f678b28205de229a64a280a8.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753931/uudam-connected-trips/a06e688a86d8b193bb9d50ed09c36101cb01d07835cd2e3b190adf1d87ba68de.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753932/uudam-connected-trips/68124490305cc49a7cbe6d4632ec4ce4c1462fa0b30d2815dd5c4fd10f99e975.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753932/uudam-connected-trips/63863a70ec97e5035e8ba94120ed9f2367cd9096fd936ad0119cb6d6b270dc0b.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753933/uudam-connected-trips/36263e6485c7f6b4dd7cc340e322b8f6c5bc5486aecefdd61604fa67ff1140bd.jpg"
+   ],
+   "days": {
+    "8": "src:pattaya-22"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753933/uudam-connected-trips/36263e6485c7f6b4dd7cc340e322b8f6c5bc5486aecefdd61604fa67ff1140bd.jpg"
+   ]
+  },
+  {
+   "n": 19,
+   "title": "ТАЙЛАНДЫН АЯЛАЛ — БАНГКОК, ПАТТАЯА",
+   "sourceTripId": "trip-poster-gazarchin-thailand-bangkok-pattaya-2026-2027",
+   "posterId": "poster-gazarchin-thailand-bangkok-pattaya-2026-2027",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791020308/uudam-travel-trips/aixeakrtzecl1xke9wrc.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411231/uudam-connected-trips/85d7bf609fba6ee0c27896050c0d8ded3ce07ebbd12ea75e4b8e5c8a6ed14efb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411231/uudam-connected-trips/e05e5ad8264f3f73378e2d29b5e852dbd1454e43d18aa6666f90bffcb1c1a19c.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791020414/uudam-travel-trips/aineunyaxncuu1biak5s.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411232/uudam-connected-trips/cfd2a5ee62a98f72202c6c20504448183362222393685106e516125b2a2cb5a0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790753932/uudam-connected-trips/63863a70ec97e5035e8ba94120ed9f2367cd9096fd936ad0119cb6d6b270dc0b.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791020324/uudam-travel-trips/odrwwtapice0m1ko6sed.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791020321/uudam-travel-trips/r7eet0i5i1pa0emuxp6r.jpg"
+   ],
+   "days": {
+    "2": "src:pattaya-20",
+    "6": "src:bangkok-37"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411231/uudam-connected-trips/e05e5ad8264f3f73378e2d29b5e852dbd1454e43d18aa6666f90bffcb1c1a19c.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791020324/uudam-travel-trips/odrwwtapice0m1ko6sed.jpg"
+   ]
+  },
+  {
+   "n": 20,
+   "title": "Турк - Анталяа-Памуккале аялал",
+   "sourceTripId": "trip-poster-cdc2a26e-9a24-4f1c-aa3a-f4f597f6e5de",
+   "posterId": "poster-cdc2a26e-9a24-4f1c-aa3a-f4f597f6e5de",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789721513/uudam-connected-trips/ac7ccee08dbb00884142b82739c5181f72a345d99c2584568497c26d299cf5ac.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789721512/uudam-connected-trips/495bfb56229e8e3591bb3498f6ff9728b0ce5d62bf18e0fd3e46acecd584869c.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411234/uudam-connected-trips/8af541b2a80120271c27d9cf897398922f31530833b471165cefd2c0d1cb66d0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789721512/uudam-connected-trips/6ae72a94a77f9ac6eae7cd7b8ff6c728773c026e943572ba96ce6646e5acc5ce.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789721512/uudam-connected-trips/07eef5fe37d496b8c59a284433a605bd6ca02c2b2ce83c031c0452d2838eca26.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411235/uudam-connected-trips/5bc41e3d64861e5789ee48e336b10105541d4faa161d60b59ff3953e25fc9824.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411235/uudam-connected-trips/069f48473234743536a2fb3301f8a469a7dfd9e330cadfb05e77b8d285292f28.jpg"
+   ],
+   "days": {
+    "1": "src:antalya-1",
+    "4": "src:antalya-11",
+    "5": "src:antalya-29",
+    "7": "src:antalya-45"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789721512/uudam-connected-trips/495bfb56229e8e3591bb3498f6ff9728b0ce5d62bf18e0fd3e46acecd584869c.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789721512/uudam-connected-trips/07eef5fe37d496b8c59a284433a605bd6ca02c2b2ce83c031c0452d2838eca26.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411235/uudam-connected-trips/5bc41e3d64861e5789ee48e336b10105541d4faa161d60b59ff3953e25fc9824.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411235/uudam-connected-trips/069f48473234743536a2fb3301f8a469a7dfd9e330cadfb05e77b8d285292f28.jpg"
+   ]
+  },
+  {
+   "n": 21,
+   "title": "ТЭНГЭРИЙН ХААЛГАНЫ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ ( Жанжиажэ - Аватар )",
+   "sourceTripId": "trip-8388d0a8-cc2c-4333-b5da-0195f4ca0062",
+   "posterId": "8388d0a8-cc2c-4333-b5da-0195f4ca0062",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033619/uudam-travel-trips/a8cypu91crqtdpbd3oo2.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033624/uudam-travel-trips/p6ntdvv0xuhirzm6jsv7.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411233/uudam-connected-trips/6259d54704e8154a3ab092e050881c52dbce63d11e90ae687dfadb7c2248764a.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033631/uudam-travel-trips/i9odbjujn9k5zqfwqhap.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033635/uudam-travel-trips/vzuukx6gk8veotnptx6q.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033628/uudam-travel-trips/uxrgxdnyw6fexk2o7f1q.jpg"
+   ],
+   "days": {
+    "2": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg"
+   ]
+  },
+  {
+   "n": 24,
+   "title": "УБ-Шанхай хотын 12-р сарын аяллын хөтөлбөр",
+   "sourceTripId": "trip-9e28439c-2039-455f-834f-8f06116fc17a",
+   "posterId": "9e28439c-2039-455f-834f-8f06116fc17a",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033823/uudam-travel-trips/eiuqedbetmu503q4nixg.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411236/uudam-connected-trips/c8f38541cba4aa038d8795aa245e9cb13146f2a8169a29de5cee7afba783450e.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033827/uudam-travel-trips/azaaiwqlciafs8takkqx.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033829/uudam-travel-trips/hekmujcdxvws7cg7cbvy.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033831/uudam-travel-trips/qw7lub5c0dxvuwqstukw.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033825/uudam-travel-trips/y7iavycwqpxdxasatoru.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033833/uudam-travel-trips/c2dmqeaiuhhz2fs30o7d.jpg"
+   ],
+   "cover": "src:shanghai-1",
+   "days": {
+    "3": "src:shanghai-22",
+    "5": "src:shanghai-8"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033827/uudam-travel-trips/azaaiwqlciafs8takkqx.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033831/uudam-travel-trips/qw7lub5c0dxvuwqstukw.jpg"
+   ]
+  },
+  {
+   "n": 27,
+   "title": "Хайнан - Эрээн - Улаан хад - Хайкоу нислэгтэй газар нислэг хосолсон аялал",
+   "sourceTripId": "trip-f00d0093-c478-4883-9a9d-e91f57f6996a",
+   "posterId": "poster-for-trip-f00d0093-c478-4883-9a9d-e91f57f6996a",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411363/uudam-connected-trips/b34748c60ab7b0a279cfee8ce5e88750c14d4d4fa9f882d9f1b7aeee9c843bae.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781209/uudam-travel-trips/siekwnkcrihktarjxu6s.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781214/uudam-travel-trips/f1ucchmpjiip8ysvjdkq.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781218/uudam-travel-trips/wioqicoighgydm8cnkcu.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781222/uudam-travel-trips/g0mhv2658nkutzeqppe3.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781395/uudam-travel-trips/eytreg4temo1l9pblagu.jpg"
+   ],
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781209/uudam-travel-trips/siekwnkcrihktarjxu6s.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781214/uudam-travel-trips/f1ucchmpjiip8ysvjdkq.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781218/uudam-travel-trips/wioqicoighgydm8cnkcu.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781222/uudam-travel-trips/g0mhv2658nkutzeqppe3.jpg"
+   ],
+   "add": [
+    "src:haikou-13",
+    "src:sanya-37",
+    "src:sanya-22",
+    "src:haikou-19"
+   ]
+  },
+  {
+   "n": 29,
+   "title": "ХАЙНАН – САНЬЯА АЯЛАЛ-Лхагва",
+   "sourceTripId": "trip-poster-5bf8e4a6-55cc-4074-bcbf-669527e2530c",
+   "posterId": "poster-5bf8e4a6-55cc-4074-bcbf-669527e2530c",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969549/uudam-connected-trips/958721c0d771dc7250865e32d6b673870a89d34f6220205acc0cacbdc2ecc751.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969550/uudam-connected-trips/90df668d4a62f43de531b6b7dd7ae81fe3dc50ebdf2f9ef13f53e5a900f049cf.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969550/uudam-connected-trips/994afaa5657c7f16fd23e909b5ede9f4ae3df73552af9f58c4f2bed2583cbc47.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969550/uudam-connected-trips/e5afb8519f9bde8d9e71d5d313d42f17ecb15e5e6e5c98259ac8e10bd05d0558.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969551/uudam-connected-trips/1ce57d5479a8781246b9bad66637c5b0f3d6236e64f301b387cb67b678bce314.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969551/uudam-connected-trips/e84eaad5768ea210b75f57afe810150d5825de922482ca13615d537086813c29.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411360/uudam-connected-trips/7fba6b06e4920d2ab53a8dd9979f4160815d404b154452b480b0ee4ae8524e56.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969551/uudam-connected-trips/70a5e8160b1b2124444cbaaafb808325b616accf98198ec6e590e9c5096a98ae.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969553/uudam-connected-trips/481983aeb7d69081c3e5953bfe5534d8239fee869fd9d5dd9ee01f0e5432c13f.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969553/uudam-connected-trips/8f51324f74a88f97a24c9962517d96a765fb6b17293399fc91755cff12b791dd.jpg"
+   ],
+   "days": {
+    "7": "src:sanya-22",
+    "9": "src:sanya-37"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969551/uudam-connected-trips/70a5e8160b1b2124444cbaaafb808325b616accf98198ec6e590e9c5096a98ae.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969553/uudam-connected-trips/8f51324f74a88f97a24c9962517d96a765fb6b17293399fc91755cff12b791dd.jpg"
+   ]
+  },
+  {
+   "n": 30,
+   "title": "ХАЙНАН – ХӨХ ХОТООС САНЬЯА НИСЛЭГТЭЙ - 1",
+   "sourceTripId": "trip-poster-partner-hainan-sanya-2026",
+   "posterId": "poster-partner-hainan-sanya-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791974926/uudam-travel-trips/partner-wuzhizhou.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791974927/uudam-travel-trips/partner-atlantis.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791974928/uudam-travel-trips/partner-yalong.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791974929/uudam-travel-trips/partner-dadonghai.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781175/uudam-travel-trips/iyrlyock171cbt0d6syt.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781180/uudam-travel-trips/vanba78clzyswbmi7rna.jpg"
+   ],
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781180/uudam-travel-trips/vanba78clzyswbmi7rna.jpg"
+   ],
+   "add": [
+    "src:sanya-15"
+   ]
+  },
+  {
+   "n": 32,
+   "title": "ХАЙНАН АРЛЫН АЯЛАЛ – УЛААНБААТАРААС ШУУД НИСЛЭГТЭЙ",
+   "sourceTripId": "trip-poster-hainan-ub-direct-flight-pdf-2026",
+   "posterId": "poster-hainan-ub-direct-flight-pdf-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791614490/uudam-travel-trips/vbs3ovgknc1jvlcaspkr.webp",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969549/uudam-connected-trips/958721c0d771dc7250865e32d6b673870a89d34f6220205acc0cacbdc2ecc751.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791974926/uudam-travel-trips/partner-wuzhizhou.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781158/uudam-travel-trips/ze0q5onehfb2aka2kchf.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781161/uudam-travel-trips/ebdxva31rzcmsabotopb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781164/uudam-travel-trips/tktkaut9n6qkzajrj9o0.jpg"
+   ],
+   "days": {
+    "2": "src:sanya-1"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781158/uudam-travel-trips/ze0q5onehfb2aka2kchf.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781161/uudam-travel-trips/ebdxva31rzcmsabotopb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781164/uudam-travel-trips/tktkaut9n6qkzajrj9o0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969549/uudam-connected-trips/958721c0d771dc7250865e32d6b673870a89d34f6220205acc0cacbdc2ecc751.jpg"
+   ],
+   "add": [
+    "src:sanya-22",
+    "src:sanya-37",
+    "src:sanya-23"
+   ]
+  },
+  {
+   "n": 33,
+   "title": "Хайнан-газар нислэг хосолсон - Хөх хотоос Санья нислэгтэй - 12 сарын 15, 20, 25",
+   "sourceTripId": "trip-poster-1e896106-9def-429e-9049-fd344e8c2d38",
+   "posterId": "poster-1e896106-9def-429e-9049-fd344e8c2d38",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/1a49a2eb1149f7f3a77c1ceb3b0aa2b589b22554bc7d44ddb2d66e12f27857d0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/dca8b72d0de638ee294b5c9f56192a771453e30aabac03cd90ee8f385aeb3594.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/5ada5bf2d698ca249c73e0084d147eb54919ecd3b1e0911677efd4352cff0e16.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/a0239c15ebbafc02b597992cc24e3d35b2aa2128b9ac070683085ff3a99dfbbe.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/68fe625f086aa86db3a0340441377a56c5ef1214f15c988676969f3b6b9776e3.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791969551/uudam-connected-trips/1ce57d5479a8781246b9bad66637c5b0f3d6236e64f301b387cb67b678bce314.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/9f0b294517a7f41debab504e5d686b544d15ad339658d9a6611d664e4526d741.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010870/uudam-connected-trips/99dcc684fe31147c9dc1c05a6d125564a66c6cc3349a5dec0f91d6313f2d532f.jpg"
+   ],
+   "days": {
+    "1": null,
+    "2": "src:hohhot-29",
+    "8": null,
+    "9": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/dca8b72d0de638ee294b5c9f56192a771453e30aabac03cd90ee8f385aeb3594.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010869/uudam-connected-trips/5ada5bf2d698ca249c73e0084d147eb54919ecd3b1e0911677efd4352cff0e16.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962153/uudam-connected-trips/012796d2c753c7dfe561ec15ee1f911878f8239d4564658c3ca7eca3f572cec5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793010870/uudam-connected-trips/99dcc684fe31147c9dc1c05a6d125564a66c6cc3349a5dec0f91d6313f2d532f.jpg"
+   ],
+   "add": [
+    "src:sanya-1"
+   ]
+  },
+  {
+   "n": 34,
+   "title": "хайнан-хайкоу нислэгтэй - Мягмар гариг",
+   "sourceTripId": "trip-0d22ee96-c95c-45e1-8b3d-1308f4bce696",
+   "posterId": "0d22ee96-c95c-45e1-8b3d-1308f4bce696",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034177/uudam-travel-trips/ftekrgtyhjoaqttp9upo.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411367/uudam-connected-trips/d6d3703e7faec7c87901ac463b1bb467fa88016aa2e4f273567612fcfb376129.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034182/uudam-travel-trips/wtkqiagaczfooxd6fm5z.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034184/uudam-travel-trips/xuswzf0jfhbms8gb65ud.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411360/uudam-connected-trips/7fba6b06e4920d2ab53a8dd9979f4160815d404b154452b480b0ee4ae8524e56.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034188/uudam-travel-trips/zbyostco9zlccewpv5dm.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034180/uudam-travel-trips/zg8al22dj9tvx8po5mzq.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034186/uudam-travel-trips/p8qx7omzsfsau0ljvyda.jpg"
+   ],
+   "cover": "src:sanya-1",
+   "days": {
+    "1": "src:haikou-13",
+    "4": "src:sanya-22",
+    "6": "src:sanya-37"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034180/uudam-travel-trips/zg8al22dj9tvx8po5mzq.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034186/uudam-travel-trips/p8qx7omzsfsau0ljvyda.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034177/uudam-travel-trips/ftekrgtyhjoaqttp9upo.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034184/uudam-travel-trips/xuswzf0jfhbms8gb65ud.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034188/uudam-travel-trips/zbyostco9zlccewpv5dm.jpg"
+   ],
+   "add": [
+    "src:haikou-23"
+   ]
+  },
+  {
+   "n": 35,
+   "title": "ХӨХ ХОТЫН БҮТЭН БИЕИЙН ШИНЖИЛГЭЭТЭЙ АЯЛАЛ",
+   "sourceTripId": "trip-poster-44e96af1-a3e4-4f5f-b27b-60ff270a4d56",
+   "posterId": "poster-44e96af1-a3e4-4f5f-b27b-60ff270a4d56",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920502/uudam-travel-trips/yjqekyjdzr3e2h6ik6s8.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920506/uudam-travel-trips/aarf5vcwqui6vuifkp5b.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920508/uudam-travel-trips/q73nnm25kikbkdmmyn1o.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920511/uudam-travel-trips/zqzyqc422zrten9m2xzp.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920514/uudam-travel-trips/f3ohnyfqr4ozudhe2ebj.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920518/uudam-travel-trips/gyqsq1g4vtvmrjja7qvq.jpg"
+   ],
+   "days": {
+    "1": null,
+    "2": "src:hohhot-29",
+    "7": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920506/uudam-travel-trips/aarf5vcwqui6vuifkp5b.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1790920508/uudam-travel-trips/q73nnm25kikbkdmmyn1o.jpg"
+   ],
+   "add": [
+    "src:hohhot-2"
+   ]
+  },
+  {
+   "n": 36,
+   "title": "Чунчин - Хөх хот - Чунчин - Улун 9 өдрийн аялал",
+   "sourceTripId": "trip-d4f0d3b0-c7f8-4048-aca3-3ba68dbd41a1",
+   "posterId": "poster-for-trip-d4f0d3b0-c7f8-4048-aca3-3ba68dbd41a1",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/b6nmh76ez4sl4m9vpzc3.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/eripscmm2lmrdajagxyc.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/ovirf4vvu3wqzrhreqar.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/chrsszguaehoeyzo4hxo.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/iweobqgporoz14ithgm8.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/ml5jzrgtgybstmaatsss.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/umbyxwypp3vwzkduxety.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/desybc7hvv0zochop5ql.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/xkibnubeeuqrjzjlqj0q.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/tnmehjksjl9fghm6y5bi.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/xtqb0r0ejjgve7fnrpo9.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/pbjfxqycveoc30spcp62.jpg"
+   ],
+   "cover": "src:chongqing-6",
+   "days": {
+    "1": null,
+    "2": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/pbjfxqycveoc30spcp62.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/b6nmh76ez4sl4m9vpzc3.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794637895/uudam-travel-trips/eripscmm2lmrdajagxyc.jpg"
+   ]
+  },
+  {
+   "n": 37,
+   "title": "Чунчин хотын 8 шөнө 9 өдрийн аялал",
+   "sourceTripId": "trip-092eb8a9-8923-4497-a83d-956cd84018af",
+   "posterId": "poster-for-trip-092eb8a9-8923-4497-a83d-956cd84018af",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793960999/uudam-travel-trips/nrkming69xh0nkpbscuf.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/fbrwpvozcwbvso3ugrgc.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793960999/uudam-travel-trips/plhji8jv47fyxdsk6myy.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/uen41yljterwfwtwtj4l.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793960999/uudam-travel-trips/emoa03jgmtzgh6e3kiup.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/klpxup5vjiljxtdtwrli.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/vfuol9gacvxo9puyhbvk.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/mlhttyvz7dstbiowcr6u.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/gmusxmaeizwrpagi9nnm.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/jckcv4qxojtbzi5rioaz.jpg"
+   ],
+   "days": {
+    "1": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/uen41yljterwfwtwtj4l.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793961000/uudam-travel-trips/fbrwpvozcwbvso3ugrgc.jpg"
+   ],
+   "add": [
+    "src:chongqing-5"
+   ]
+  },
+  {
+   "n": 38,
+   "title": "Чүнчин хотын аялал",
+   "sourceTripId": "trip-18bc820b-9938-46e1-ba22-c2c2f7d6cd60",
+   "posterId": "poster-for-trip-18bc820b-9938-46e1-ba22-c2c2f7d6cd60",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958058/uudam-travel-trips/maykezb5a8gchq9csvt5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958058/uudam-travel-trips/hl2oq3wc4qn6sckygawn.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958057/uudam-travel-trips/xbmql7zkik3v5ppwbkog.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958061/uudam-travel-trips/wepylxbr9egmugrfozd9.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958061/uudam-travel-trips/ben7hclejsa22hleeo2m.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958063/uudam-travel-trips/ni5q2vki7khxdyp1peke.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958064/uudam-travel-trips/qybwagbwwbztvxfa8liw.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958064/uudam-travel-trips/egtxppvr24klvczapra0.jpg"
+   ],
+   "days": {
+    "5": "src:chongqing-29"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793958057/uudam-travel-trips/xbmql7zkik3v5ppwbkog.jpg"
+   ]
+  },
+  {
+   "n": 39,
+   "title": "Чүнчин хотын аялал-2-р маршрут",
+   "sourceTripId": "trip-b6e33efe-ed03-44f3-a91c-d99ce31b8e03",
+   "posterId": "poster-for-trip-b6e33efe-ed03-44f3-a91c-d99ce31b8e03",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646946/uudam-travel-trips/kd8dgncka9hwqoyqttkk.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646946/uudam-travel-trips/xplc9i3jl4eia9zmaf13.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646948/uudam-travel-trips/qpgf19az3mr8lirhqj7k.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646946/uudam-travel-trips/wpx6ml159oibl4zchbcm.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646948/uudam-travel-trips/gkzre5ubgsaf9tc2kpjx.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646948/uudam-travel-trips/jqdbrzekptqjlx5e4ax9.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646951/uudam-travel-trips/m4dgv4yxhvz1i5jkxfco.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646951/uudam-travel-trips/xcde9fvhavlw9vqt8ieh.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646951/uudam-travel-trips/rknhjnay5by2bm4srevb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794651110/uudam-travel-trips/dhavfrw7uinjo7wacej5.png"
+   ],
+   "days": {
+    "6": "src:chongqing-5"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794651110/uudam-travel-trips/dhavfrw7uinjo7wacej5.png",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794646948/uudam-travel-trips/gkzre5ubgsaf9tc2kpjx.jpg"
+   ]
+  },
+  {
+   "n": 40,
+   "title": "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал ( Жанжиажэ - Аватар )",
+   "sourceTripId": "trip-55a57a64-b163-4c3e-adb8-a61f2638c98c",
+   "posterId": "55a57a64-b163-4c3e-adb8-a61f2638c98c",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034094/uudam-travel-trips/mtjjvfb6xvwoil3pb7kt.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034098/uudam-travel-trips/uy3jengze5qdvf1tlwef.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034100/uudam-travel-trips/afrvzx5eonn0zyts5cqx.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034102/uudam-travel-trips/udeqjxzlg7odq8ofdydz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034105/uudam-travel-trips/kmxsfpcjsbvwew3eoyzy.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411364/uudam-connected-trips/646db1fd60148571695b4a835b05b98e20aad194d859e75148a577c415d316cb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034108/uudam-travel-trips/fayj5tdytmcaqln09mcc.jpg"
+   ],
+   "cover": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034100/uudam-travel-trips/afrvzx5eonn0zyts5cqx.jpg"
+  },
+  {
+   "n": 41,
+   "title": "Шинэ жилийн оройн зоогтой - Хөх хотын аялал - 12 сарын 29",
+   "sourceTripId": "trip-b5dffea9-9b70-4774-bf85-7d996e49b8bb",
+   "posterId": "poster-for-trip-b5dffea9-9b70-4774-bf85-7d996e49b8bb",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640544/uudam-travel-trips/lh7ydtvjh5iu72vgvscu.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640544/uudam-travel-trips/wqdkac4lpony88xoft7s.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640544/uudam-travel-trips/vh3q2ytqsb6kokvc8e2z.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640547/uudam-travel-trips/zuxklysihyncjoac0hwv.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640547/uudam-travel-trips/hqmsvvbpzxyvvb4mfb69.jpg"
+   ],
+   "cover": "src:hohhot-31",
+   "days": {
+    "2": "src:hohhot-29",
+    "3": "src:hohhot-13",
+    "5": "src:hohhot-2",
+    "6": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640544/uudam-travel-trips/wqdkac4lpony88xoft7s.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640544/uudam-travel-trips/vh3q2ytqsb6kokvc8e2z.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640547/uudam-travel-trips/zuxklysihyncjoac0hwv.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794640547/uudam-travel-trips/hqmsvvbpzxyvvb4mfb69.jpg"
+   ],
+   "add": [
+    "src:hohhot-34"
+   ]
+  },
+  {
+   "n": 43,
+   "title": "Эрээн - Хөх хот - Жинин - шинэ жилийн оройн зоогтой аялал",
+   "sourceTripId": "trip-a74e9497-a6a5-4f7b-aa1a-4091e0e721a3",
+   "posterId": "poster-for-trip-a74e9497-a6a5-4f7b-aa1a-4091e0e721a3",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649552/uudam-travel-trips/borett71yyouxkqndvdi.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649552/uudam-travel-trips/sclvrwqyhwdtlkrlfyoz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649552/uudam-travel-trips/lxk5hciektknwkrl8vy0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649553/uudam-travel-trips/vrkz8ytwj4pteke2ewbr.jpg"
+   ],
+   "cover": "src:hohhot-31",
+   "days": {
+    "2": "src:hohhot-29",
+    "3": "src:hohhot-2",
+    "4": "src:hohhot-34",
+    "5": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649552/uudam-travel-trips/borett71yyouxkqndvdi.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649552/uudam-travel-trips/sclvrwqyhwdtlkrlfyoz.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649552/uudam-travel-trips/lxk5hciektknwkrl8vy0.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794649553/uudam-travel-trips/vrkz8ytwj4pteke2ewbr.jpg"
+   ],
+   "add": [
+    "src:hohhot-13",
+    "src:hohhot-35"
+   ]
+  },
+  {
+   "n": 44,
+   "title": "ЭРЭЭН – ЖАНЖИАКӨҮ – ТЯНЬЖИН – БЭЭЖИН (ХУДАЛДАА)",
+   "sourceTripId": "trip-poster-erenhot-zhangjiakou-tianjin-beijing-2026",
+   "posterId": "poster-erenhot-zhangjiakou-tianjin-beijing-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792727825/uudam-connected-trips/ae82c71bae26fab6e7d297d178c9bf06a492ad9cc4045b44694a9fd349932467.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792727826/uudam-connected-trips/86800ea1df1fb4e25eebf9a4b94786067d0581e9bcceea9513825e252b6a302a.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792727827/uudam-connected-trips/e5e6e197a90c214dc317be21e2dda6b85530f753cf643a6b963b4b9aeab803eb.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792727826/uudam-connected-trips/d1d628199567436c1d05202878d8c715f3f63bab90c92c93998d79c5ed5e774d.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033488/uudam-travel-trips/twscrv2vxb1xmaodlpfr.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792727828/uudam-connected-trips/62e857e45d7485b8e73109685c2c8e856fc50a35dd10503392b7f3d1b75fb704.jpg"
+   ],
+   "days": {
+    "6": "src:beijing-13"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1792727828/uudam-connected-trips/62e857e45d7485b8e73109685c2c8e856fc50a35dd10503392b7f3d1b75fb704.jpg"
+   ]
+  },
+  {
+   "n": 45,
+   "title": "ЭРЭЭН – ЖИНИН – УТАЙ – БЭЭЖИН",
+   "sourceTripId": "trip-poster-partner-utai-beijing-2026",
+   "posterId": "poster-partner-utai-beijing-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-whitestupa.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955071/uudam-travel-trips/jinin-beejin-birdsnest.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972720/uudam-travel-trips/partner-panda.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955070/uudam-travel-trips/jinin-beejin-greatwall.jpg"
+   ],
+   "days": {
+    "2": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "3": "src:wutai-16",
+    "7": "src:beijing-1"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791955070/uudam-travel-trips/jinin-beejin-greatwall.jpg"
+   ]
+  },
+  {
+   "n": 46,
+   "title": "ЭРЭЭН – ЖИНИН – УТАЙ – ХӨХ ХОТ",
+   "sourceTripId": "trip-poster-partner-utai-hohhot-2026",
+   "posterId": "poster-partner-utai-hohhot-2026",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-whitestupa.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972721/uudam-travel-trips/partner-hohhotstreet.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972720/uudam-travel-trips/partner-museum.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793781423/uudam-travel-trips/pu8bkuqw39xd60tksmuj.jpg"
+   ],
+   "cover": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-whitestupa.jpg",
+   "days": {
+    "2": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791962148/uudam-connected-trips/5450347122f3c1eb1884eeafd4afffa80db3fd69b75c8eee9ab8df0f068f92e0.jpg",
+    "3": "src:wutai-16"
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972717/uudam-travel-trips/partner-dailuoding.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1791972725/uudam-travel-trips/partner-hotspring.jpg"
+   ]
+  },
+  {
+   "n": 47,
+   "title": "Япон Токио, Фүжи аялал",
+   "sourceTripId": "trip-poster-dfe956a4-8db6-4e4f-8078-7dbeb3f8b88b",
+   "posterId": "poster-dfe956a4-8db6-4e4f-8078-7dbeb3f8b88b",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034145/uudam-travel-trips/dqmjqosudcaxscbtpfht.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411365/uudam-connected-trips/e16ec1ed0f6e66fb3eb19e58fc1ca9a14613e1c19a46d4cd4f4ef48b47e0b2c5.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034149/uudam-travel-trips/xeq6hvuaznj8xebs3ivx.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411366/uudam-connected-trips/0ccf17931eaf0d901552687865d898dc12e91854dc3ca41e5adfe0244a70fef6.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411366/uudam-connected-trips/5fd39c79f14e44566615720260567882fb3c2a19d0fe6b96ef060e0c968f5b02.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034160/uudam-travel-trips/kdrsjdzbcewh7ay1yahm.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034147/uudam-travel-trips/hdqujy0fk4zotym6o2lw.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034152/uudam-travel-trips/fonmkk9zae4m8autxr3e.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034155/uudam-travel-trips/qjj8tfgqvmx4qsq8zy5l.jpg"
+   ],
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034147/uudam-travel-trips/hdqujy0fk4zotym6o2lw.jpg"
+   ]
+  },
+  {
+   "n": 53,
+   "title": "Эрээн - Хөх хот - Жинин - Эрээн",
+   "sourceTripId": "trip-183df720-3032-483e-bcce-b7cfddb76fa8",
+   "posterId": "poster-for-trip-183df720-3032-483e-bcce-b7cfddb76fa8",
+   "reviewed": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644439/uudam-travel-trips/mev99lxm48rphlykhnwy.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644464/uudam-travel-trips/nhl3wywyhpxshl6ztix4.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644464/uudam-travel-trips/deo7h9bsoon8tromgsdl.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644464/uudam-travel-trips/zc1orr1cv5y5fhavneef.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644466/uudam-travel-trips/zwcqgbbre09ltct9kjgi.jpg"
+   ],
+   "cover": "src:hohhot-31",
+   "days": {
+    "1": null,
+    "2": "src:hohhot-29",
+    "3": "src:hohhot-2",
+    "4": "src:hohhot-13",
+    "5": null,
+    "8": null
+   },
+   "remove": [
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644439/uudam-travel-trips/mev99lxm48rphlykhnwy.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644464/uudam-travel-trips/nhl3wywyhpxshl6ztix4.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644464/uudam-travel-trips/deo7h9bsoon8tromgsdl.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644464/uudam-travel-trips/zc1orr1cv5y5fhavneef.jpg",
+    "https://res.cloudinary.com/dbzydfkhc/image/upload/v1794644466/uudam-travel-trips/zwcqgbbre09ltct9kjgi.jpg"
+   ],
+   "add": [
+    "src:hohhot-34",
+    "src:hohhot-35"
+   ]
+  }
+ ]
+}

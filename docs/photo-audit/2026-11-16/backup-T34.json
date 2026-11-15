@@ -1,0 +1,362 @@
+[
+ {
+  "n": 34,
+  "sourceTripId": "trip-0d22ee96-c95c-45e1-8b3d-1308f4bce696",
+  "posterId": "0d22ee96-c95c-45e1-8b3d-1308f4bce696",
+  "version": "2026-11-11 05:21:38.683026+00",
+  "photo_urls": [
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034177/uudam-travel-trips/ftekrgtyhjoaqttp9upo.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411367/uudam-connected-trips/d6d3703e7faec7c87901ac463b1bb467fa88016aa2e4f273567612fcfb376129.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034182/uudam-travel-trips/wtkqiagaczfooxd6fm5z.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034184/uudam-travel-trips/xuswzf0jfhbms8gb65ud.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411360/uudam-connected-trips/7fba6b06e4920d2ab53a8dd9979f4160815d404b154452b480b0ee4ae8524e56.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034188/uudam-travel-trips/zbyostco9zlccewpv5dm.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034180/uudam-travel-trips/zg8al22dj9tvx8po5mzq.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034186/uudam-travel-trips/p8qx7omzsfsau0ljvyda.jpg"
+  ],
+  "photo_credits": {
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411360/uudam-connected-trips/7fba6b06e4920d2ab53a8dd9979f4160815d404b154452b480b0ee4ae8524e56.jpg": {
+    "page": "https://commons.wikimedia.org/wiki/File:Entrance_of_Atlantis_Aquaventure,_Sanya_(20230328135457).jpg",
+    "title": "Entrance of Atlantis Aquaventure, Sanya (20230328135457).jpg",
+    "author": "N509FZ",
+    "license": "CC BY-SA 4.0",
+    "subject": "Entrance of Atlantis Aquaventure water park, Sanya",
+    "provider": "Wikimedia Commons",
+    "sourceUrl": "https://upload.wikimedia.org/wikipedia/commons/1/1a/Entrance_of_Atlantis_Aquaventure%2C_Sanya_%2820230328135457%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411367/uudam-connected-trips/d6d3703e7faec7c87901ac463b1bb467fa88016aa2e4f273567612fcfb376129.jpg": {
+    "page": "https://commons.wikimedia.org/wiki/File:Yalong_Bay_Park_19.jpg",
+    "title": "Yalong Bay Park 19.jpg",
+    "author": "STW932",
+    "license": "CC BY-SA 4.0",
+    "subject": "Glass skywalk, Yalong Bay Tropical Paradise Forest Park",
+    "provider": "Wikimedia Commons",
+    "sourceUrl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d2/Yalong_Bay_Park_19.jpg/3840px-Yalong_Bay_Park_19.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d2/Yalong_Bay_Park_19.jpg/2400px-Yalong_Bay_Park_19.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Yalong_Bay_Park_19.jpg",
+    "title": "Yalong Bay Park 19.jpg",
+    "author": "STW932",
+    "license": "CC BY-SA 4.0",
+    "subject": "Glass skywalk, Yalong Bay Tropical Paradise Forest Park",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1a/Entrance_of_Atlantis_Aquaventure%2C_Sanya_%2820230328135457%29.jpg/2400px-Entrance_of_Atlantis_Aquaventure%2C_Sanya_%2820230328135457%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Entrance_of_Atlantis_Aquaventure,_Sanya_(20230328135457).jpg",
+    "title": "Entrance of Atlantis Aquaventure, Sanya (20230328135457).jpg",
+    "author": "N509FZ",
+    "license": "CC BY-SA 4.0",
+    "subject": "Entrance of Atlantis Aquaventure water park, Sanya",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   }
+  },
+  "photo_audit": [
+   {
+    "at": "2026-10-31T01:31:09.448Z",
+    "step": "apply",
+    "changes": [
+     "day:2",
+     "day:5"
+    ],
+    "version": "2026-10-31"
+   },
+   {
+    "at": "2026-10-31T01:46:33.077Z",
+    "step": "apply",
+    "changes": [
+     "day:2",
+     "day:5"
+    ],
+    "version": "2026-10-31-fix1"
+   },
+   {
+    "at": "2026-10-31T01:56:47.568Z",
+    "step": "rehost",
+    "changes": [
+     "day:2 rehosted",
+     "day:5 rehosted"
+    ],
+    "version": "2026-10-31"
+   }
+  ],
+  "itinerary_day_photos": [
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034177/uudam-travel-trips/ftekrgtyhjoaqttp9upo.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034180/uudam-travel-trips/zg8al22dj9tvx8po5mzq.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034182/uudam-travel-trips/wtkqiagaczfooxd6fm5z.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034184/uudam-travel-trips/xuswzf0jfhbms8gb65ud.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034186/uudam-travel-trips/p8qx7omzsfsau0ljvyda.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034188/uudam-travel-trips/zbyostco9zlccewpv5dm.jpg",
+   null,
+   null
+  ],
+  "poster": {
+   "days": [
+    {
+     "day": 1,
+     "bonus": [],
+     "hotel": "Baofeng International Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": false
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034177/uudam-travel-trips/ftekrgtyhjoaqttp9upo.jpg",
+     "route": "Улаанбаатар–Хайкоу (шууд нислэг)",
+     "flight": "Чингис Хаан - Хайкоу",
+     "summary": "Чингис Хаан Олон Улсын нисэх онгоцны буудлаас орой 22:10 цагт нисэх тул 19:00 гэхэд ирсэн байх хэрэгтэй. Бүртгэлээ хийлгэн Хайкоу хот руу ниснэ. Хайкоу хотод (Meilan international airport) шөнийн 03:10 цагт газардан хилээр орсны дараа аяллын автобусанд суун буудал руу хөдөлнө. Хайкоу хотын Baofeng International Hotel Буудалдаа орж амарна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Чингис Хаан Олон Улсын нисэх онгоцны буудлаас орой 22:10 цагт нисэх тул 19:00 гэхэд ирсэн байх хэрэгтэй. Бүртгэлээ хийлгэн Хайкоу хот руу ниснэ. Хайкоу хотод (Meilan international airport) шөнийн 03:10 цагт газардан хилээр орсны дараа аяллын автобусанд суун буудал руу хөдөлнө. Хайкоу хотын Baofeng International Hotel Буудалдаа орж амарна."
+    },
+    {
+     "day": 2,
+     "bonus": [],
+     "hotel": "Timton Fuhe Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411367/uudam-connected-trips/d6d3703e7faec7c87901ac463b1bb467fa88016aa2e4f273567612fcfb376129.jpg",
+     "route": "Хайкоу–Саняа (шилэн гүүр)",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа 12 цагт буудлаа хүлээлгэн өгнө. Саняа хот руу аяллын автобусандаа суун хөдөлнө. Саняа явах замдаа Байшилин шилэн гүүр үзнэ.\nБайшлин шилэн гүүр нь Саньяа хотын ойролцоох байгалийн үзэсгэлэнт уул, хавцлын дээгүүр байрлах адал явдал, сэтгэл догдрол хосолсон гайхамшигт байгууламж юм. Энэ гүүр нь шилэн шалтай тул доорх гүн хавцал, ногоон ой мод, хад асгыг шууд харж алхах боломжийг олгодог. Саняа хотдоо очин оройн хоолондоо орно. Үүний дараа Саняа хотын Timton Fuhe Hotel-буудалдаа орж амарна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Өглөөний цайны дараа 12 цагт буудлаа хүлээлгэн өгнө. Саняа хот руу аяллын автобусандаа суун хөдөлнө. Саняа явах замдаа Байшилин шилэн гүүр үзнэ. Байшлин шилэн гүүр нь Саньяа хотын ойролцоох байгалийн үзэсгэлэнт уул, хавцлын дээгүүр байрлах адал явдал, сэтгэл догдрол хосолсон гайхамшигт байгууламж юм. Энэ гүүр нь шилэн шалтай тул доорх гүн хавцал, ногоон ой мод, хад асгыг шууд харж алхах боломжийг олгодог. Саняа хотдоо очин оройн хоолондоо орно. Үүний дараа Саняа хотын Timton Fuhe Hotel-буудалдаа орж амарна."
+    },
+    {
+     "day": 3,
+     "bonus": [],
+     "hotel": "Timton Fuhe Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034182/uudam-travel-trips/wtkqiagaczfooxd6fm5z.jpg",
+     "route": "Саняа (чөлөөт өдөр)",
+     "flight": null,
+     "summary": "Энэ өдөр тааваараа амарч, далайн эрэгт биеэ шаран, бассейнд цагийг хөгжилтэй өнгөрүүлэх эсвэл shopping хийх зэргээр бүтэн өдрийг хүссэнээрээ өнгөрүүлэх боломжтой.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Энэ өдөр тааваараа амарч, далайн эрэгт биеэ шаран, бассейнд цагийг хөгжилтэй өнгөрүүлэх эсвэл shopping хийх зэргээр бүтэн өдрийг хүссэнээрээ өнгөрүүлэх боломжтой."
+    },
+    {
+     "day": 4,
+     "bonus": [],
+     "hotel": "Timton Fuhe Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034184/uudam-travel-trips/xuswzf0jfhbms8gb65ud.jpg",
+     "route": "Саняа (задгай далайн аялал)",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа амарч байгаад 10:00 цагт аяллын автобусандаа суун сувдны дэлгүүр орно. 12:00 цагт Задгай далайн аялалдаа гарна. Аялал маань 3 цаг үргэлжлэнэ. Энэ үед аялагчид маань далай дээр тоглож болох олон экстрем тоглоомоор тоглож хөгжилдөх боломжтой. Үүний дараа Оройн буфед хоолоо идсэний дараа буудалдаа (Timton Fuhe Hotel) эргэн ирж амарна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Өглөөний цайны дараа амарч байгаад 10:00 цагт аяллын автобусандаа суун сувдны дэлгүүр орно. 12:00 цагт Задгай далайн аялалдаа гарна. Аялал маань 3 цаг үргэлжлэнэ. Энэ үед аялагчид маань далай дээр тоглож болох олон экстрем тоглоомоор тоглож хөгжилдөх боломжтой. Үүний дараа Оройн буфед хоолоо идсэний дараа буудалдаа (Timton Fuhe Hotel) эргэн ирж амарна."
+    },
+    {
+     "day": 5,
+     "bonus": [],
+     "hotel": "Timton Fuhe Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411360/uudam-connected-trips/7fba6b06e4920d2ab53a8dd9979f4160815d404b154452b480b0ee4ae8524e56.jpg",
+     "route": "Саняа (Атлантис усан парк)",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа автобусаар Атлантис усан парк руу очоод бүтэн өдрийг усан паркт өнгөрүүлнө. Атлантис усан парк нь Азид 2-т ордог том усан парк юм. Олон төрлийн усан тоглоомуудтай ба бүх насныханд зориулснаараа давуу талтай. Оройн хоолонд орсны дараа (Timton Fuhe Hotel)- буудалдаа эргэн ирж амарна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Өглөөний цайны дараа автобусаар Атлантис усан парк руу очоод бүтэн өдрийг усан паркт өнгөрүүлнө. Атлантис усан парк нь Азид 2-т ордог том усан парк юм. Олон төрлийн усан тоглоомуудтай ба бүх насныханд зориулснаараа давуу талтай. Оройн хоолонд орсны дараа (Timton Fuhe Hotel)- буудалдаа эргэн ирж амарна."
+    },
+    {
+     "day": 6,
+     "bonus": [],
+     "hotel": "Timton Fuhe Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034188/uudam-travel-trips/zbyostco9zlccewpv5dm.jpg",
+     "route": "Саняа (чөлөөт өдөр)",
+     "flight": null,
+     "summary": "Энэ өдөр тааваараа амарч, далайн эрэгт биеэ шаран, бассейнд цагийг хөгжилтэй өнгөрүүлэх эсвэл shopping хийх зэргээр бүтэн өдрийг хүссэнээрээ өнгөрүүлэх боломжтой.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Энэ өдөр тааваараа амарч, далайн эрэгт биеэ шаран, бассейнд цагийг хөгжилтэй өнгөрүүлэх эсвэл shopping хийх зэргээр бүтэн өдрийг хүссэнээрээ өнгөрүүлэх боломжтой."
+    },
+    {
+     "day": 7,
+     "bonus": [],
+     "hotel": "Timton Fuhe Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": null,
+     "route": "Саняа (чөлөөт өдөр)",
+     "flight": null,
+     "summary": "Энэ өдөр тааваараа амарч, далайн эрэгт биеэ шаран, бассейнд цагийг хөгжилтэй өнгөрүүлэх эсвэл shopping хийх зэргээр бүтэн өдрийг хүссэнээрээ өнгөрүүлэх боломжтой.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Энэ өдөр тааваараа амарч, далайн эрэгт биеэ шаран, бассейнд цагийг хөгжилтэй өнгөрүүлэх эсвэл shopping хийх зэргээр бүтэн өдрийг хүссэнээрээ өнгөрүүлэх боломжтой."
+    },
+    {
+     "day": 8,
+     "bonus": [],
+     "hotel": null,
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": null,
+     "route": "Саняа–Хайкоу–Улаанбаатар (Сармагчингийн арал)",
+     "flight": "Хайкоу - Чингис Хаан",
+     "summary": "Өглөөний цайны дараа амарч байгаад 12:00 цагт буудлаа хүлээлгэн өгнө.\nАяллын автобусандаа суун Хайкоу хот руу хөдөлнө. Хайкоу хот руу явах замдаа сармагчингийн арал үзнэ. (Nanwan Monkey Island — Саньяа хотын ойролцоох хамгийн өвөрмөц, сонирхолтой аяллын нэг. Энэ арал нь байгаль дээрээ чөлөөтэй амьдардаг хэдэн мянган сармагчингаар алдартай бөгөөд Хятадын хамгийн том сармагчингийн дархан цаазат газар юм.) Хайкоу хотод очин оройн хоолонд орно.\nҮүний дараа шоппинг хийж дэлгүүр хэснэ. Хайкоу хотын Мейлан онгоцны буудал дээр очин бүртгэлээ хийлгэн хилээр нэвтрэн орно.  Өглөөний 09:10 цагт Чингис хаан онгоцны буудал дээр газардсанаар бидний дурсамж дүүрэн аялал дуусна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Өглөөний цайны дараа амарч байгаад 12:00 цагт буудлаа хүлээлгэн өгнө. Аяллын автобусандаа суун Хайкоу хот руу хөдөлнө. Хайкоу хот руу явах замдаа сармагчингийн арал үзнэ. (Nanwan Monkey Island — Саньяа хотын ойролцоох хамгийн өвөрмөц, сонирхолтой аяллын нэг. Энэ арал нь байгаль дээрээ чөлөөтэй амьдардаг хэдэн мянган сармагчингаар алдартай бөгөөд Хятадын хамгийн том сармагчингийн дархан цаазат газар юм.) Хайкоу хотод очин оройн хоолонд орно. Үүний дараа шоппинг хийж дэлгүүр хэснэ. Хайкоу хотын Мейлан онгоцны буудал дээр очин бүртгэлээ хийлгэн хилээр нэвтрэн орно. Өглөөний 09:10 цагт Чингис хаан онгоцны буудал дээр газардсанаар бидний дурсамж дүүрэн аялал дуусна."
+    }
+   ],
+   "title": "хайнан-хайкоу нислэгтэй - Мягмар гариг",
+   "agency": "UUDAM TRAVEL AGENCY",
+   "flights": {
+    "return": "04:10 Хайкоу - Чингис Хаан 09:10",
+    "outbound": "22:10 Чингис Хаан - Хайкоу 03:10"
+   },
+   "contacts": {
+    "email": "uudamtravel6@gmail.com",
+    "phones": [
+     "7713 6633",
+     "8913 6633",
+     "9117 2769",
+     "9924 8000"
+    ],
+    "address": "Чингэлтэй дүүрэг, 4-р хороо, Анхарагийн гудамж-23, \"Todtower\" офис, 701 тоот"
+   },
+   "excludes": [],
+   "includes": [],
+   "subtitle": "",
+   "departures": [
+    {
+     "date": "2026-09-15"
+    },
+    {
+     "date": "2026-09-16"
+    },
+    {
+     "date": "2026-09-22"
+    },
+    {
+     "date": "2026-09-29"
+    },
+    {
+     "date": "2026-10-06"
+    },
+    {
+     "date": "2026-10-13"
+    },
+    {
+     "date": "2026-10-20"
+    },
+    {
+     "date": "2026-10-27"
+    },
+    {
+     "date": "2026-11-03"
+    },
+    {
+     "date": "2026-11-10"
+    },
+    {
+     "date": "2026-11-17"
+    },
+    {
+     "date": "2026-11-24"
+    },
+    {
+     "date": "2026-12-01"
+    },
+    {
+     "date": "2026-12-08"
+    },
+    {
+     "date": "2026-12-15"
+    },
+    {
+     "date": "2026-12-22"
+    },
+    {
+     "date": "2026-12-29"
+    }
+   ],
+   "hero_image": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789034177/uudam-travel-trips/ftekrgtyhjoaqttp9upo.jpg",
+   "price_desc": "10 сарын бүх суудал дүүрсэн",
+   "price_note": "",
+   "text_scale": 1.25,
+   "price_table": {
+    "rows": [
+     {
+      "cells": [
+       "3,290,000₮",
+       "2,990,000₮",
+       "590,000₮"
+      ],
+      "dates": "2026 оны 11 сарын 17"
+     },
+     {
+      "cells": [
+       "2,890,000₮",
+       "2,590,000₮",
+       "590,000₮"
+      ],
+      "dates": "2026 оны 11 сарын 24, 12 сарын 08, 22, 29"
+     },
+     {
+      "cells": [
+       "3,790,000₮",
+       "3,490,000₮",
+       "590,000₮"
+      ],
+      "dates": "2026 оны 12 сарын 01, 15"
+     }
+    ],
+    "columns": [
+     "Том хүн",
+     "Хүүхэд 2-11 нас",
+     "Нярай"
+    ]
+   },
+   "destinations": [
+    "Хайнан",
+    "Хайкоу",
+    "Саньяа"
+   ],
+   "duration_days": 8,
+   "transport_type": "direct_flight",
+   "duration_nights": 7
+  }
+ }
+]

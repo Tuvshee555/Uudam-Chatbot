@@ -40,6 +40,9 @@ export function photosWantedFor(dayCount: number): number {
   return Math.min(MAX_FOUND_PHOTOS, Math.max(PHOTOS_PER_TRIP, dayCount));
 }
 const RENDITION_WIDTH = 1920;
+// A panorama strip is cropped to a blurred sliver on the trip card and the page header; four
+// trips had one as their cover (2026-11-16).
+export const MAX_PHOTO_ASPECT = 2.1;
 // Commons serves only its standard thumbnail widths (… 250, 330, 500, 960, 1280, 1920); 480 is
 // refused with a 400 page, so the ranker never saw a preview and fell back to raw search order
 // (a war map was picked for a beach, 2026-11-04).
@@ -48,6 +51,9 @@ const MAX_DOWNLOAD_BYTES = 12 * 1024 * 1024;
 const ALLOWED_LICENSE = /^(cc0|public domain|cc[ -]by(-sa)?(\s|$)|copyrighted free use)/i;
 // Files that are not photographs of a place.
 const NOT_A_PHOTO = /\b(map|maps|logo|diagram|flag|coat of arms|plan|chart|satellite|screenshot|icon|seal|emblem|poster|banner|locator|svg|graph|table|sign|ticket|stamp|coin|banknote|menu|brochure|collage|panorama stitch|abandoned|derelict|ruins? of|demolition|construction site|accident|flood|protest|war|wars|military|army|soldiers?|space station|from orbit|iss\d|zoo|hippopotamus|store|shop|supermarket|trading|rail transit|line \d|metro|subway|bus|taxi|toyota|honda|car|vehicle|truck|parking|street view|interior|office|factory|hospital|school|university campus)\b/i;
+// Astronaut photographs are filed under their frame number ("ISS034-E-5839 - View of …"): a black
+// frame with a few city lights was two trips' day photo (2026-11-16).
+const FROM_ORBIT = /\biss\d{2,}|\bsts\d{2,}|view of (china|earth|asia)\b/i;
 // Food and things on a table are not a destination: a bowl of hotpot spices was picked as a
 // city's fifth photo because the search phrase was a local dish (2026-11-05).
 const FOOD_OR_OBJECT = /\b(hot ?pot|hotpot|dish|dishes|cuisine|food|foods|noodles?|soup|spices?|chili|chilli|restaurant|meal|snack|dumplings?|dessert|ingredients?|recipe|bowl|souvenirs?|packaging|portrait|selfie)\b/i;
@@ -113,9 +119,9 @@ function acceptable(page: CommonsPage): boolean {
   const info = page.imageinfo?.[0];
   if (!info || !info.width || !info.height || !info.thumburl) return false;
   if (!/^image\/(jpeg|png)$/.test(info.mime || "")) return false;
-  if (info.width < MIN_PHOTO_WIDTH || info.width < info.height * 1.05) return false;
+  if (info.width < MIN_PHOTO_WIDTH || info.width < info.height * 1.05 || info.width > info.height * MAX_PHOTO_ASPECT) return false;
   const title = String(page.title || "");
-  if (NOT_A_PHOTO.test(title) || FOOD_OR_OBJECT.test(title) || TRANSIT_PLACE.test(title)) return false;
+  if (NOT_A_PHOTO.test(title) || FOOD_OR_OBJECT.test(title) || TRANSIT_PLACE.test(title) || FROM_ORBIT.test(title)) return false;
   const license = plain(info.extmetadata?.LicenseShortName?.value || "");
   return ALLOWED_LICENSE.test(license);
 }
@@ -219,8 +225,9 @@ export async function rankPhotos(candidates: FoundPhoto[], input: { subject: str
   const spare = Math.min(4, Math.max(0, usable.length - count));
   const instruction = `You choose photographs for a travel agency's web page about: ${input.subject}.
 Each photo below is labelled with the place it was searched for. Pick up to ${count + spare} of the ${usable.length} photos, best first. A photo qualifies only when a traveller would recognise in it the PLACE it is labelled with: that landmark, skyline or night view, beach, old town, famous street, bridge, park or natural scenery; sharp, well lit, inviting.
+The FIRST pick becomes the trip's cover on a tall card: the most striking, colourful, instantly recognisable view of the trip's main destination, its subject near the middle of the frame.
 Aim for ${count} photos: cover as many different places from the list as you can, then add more views of the best places${spare ? `; then list up to ${spare} more qualifying photos as reserves` : ""}. Never pick a photo that fails the rules below just to reach the number, and never two photos of the same view.
-Reject every one of these, however good the picture: food, dishes, drinks, ingredients, spices, tables, menus and restaurant interiors; objects, products and souvenirs; maps, satellite or aerial survey images; text overlays, logos, gates and signs; zoo animals; museum or shop interiors; plain buildings; close-ups of people, portraits and selfies; derelict or under-construction places; bad weather, blurry or dark images; another company's branding; border towns, railway and airport scenes; and any photo that shows a different city or country, or where you cannot tell that it is the labelled place.
+Reject every one of these, however good the picture: food, dishes, drinks, ingredients, spices, tables, menus and restaurant interiors; objects, products and souvenirs; maps, satellite or aerial survey images; text overlays, logos, gates and signs; zoo animals; museum or shop interiors; plain buildings; close-ups of people, portraits and selfies; derelict, unfinished or under-construction places; bad weather, blurry or dark images; dull pictures a traveller would scroll past — grey or hazy skies, bare brown winter hills, flat midday light on an empty square or car park; ordinary street scenes of traffic, parked cars, bicycles or passers-by; a statue or monument shown as a dark shape against the sky; modern office blocks, stadiums, malls and transport buildings; a black frame with scattered lights; another company's branding; border towns, railway and airport scenes; and any photo that shows a different city or country, or where you cannot tell that it is the labelled place.
 Answer with JSON only: {"picks":[photo numbers, best first]}.`;
   const parts: Parameters<typeof askOpenAIChatParts>[0] = [{ text: instruction }];
   usable.forEach((entry, index) => { parts.push({ text: `Photo ${index + 1} — searched for "${entry.photo.query}": ${entry.photo.title}` }); parts.push(entry.part); });

@@ -29,6 +29,9 @@ test("only large landscape photographs under free commercial licences are kept, 
     { title: "Norvel from the space station iss074e0000788", width: 3000, height: 2000 },
     { title: "Erenhot gate near Norvel", width: 3000, height: 2000 },
     { title: "Hippopotamus at Norvel Zoo", width: 3000, height: 2000 },
+    // A panorama strip becomes a blurred sliver on the trip card; an astronaut frame is a black picture.
+    { title: "Norvel seafront wide view", width: 9000, height: 2400 },
+    { title: "ISS034-E-0000 - View of Norvel", width: 3000, height: 2000 },
   ]) });
   assert.deepEqual(photos.map((photo) => photo.title), ["Norvel old town at dusk", "Norvel old town square"]);
   assert.equal(photos[0].url, "https://thumb.example.test/a/b/Norvel%20old%20town%20at%20dusk.jpg/1920px-1.jpg", "tracking query stripped, 1920px rendition");
