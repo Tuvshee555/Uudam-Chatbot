@@ -3,7 +3,6 @@ import test, { before } from "node:test";
 import { applyTestEnv } from "./helpers/env";
 import { isFrustratedHandoffRequest } from "../src/lib/handoffDetection";
 import { buildContactReply, isAddressRequest, isPhoneRequest } from "../src/lib/contactReplies";
-import { isAcknowledgementOnly, isDeferralOnly } from "../src/lib/acknowledgements";
 import { isGenericRouteToken, normText } from "../src/lib/travelTextNorm";
 import { hasIncludedInPriceIntent } from "../src/lib/travelFastPathsPricing";
 import { replyPreferences } from "../src/lib/chatbotReplyPolicy";
@@ -50,14 +49,6 @@ test("typed phone and address questions in both scripts get the saved contact de
   }
   for (const text of ["99119911", "миний утас 99119911", "утасны дугаараа үлдээнэ үү", "Калдор буудлын хаяг", "Вэлмор хаана байдаг вэ"]) {
     assert.equal(isPhoneRequest(text) || isAddressRequest(text), false, text);
-  }
-});
-
-test("acknowledgements and deferrals are told apart from answers and questions", () => {
-  for (const text of ["за ok", "за ойлголоо", "ok", "👍", "за тэгье", "мэдлээ"]) assert.ok(isAcknowledgementOnly(text), text);
-  for (const text of ["Бодож үзье", "margaash lavlah gesen yum", "дараа холбогдъё", "бодоод хэлье"]) assert.ok(isDeferralOnly(text), text);
-  for (const text of ["тийм", "2", "за баярлалаа", "ok 2 том хүн", "за үнэ хэд вэ", "маргааш явах уу", "бодож үзье, хэд вэ"]) {
-    assert.equal(isAcknowledgementOnly(text) || isDeferralOnly(text), false, text);
   }
 });
 
@@ -143,13 +134,13 @@ test("model names come from the environment only when they are known chat models
   const saved = { reply: process.env.OPENAI_REPLY_MODEL, understanding: process.env.TRIP_UNDERSTANDING_MODEL };
   try {
     delete process.env.OPENAI_REPLY_MODEL; delete process.env.TRIP_UNDERSTANDING_MODEL;
-    assert.equal(replyModel(), "gpt-4o");
+    assert.equal(replyModel(), "gpt-4.1");
     assert.equal(understandingModelName(), "gpt-4.1-mini");
     process.env.OPENAI_REPLY_MODEL = "gpt-4.1-mini"; process.env.TRIP_UNDERSTANDING_MODEL = "gpt-4o-2024-08-06";
     assert.equal(replyModel(), "gpt-4.1-mini");
     assert.equal(understandingModelName(), "gpt-4o-2024-08-06");
     process.env.OPENAI_REPLY_MODEL = "gpt4o"; process.env.TRIP_UNDERSTANDING_MODEL = "made-up-model";
-    assert.equal(replyModel(), "gpt-4o", "a typo falls back instead of failing every reply");
+    assert.equal(replyModel(), "gpt-4.1", "a typo falls back instead of failing every reply");
     assert.equal(understandingModelName(), "gpt-4.1-mini");
     assert.equal(isKnownChatModel("gpt-4.1-nano"), true);
   } finally {

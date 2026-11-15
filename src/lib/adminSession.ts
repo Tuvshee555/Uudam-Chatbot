@@ -2,44 +2,103 @@ import crypto from "crypto";
 import type { NextApiRequest } from "next";
 
 /**
- * The admin panel's sign-in session: a signed, expiring token in an HttpOnly
- * cookie. Staff type the admin secret once; the browser keeps only this token,
- * which page scripts cannot read (the secret used to sit in localStorage, open
- * to any injected script, with no server-side expiry and no way to sign out).
+ * The admin panel's sign-in session: a signed, expiring token in an HttpOnly cookie,
+ * issued only by "Sign in with Google" (api/admin/google/callback.ts). There is no
+ * password: page scripts never see a credential, and nothing a person types opens the admin.
  *
- * The signing key is derived from ADMIN_SECRET, so rotating the secret ends
- * every session at once. Scripts keep sending the x-admin-secret header.
+ * Token v2 = "v2.<expiresAt>.<email, base64url>.<nonce>.<signature>". The email is the
+ * Google account that signed in; it is re-checked against ADMIN_GOOGLE_EMAILS on every
+ * request, so removing an address ends that person's access at once. v1 tokens (no email,
+ * signed with the old ADMIN_SECRET) are refused.
+ *
+ * The signing key is ADMIN_SESSION_SECRET: a long random value nobody types. Rotating it
+ * ends every session. A short or guessable key is refused outright (fail closed): no
+ * session is issued or accepted until a strong one is set. The customer bot is unaffected.
  */
 export const ADMIN_SESSION_COOKIE = "uudam_admin";
 export const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** A session used after this long is reissued, so active staff stay signed in (sliding week). */
 const ADMIN_SESSION_RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
+const SESSION_KEY_LABEL = "uudam-admin-session:v2";
+/** Signing keys and machine tokens shorter than this are refused. */
+export const MIN_ADMIN_KEY_LENGTH = 32;
 
-function signingKey(adminSecret: string): Buffer {
-  return crypto.createHmac("sha256", adminSecret).update("uudam-admin-session:v1").digest();
+export type AdminSession = { email: string; expiresAt: number };
+
+const COMMON_SECRETS = new Set([
+  "admin", "administrator", "password", "passw0rd", "secret", "123456", "12345678", "123456789", "1234567890",
+  "qwerty", "letmein", "changeme", "test", "admin123", "password123", "uudam", "uudamtravel", "travel", "root",
+]);
+
+/**
+ * A key nobody should sign with: shorter than 32 characters, a common word, one short
+ * chunk repeated ("admin" x 8), or fewer than 8 different characters.
+ */
+export function isWeakAdminKey(value: string | null | undefined): boolean {
+  const key = String(value ?? "").trim();
+  if (key.length < MIN_ADMIN_KEY_LENGTH) return true;
+  if (COMMON_SECRETS.has(key.toLowerCase())) return true;
+  if (/^([\s\S]{1,16})\1+$/.test(key)) return true;
+  return new Set(key).size < 8;
 }
 
-function sign(adminSecret: string, payload: string): string {
-  return crypto.createHmac("sha256", signingKey(adminSecret)).update(payload).digest("base64url");
+/** ADMIN_API_TOKEN is usable: set, strong, and not the session signing key itself. */
+export function isUsableAdminApiToken(token: string | null | undefined, sessionSecret: string): boolean {
+  const value = String(token ?? "").trim();
+  return Boolean(value) && !isWeakAdminKey(value) && value !== String(sessionSecret || "").trim();
 }
 
-export function createAdminSessionToken(adminSecret: string, now = Date.now()): { token: string; expiresAt: number } {
+/** The HMAC key for a purpose ("uudam-admin-session:v2", "customer-file-link:v1"); null when the secret is weak. */
+export function deriveAdminKey(sessionSecret: string, label: string): Buffer | null {
+  if (isWeakAdminKey(sessionSecret)) return null;
+  return crypto.createHmac("sha256", sessionSecret.trim()).update(label).digest();
+}
+
+function sign(key: Buffer, payload: string): string {
+  return crypto.createHmac("sha256", key).update(payload).digest("base64url");
+}
+
+function normalEmail(email: string): string {
+  return String(email || "").trim().toLowerCase();
+}
+
+/** A session for one signed-in Google account; null when the key is weak or the email empty. */
+export function createAdminSessionToken(
+  sessionSecret: string,
+  email: string,
+  now = Date.now(),
+): { token: string; expiresAt: number } | null {
+  const key = deriveAdminKey(sessionSecret, SESSION_KEY_LABEL);
+  const address = normalEmail(email);
+  if (!key || !address.includes("@")) return null;
   const expiresAt = now + ADMIN_SESSION_TTL_MS;
-  const payload = `v1.${expiresAt}.${crypto.randomBytes(12).toString("base64url")}`;
-  return { token: `${payload}.${sign(adminSecret, payload)}`, expiresAt };
+  const payload = `v2.${expiresAt}.${Buffer.from(address, "utf8").toString("base64url")}.${crypto.randomBytes(12).toString("base64url")}`;
+  return { token: `${payload}.${sign(key, payload)}`, expiresAt };
 }
 
-/** The token's expiry when it is genuine and current; null otherwise. */
-export function verifyAdminSessionToken(adminSecret: string, token: string, now = Date.now()): number | null {
-  if (!adminSecret || !token) return null;
+/**
+ * The session when the token is genuine, current, and its email is still on the
+ * allow-list; null otherwise (a weak key, a v1 token or an empty allow-list included).
+ */
+export function verifyAdminSessionToken(
+  sessionSecret: string,
+  token: string,
+  allowedEmails: readonly string[],
+  now = Date.now(),
+): AdminSession | null {
+  if (!token) return null;
+  const key = deriveAdminKey(sessionSecret, SESSION_KEY_LABEL);
+  if (!key) return null;
   const parts = token.split(".");
-  if (parts.length !== 4 || parts[0] !== "v1") return null;
+  if (parts.length !== 5 || parts[0] !== "v2") return null;
   const expiresAt = Number(parts[1]);
   if (!Number.isSafeInteger(expiresAt) || expiresAt <= now || expiresAt > now + ADMIN_SESSION_TTL_MS) return null;
-  const expected = Buffer.from(sign(adminSecret, parts.slice(0, 3).join(".")));
-  const actual = Buffer.from(parts[3]);
+  const expected = Buffer.from(sign(key, parts.slice(0, 4).join(".")));
+  const actual = Buffer.from(parts[4]);
   if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) return null;
-  return expiresAt;
+  const email = normalEmail(Buffer.from(parts[2], "base64url").toString("utf8"));
+  if (!email || !allowedEmails.some((allowed) => normalEmail(allowed) === email)) return null;
+  return { email, expiresAt };
 }
 
 export function shouldRenewAdminSession(expiresAt: number, now = Date.now()): boolean {

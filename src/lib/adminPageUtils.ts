@@ -16,11 +16,10 @@ import { docxDocumentXmlToText } from "./docxText";
 /* ----------------------------------------------------------------
    Constants & helpers
    ---------------------------------------------------------------- */
+// Where browsers from before Google-only sign-in kept the old admin password. The panel
+// only deletes these keys now (admin.tsx); remove them one release later.
 const SECRET_KEY = "travel_admin_secret";
 const SECRET_TS_KEY = "travel_admin_secret_ts";
-// Remember the device for 7 days, sliding: the timer resets every time the
-// admin opens/uses the panel, so it only logs out after a full week of no use.
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
 const MAX_PARSE_UPLOAD_BYTES = 850_000;
@@ -257,6 +256,15 @@ function apiErrorMessage(
   const raw = String(data?.message || data?.error || "").trim();
   const wait = formatWaitMs(data?.retry_after_ms);
 
+  if (code === "ai_credits_exhausted" || /credit balance exhausted|insufficient_quota|credit_balance_exhausted|billing_hard_limit/i.test(raw)) {
+    return "OpenAI-ийн кредит дууссан тул AI файл уншиж, санал бэлдэж чадахгүй байна. platform.openai.com → Billing хэсэгт кредит нэмсний дараа дахин оруулна уу.";
+  }
+  if (code === "ai_unauthorized" || /api key rejected|returned 401|returned 403/i.test(raw)) {
+    return "OpenAI түлхүүр хүчингүй байна (OPENAI_API_KEY). Тохиргоог шалгаад дахин оролдоно уу.";
+  }
+  if (code === "file_unreadable") {
+    return raw || fallback;
+  }
   if (code === "rate_limited") {
     return `AI хэсэг түр хязгаарлагдлаа. ${wait} дахин оролдоно уу.`;
   }
@@ -553,6 +561,9 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
       const first = pair[0];
       grouped.push({
         ...first,
+        // Pages of one PDF, not loose pictures: a scanned PDF sent beside a Word program is
+        // its own file, never folded into that program as its price picture.
+        sourceGroup: file.name,
         displayName: `${file.name} (pages ${index + 1}-${index + pair.length})`,
         companions: pair.slice(1).map((page) => ({
           filename: page.filename,
@@ -657,69 +668,53 @@ async function buildTextUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   }));
 }
 
-/** Inflates a single entry from a ZIP (DOCX/XLSX) in the browser. */
-async function readZipEntryInBrowser(
-  buffer: ArrayBuffer,
-  entryName: string,
-): Promise<string | null> {
-  const view = new DataView(buffer);
-  const bytes = new Uint8Array(buffer);
-  const targetBytes = new TextEncoder().encode(entryName);
-  const matches = (start: number) => {
-    for (let i = 0; i < targetBytes.length; i += 1) {
-      if (bytes[start + i] !== targetBytes[i]) return false;
-    }
-    return true;
-  };
-
-  let offset = 0;
-  while (offset + 30 <= bytes.length) {
-    if (view.getUint32(offset, true) !== 0x04034b50) break;
-    const method = view.getUint16(offset + 8, true);
-    const compressedSize = view.getUint32(offset + 18, true);
-    const nameLength = view.getUint16(offset + 26, true);
-    const extraLength = view.getUint16(offset + 28, true);
-    const nameStart = offset + 30;
-    const dataStart = nameStart + nameLength + extraLength;
-    if (compressedSize === 0) break;
-
-    if (nameLength === targetBytes.length && matches(nameStart)) {
-      const data = bytes.subarray(dataStart, dataStart + compressedSize);
-      if (method === 0) return new TextDecoder().decode(data);
-      if (method === 8) {
-        const stream = new Response(
-          new Blob([data]).stream().pipeThrough(
-            new DecompressionStream("deflate-raw"),
-          ),
-        );
-        return await stream.text();
-      }
-      return null;
-    }
-    offset = dataStart + compressedSize;
-  }
-  return null;
-}
+// Pictures smaller than this inside a Word file are logos and icons, not trip photos.
+const MIN_DOCX_PHOTO_BYTES = 15_000;
 
 /**
  * Extracts text from an Office document (Excel .xlsx/.xlsm/.xls, Word .docx)
  * in the browser, then chunks it like plain text. This keeps upload size tied
- * to the *content*, so a heavy Office file (embedded fonts/images) never trips
- * the per-request size wall — only its readable text is sent.
+ * to the *content*, so a heavy Office file (embedded fonts) never trips the
+ * per-request size wall — only its readable text is sent, plus the photos a
+ * Word file embeds, each as its own image upload for the trip's gallery.
+ *
+ * The ZIP is read with JSZip (its central directory): a hand-rolled header walk
+ * used here before stopped at the first zero-size entry, and a Word file that
+ * begins with a folder entry was reported as unreadable (2026-11-04).
  */
 async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   const lower = file.name.trim().toLowerCase();
   const buffer = await file.arrayBuffer();
   let text = "";
+  const photoUnits: ParseUploadUnit[] = [];
 
   if (lower.endsWith(".docx")) {
-    const xml = await readZipEntryInBrowser(buffer, "word/document.xml");
+    const JSZip = (await import("jszip")).default;
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file("word/document.xml")?.async("string");
     if (!xml) {
       throw new Error(
-        `"${file.name}" Word файлыг уншиж чадсангүй. PDF болгож хадгалаад дахин оруулна уу.`,
+        `"${file.name}" Word файл дотор уншигдах текст олдсонгүй (word/document.xml алга). PDF болгож хадгалаад дахин оруулна уу.`,
       );
     }
     text = docxDocumentXmlToText(xml);
+    const media = Object.values(zip.files)
+      .filter((entry) => !entry.dir && /^word\/media\/.+\.(png|jpe?g|webp)$/i.test(entry.name))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    for (const entry of media) {
+      const blob = await entry.async("blob");
+      if (blob.size < MIN_DOCX_PHOTO_BYTES) continue;
+      const cleanName = entry.name.split("/").pop() || entry.name;
+      const imageFile = new File([blob], `${file.name}/${cleanName}`, {
+        type: imageMimeFromName(cleanName),
+        lastModified: file.lastModified,
+      });
+      photoUnits.push({
+        ...(await buildImageUploadUnit(imageFile, DOCX_PHOTO_MAX_BYTES)),
+        displayName: `${file.name} / ${cleanName}`,
+        sourceGroup: file.name,
+      });
+    }
   } else {
     const XLSX = await import("xlsx");
     const workbook = XLSX.read(new Uint8Array(buffer), { type: "array" });
@@ -737,16 +732,69 @@ async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
     throw new Error(`"${file.name}" файлд текст өгөгдөл олдсонгүй.`);
   }
 
-  return chunkText(text).map((chunk, index, chunks) => ({
+  const textUnits = chunkText(text).map((chunk, index, chunks) => ({
     displayName: `${file.name} (${index + 1}/${chunks.length})`,
     filename: `${file.name}.part-${String(index + 1).padStart(3, "0")}-of-${String(chunks.length).padStart(3, "0")}.txt`,
     mimeType: "text/plain",
     dataUrl: textToDataUrl(chunk),
   }));
+  return attachGalleryPhotos(textUnits, photoUnits);
 }
 
-async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {
-  if (file.size <= MAX_PARSE_UPLOAD_BYTES) {
+// A Word file's own pictures travel in the same request as its text (the request body is
+// capped at 4.5 MB): each is kept small, and only as many as fit are sent.
+const DOCX_PHOTO_MAX_BYTES = 280_000;
+const GALLERY_REQUEST_BYTES = MAX_PARSE_UPLOAD_BYTES * 3;
+const MAX_DOCX_GALLERY_PHOTOS = 12;
+
+/**
+ * The document's text units with its embedded photos riding on the first one as
+ * gallery-only companions. The photos are the trip's pictures, not documents: sent on
+ * their own (as they were until 2026-11-05) each one was read by the model as a trip.
+ */
+export function attachGalleryPhotos(textUnits: ParseUploadUnit[], photoUnits: ParseUploadUnit[]): ParseUploadUnit[] {
+  if (!textUnits.length || !photoUnits.length) return textUnits;
+  const [first, ...rest] = textUnits;
+  let bytes = dataUrlDecodedByteLength(first.dataUrl);
+  const companions = [...(first.companions || [])];
+  for (const photo of photoUnits.slice(0, MAX_DOCX_GALLERY_PHOTOS)) {
+    const size = dataUrlDecodedByteLength(photo.dataUrl);
+    if (bytes + size > GALLERY_REQUEST_BYTES) continue;
+    companions.push({ filename: photo.filename, mimeType: photo.mimeType, dataUrl: photo.dataUrl, photoOnly: true });
+    bytes += size;
+  }
+  return [{ ...first, companions }, ...rest];
+}
+
+/**
+ * One document (Word, Excel, text) sent together with loose images — a program and the
+ * picture of its price table — is read as ONE source set, so the result is one trip.
+ * Anything else (several documents, images alone, a set too big for one request) is left
+ * as it was: one request per unit.
+ */
+export function groupDocumentWithImages(units: ParseUploadUnit[]): ParseUploadUnit[] {
+  const isImage = (unit: ParseUploadUnit) => unit.mimeType.startsWith("image/") && !unit.sourceGroup;
+  const images = units.filter(isImage);
+  const documents = units.filter((unit) => !isImage(unit));
+  if (!images.length || images.length > 4 || documents.length !== 1) return units;
+  const [document] = documents;
+  const used = [document, ...(document.companions || [])].reduce((sum, part) => sum + dataUrlDecodedByteLength(part.dataUrl), 0);
+  const added = images.reduce((sum, image) => sum + dataUrlDecodedByteLength(image.dataUrl)
+    + (image.companions || []).reduce((n, part) => n + dataUrlDecodedByteLength(part.dataUrl), 0), 0);
+  if (used + added > GALLERY_REQUEST_BYTES) return units;
+  return [{
+    ...document,
+    sameTrip: true,
+    companions: [
+      ...(document.companions || []),
+      ...images.flatMap((image) => [{ filename: image.filename, mimeType: image.mimeType, dataUrl: image.dataUrl }, ...(image.companions || [])])
+        .map((part) => ({ ...part, evidenceOnly: true })),
+    ],
+  }];
+}
+
+async function buildImageUploadUnit(file: File, maxBytes = MAX_PARSE_UPLOAD_BYTES): Promise<ParseUploadUnit> {
+  if (file.size <= maxBytes) {
     return {
       displayName: file.name,
       filename: file.name,
@@ -772,7 +820,7 @@ async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {
       if (!bestBytes || bytes.byteLength < bestBytes.byteLength) {
         bestBytes = bytes;
       }
-      if (bytes.byteLength <= MAX_PARSE_UPLOAD_BYTES) {
+      if (bytes.byteLength <= maxBytes) {
         return {
           displayName: file.name,
           filename: `${file.name}.compressed.jpg`,
@@ -1750,7 +1798,7 @@ export {
   changedSettingsFields,
   ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, MAX_PARSE_UPLOAD_BYTES,
   HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS,
-  QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS,
+  QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, STATUS_LABELS,
   STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit,
   buildZipImageUploadUnits,
   buildOfficeUploadUnits, buildPdfUploadUnits, buildProposalClarifications,
@@ -1833,19 +1881,36 @@ export function mergeAIProposals(
 }
 
 /** A placeholder proposal for a file/chunk the parser could not read. Pure. */
-export function emptyChunkResult(displayName: string): {
+/**
+ * The result for one upload unit the server could not turn into a proposal. The reason
+ * travels with it: shown as the chat note when nothing else was read, and as a blocker
+ * on the merged proposal when other units did come through. "Recheck this part" with no
+ * cause sent the owner looking for a different file format (2026-11-04).
+ */
+export function emptyChunkResult(displayName: string, reason?: string): {
   proposal: AIProposal;
   requestId: number | null;
 } {
+  const why = reason?.trim() || "AI хариу өгсөнгүй.";
+  const text = `«${displayName}» хэсгийг уншиж чадсангүй: ${why}`;
   return {
     proposal: {
-      summary: `"${displayName}" хэсгийг бүрэн уншиж чадсангүй.`,
+      summary: text,
       needs_confirmation: true,
-      important_reason:
-        "Энэ хэсгийн мэдээлэл хадгалагдаагүй. Бусад уншигдсан файлын үр дүнг үргэлжлүүлэн бэлдлээ.",
-      conflicts: [`"${displayName}" хэсгийг дахин шалгах шаардлагатай.`],
+      important_reason: why,
+      conflicts: [text],
+      conflict_items: [{ text, severity: "blocker", type: "chunk_failed" }],
       actions: [],
     },
     requestId: null,
   };
 }
+
+/** A dynamically imported reader (pdf.js, JSZip, SheetJS) that no longer exists after a deploy. */
+export function isStaleBundleError(error: unknown): boolean {
+  const message = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  return /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(message);
+}
+
+export const STALE_BUNDLE_MESSAGE =
+  "Админ хуудасны шинэ хувилбар гарсан тул файл уншигч ачаалагдсангүй. Хуудсыг дахин ачаалаад (F5) файлаа дахин оруулна уу.";

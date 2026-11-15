@@ -22,8 +22,12 @@ import {
   isPosterLinkedTrip,
   phoneticLatinText,
   resolveTripFromUserMessage,
+  withoutHiddenTrips,
 } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
+import { hasPaymentClaimIntent } from "./reply";
+import { normText } from "./travelTextNorm";
+import { asksAboutOwnBooking } from "./messageNeed";
 import { getEnv } from "./env";
 import {
   classifyError,
@@ -282,7 +286,8 @@ export async function sendTripMediaForReply(
   recordCounter("webhook.trip_media_policy_total", 1, { platform, reason: policy.reason });
   if (!policy.allowed) return;
   try {
-    const tripsForPhotos = await listTrips({ limit: 5000 });
+    // A trip staff hid from customers never sends its photos, PDF or page link (2026-11-06).
+    const tripsForPhotos = withoutHiddenTrips(await listTrips({ limit: 5000 }));
     const activeTrips = tripsForPhotos.filter((trip) => trip.status === "active");
     const mediaResolution = resolveTripFromUserMessage(userText || replyText, activeTrips, {
       allowLooseFallback: false,
@@ -563,13 +568,34 @@ const BOOKING_INTENT_KEYWORDS_PHONETIC = Array.from(
   new Set(BOOKING_INTENT_KEYWORDS.map((keyword) => phoneticLatinText(keyword))),
 ).filter(Boolean);
 
+// A booking word inside a question ABOUT a booking is not a request to make one: its status, a cancellation or
+// change, a refund, its terms, a payment already made, a hypothetical. "захиалгаа цуцлах боломжтой юу" and
+// "миний захиалга баталгаажсан уу" were answered with "Утасны дугаараа бичнэ үү." and no lead (found 2026-11-06).
+const BOOKING_CANCEL_OR_CHANGE = /цуцл|цуцал|буцаан\s+(?:ав|олго)\p{L}*|буцаалт|мөнгө\s+буцаа|өөрчил|өөрчл|хойшлуул|cancel|refund|cuclah|bucaan|bucaalt/u;
+const BOOKING_STATUS = /баталгаажс|баталгаажл|баталгаажуулс|юу\s+болсон|яасан|хаана\s+явна|batalgaajs|batalgaajl/u;
+const BOOKING_HYPOTHETICAL = /захиалбал|захиалвал|захиалсан\s+бол|захиалахад|zahialbal|zahialwal|zahialahad/u;
+const BOOKING_TERMS_WORD = /урьдчилгаа|нөхцөл|бичиг\s*баримт|хураамж|төлбөр|баталгаа|uridchilgaa|nuhtsul|tulbur/u;
+const ASKING = /[?？]|(?:^|\s)(?:уу|үү|юу|юү|вэ|бэ|яаж|хэрхэн|ямар|хэд|хэзээ|uu|yu|ve|yaaj|herhen|yamar|hed)(?=\s|$)/u;
+
+/** True when the message asks ABOUT a booking (status, cancel, refund, terms, "paid and asking", a hypothetical). */
+export function isQuestionAboutBooking(text: string): boolean {
+  if (hasPaymentClaimIntent(text)) return true;
+  const norm = normText(text);
+  if (BOOKING_CANCEL_OR_CHANGE.test(norm) || BOOKING_STATUS.test(norm) || BOOKING_HYPOTHETICAL.test(norm)) return true;
+  // A booking already made, in any script or spelling: "zahialgaa tsutslah uu", "Миний захиалсан аялал хэзээ гарах вэ"
+  // (both got "Утасны дугаараа бичнэ үү.", 2026-11-11). The need gate reads them as existing_booking.
+  if (asksAboutOwnBooking(text)) return true;
+  // "урьдчилгаа яаж захиалга өгдөг вэ": a question about how booking works, not "book it".
+  return BOOKING_TERMS_WORD.test(norm) && ASKING.test(norm);
+}
+
 export function isBookingIntent(text: string): boolean {
   const normalized = normalizeLowerText(text);
   if (!normalized) return false;
-  if (BOOKING_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword))) return true;
   const phonetic = phoneticLatinText(text);
-  if (!phonetic) return false;
-  return BOOKING_INTENT_KEYWORDS_PHONETIC.some((keyword) => phonetic.includes(keyword));
+  const keywordHit = BOOKING_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword))
+    || (Boolean(phonetic) && BOOKING_INTENT_KEYWORDS_PHONETIC.some((keyword) => phonetic.includes(keyword)));
+  return keywordHit && !isQuestionAboutBooking(text);
 }
 // Mongolian mobile numbers are 8 digits starting with 6, 8, or 9. A 7-prefix
 // 8-digit number is an Ulaanbaatar LANDLINE (e.g. the agency's own 7713-6633),

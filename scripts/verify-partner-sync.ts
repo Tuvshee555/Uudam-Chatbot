@@ -39,7 +39,7 @@ async function main() {
       const poster = (await source.query("SELECT data FROM poster_trips WHERE id=$1", [config.posterId])).rows[0]?.data;
       const site = (await website.query('SELECT * FROM "Trip" WHERE "sourceTripId"=$1', [config.tripId])).rows[0];
       if (!trip || !poster || !site) throw new Error("Missing connected trip/poster/website record");
-      const fields = partnerTripFields(tour, poster);
+      const fields = partnerTripFields(tour, poster, trip.extra);
       const extra = normalizeExtraPatch(fields.extra ?? {});
       const errors: string[] = [];
       let checks = 0;

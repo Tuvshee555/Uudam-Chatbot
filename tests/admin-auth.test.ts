@@ -15,7 +15,7 @@ test("pickFirst handles array and scalar headers safely", () => {
   assert.equal(pickFirst(undefined), "");
 });
 
-test("metrics rejects a wrong secret, then rate-limits repeated attempts", async () => {
+test("metrics rejects a wrong token, then rate-limits repeated attempts", async () => {
   const { applyTestEnv } = await import("./helpers/env");
   applyTestEnv({ ADMIN_AUTH_RATE_LIMIT: "3" });
   const envModule = await import("../src/lib/env");
@@ -23,12 +23,13 @@ test("metrics rejects a wrong secret, then rate-limits repeated attempts", async
   const { resetRateLimitForTests } = await import("../src/lib/rateLimit");
   resetRateLimitForTests();
   const { default: handler } = await import("../src/pages/api/metrics");
+  const { adminBearerHeaders } = await import("./helpers/adminAuth");
 
-  function call(secret: string) {
+  function call(token: string) {
     const req = {
       method: "GET",
       url: "/api/metrics",
-      headers: { "x-admin-secret": secret },
+      headers: adminBearerHeaders(token),
       query: {},
       socket: { remoteAddress: "203.0.113.7" },
     } as unknown as import("next").NextApiRequest;
@@ -43,7 +44,7 @@ test("metrics rejects a wrong secret, then rate-limits repeated attempts", async
     return { res, done: handler(req, res as never) };
   }
 
-  // A wrong secret is unauthorized, not a generic error...
+  // A wrong token is unauthorized, not a generic error...
   const first = call("nope");
   await first.done;
   assert.equal(first.res.statusCode, 401);
@@ -55,9 +56,10 @@ test("metrics rejects a wrong secret, then rate-limits repeated attempts", async
   assert.equal(blocked.res.statusCode, 429);
   assert.equal((blocked.res.body as { error: string }).error, "too_many_attempts");
 
-  // The correct secret still gets the snapshot.
+  // The correct read-only token still gets the snapshot.
   resetRateLimitForTests();
-  const ok = call("test-admin-secret");
+  const { TEST_ADMIN_API_TOKEN } = await import("./helpers/env");
+  const ok = call(TEST_ADMIN_API_TOKEN);
   await ok.done;
   assert.equal(ok.res.statusCode, 200);
   assert.ok((ok.res.body as { metrics?: unknown }).metrics);

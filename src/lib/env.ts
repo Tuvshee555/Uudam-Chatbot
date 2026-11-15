@@ -1,4 +1,6 @@
 import { logError, logStartupDiagnostics } from "./observability";
+import { parseAllowedEmails } from "./adminGoogleAuth";
+import { isWeakAdminKey } from "./adminSession";
 
 export type ValidatedEnv = {
   openaiApiKey: string;
@@ -26,9 +28,17 @@ export type ValidatedEnv = {
   echoHumanAppIds: string[];
   /** Invalid migration settings that were IGNORED (fail-safe); the build preflight fails on any. */
   metaMigrationIssues: string[];
-  adminSecret: string;
-  adminOpenAccess: boolean;
-  allowAdminSecretQuery: boolean;
+  /** ADMIN_SESSION_SECRET: signs admin session cookies and customer-file links. Nobody types it.
+   * Missing ("" here), short or guessable = admin sign-in off (adminSession.ts) while the bot,
+   * crons and website sync keep answering; a production build stops at preflight instead. */
+  adminSessionSecret: string;
+  /** ADMIN_API_TOKEN (optional): `Authorization: Bearer` read-only machine access, GET/HEAD only. */
+  adminApiToken: string | null;
+  /** "Sign in with Google" for the admin panel, the only way in: on only with a client id, secret and allowed emails. */
+  googleClientId: string | null;
+  googleClientSecret: string | null;
+  adminGoogleEmails: string[];
+  googleSignInEnabled: boolean;
   trustProxyHeaders: boolean;
   neonDatabaseUrl: string | null;
   redisStateEnabled: boolean;
@@ -63,12 +73,6 @@ export type ValidatedEnv = {
   metaSubscribeMaxRetries: number;
   metaRetryBaseDelayMs: number;
   webhookMaxPendingConversations: number;
-  staffNotifyPsids: string[];
-  // Optional Telegram fallback for staff lead alerts. Telegram has no 24h
-  // messaging window, so it delivers even when the Messenger RESPONSE-type
-  // staff ping is blocked by Meta's policy. Off unless both are set.
-  telegramBotToken: string | null;
-  telegramStaffChatIds: string[];
   googleDriveSyncEnabled: boolean;
   googleDriveFolderId: string | null;
   googleDriveServiceAccountEmail: string | null;
@@ -443,20 +447,22 @@ export function getEnv(): ValidatedEnv {
   const echoHumanAppIds = (readOptionalString("ECHO_HUMAN_APP_IDS", source) || "")
     .split(",").map((id) => id.trim()).filter(Boolean);
   // Keep the singular fields populated (back-compat consumers, IG fallback, tests). The roster
-  // (NEXT override included) wins for the primary page's token, so staff alerts and the webhook
-  // fallback token follow the cutover; the legacy var only covers a page outside the roster.
+  // (NEXT override included) wins for the primary page's token, so the webhook fallback token
+  // follows the cutover; the legacy var only covers a page outside the roster.
   const primaryPage = facebookPages[0];
   const facebookPageId = legacyFacebookPageId || primaryPage?.pageId || "";
   const tokenPage =
     facebookPages.find((page) => page.pageId === facebookPageId)?.token ||
     legacyTokenPage || primaryPage?.token || "";
-  const adminSecret = readRequiredString("ADMIN_SECRET", source, errors);
-  const adminOpenAccess = readBoolean(
-    "ADMIN_OPEN_ACCESS",
-    source,
-    false,
-    errors,
-  );
+  // Optional at runtime ON PURPOSE: a missing key must fail closed for the admin only (it is
+  // "weak", so no session or customer-file link is issued or accepted, and readiness says
+  // why), never throw here and take the Messenger webhook, crons and website sync down with it.
+  const adminSessionSecret = readOptionalString("ADMIN_SESSION_SECRET", source) ?? "";
+  const adminApiToken = readOptionalString("ADMIN_API_TOKEN", source);
+  const googleClientId = readOptionalString("GOOGLE_CLIENT_ID", source);
+  const googleClientSecret = readOptionalString("GOOGLE_CLIENT_SECRET", source);
+  const adminGoogleEmails = parseAllowedEmails(readOptionalString("ADMIN_GOOGLE_EMAILS", source));
+  const googleSignInEnabled = Boolean(googleClientId && googleClientSecret && adminGoogleEmails.length);
   const neonDatabaseUrl =
     readOptionalString("NEON_DATABASE_URL", source) ||
     readOptionalString("DATABASE_URL", source);
@@ -465,12 +471,6 @@ export function getEnv(): ValidatedEnv {
     "TRUST_PROXY_HEADERS",
     source,
     Boolean(source.VERCEL),
-    errors,
-  );
-  const allowAdminSecretQuery = readBoolean(
-    "ALLOW_ADMIN_SECRET_QUERY",
-    source,
-    false,
     errors,
   );
   const redisConfigured = Boolean(
@@ -703,17 +703,6 @@ export function getEnv(): ValidatedEnv {
     100_000,
     errors,
   );
-  const staffNotifyPsids = (readOptionalString("STAFF_NOTIFY_PSIDS", source) || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const telegramBotToken = readOptionalString("TELEGRAM_BOT_TOKEN", source);
-  // TELEGRAM_CHAT_ID is the name Production has used since the start (the partner-sync notices
-  // went there until 2026-10-28); TELEGRAM_STAFF_CHAT_IDS, when set, takes precedence.
-  const telegramStaffChatIds = (readOptionalString("TELEGRAM_STAFF_CHAT_IDS", source) || readOptionalString("TELEGRAM_CHAT_ID", source) || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
   const googleDriveSyncEnabled = readBoolean(
     "GOOGLE_DRIVE_SYNC_ENABLED",
     source,
@@ -770,11 +759,6 @@ export function getEnv(): ValidatedEnv {
       "REDIS_URL is required when any REDIS_*_ENABLED feature flag is true",
     );
   }
-  if (adminOpenAccess && source.NODE_ENV === "production") {
-    errors.push(
-      "ADMIN_OPEN_ACCESS cannot be true in production. Set ADMIN_OPEN_ACCESS=false and require authenticated admin access.",
-    );
-  }
   if (
     googleDriveSyncEnabled &&
     (!googleDriveFolderId ||
@@ -809,9 +793,12 @@ export function getEnv(): ValidatedEnv {
     echoTakeoverMode,
     echoHumanAppIds,
     metaMigrationIssues,
-    adminSecret,
-    adminOpenAccess,
-    allowAdminSecretQuery,
+    adminSessionSecret,
+    adminApiToken,
+    googleClientId,
+    googleClientSecret,
+    adminGoogleEmails,
+    googleSignInEnabled,
     trustProxyHeaders,
     neonDatabaseUrl,
     redisStateEnabled,
@@ -846,9 +833,6 @@ export function getEnv(): ValidatedEnv {
     metaSubscribeMaxRetries,
     metaRetryBaseDelayMs,
     webhookMaxPendingConversations,
-    staffNotifyPsids,
-    telegramBotToken,
-    telegramStaffChatIds,
     googleDriveSyncEnabled,
     googleDriveFolderId,
     googleDriveServiceAccountEmail,
@@ -872,7 +856,6 @@ export function getEnv(): ValidatedEnv {
   }
   logStartupDiagnostics("env", {
     trustProxyHeaders: cachedEnv.trustProxyHeaders,
-    allowAdminSecretQuery: cachedEnv.allowAdminSecretQuery,
     facebookPageCount: cachedEnv.facebookPages.length,
     facebookPageIds: cachedEnv.facebookPages.map((p) => p.pageId),
     // Meta-app migration state (names and flags only, never values).
@@ -922,7 +905,11 @@ export function getEnv(): ValidatedEnv {
       vercel: Boolean(source.VERCEL),
       vercelEnv: source.VERCEL_ENV || null,
     },
-    adminOpenAccess: cachedEnv.adminOpenAccess,
+    // Admin sign-in state (flags and counts only, never values or addresses).
+    adminSessionSecretStrong: !isWeakAdminKey(cachedEnv.adminSessionSecret),
+    adminApiTokenSet: Boolean(cachedEnv.adminApiToken),
+    googleSignInEnabled: cachedEnv.googleSignInEnabled,
+    adminGoogleEmailCount: cachedEnv.adminGoogleEmails.length,
     neonDbConfigured: Boolean(cachedEnv.neonDatabaseUrl),
   });
 

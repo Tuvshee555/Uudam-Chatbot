@@ -69,7 +69,9 @@ export async function createQuickProposal(request: QuickActionRequest): Promise<
        VALUES ($1, $2::jsonb, $3::text[], TRUE, 'pending') RETURNING id`,
       [`[Товч үйлдэл] ${built.proposal.summary}`, JSON.stringify(built.proposal), []],
     );
-    requestId = inserted?.rows?.[0]?.id ?? null;
+    // BIGSERIAL ids arrive as strings; the page only trusts a number (travelAI.changeRequestId).
+    const id = Number(inserted?.rows?.[0]?.id);
+    requestId = Number.isSafeInteger(id) && id > 0 ? id : null;
   } catch {
     // The proposal can still be applied directly from the page.
   }

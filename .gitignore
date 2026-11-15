@@ -53,3 +53,7 @@ next-env.d.ts
 
 # scratch dir — QA logs, sample exports, never committed
 tmp/
+
+# local data: trip/price backups and exports (real customer chats) — the repo is public, never commit
+backups/
+outputs/

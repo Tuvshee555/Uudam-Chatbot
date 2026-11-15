@@ -1,5 +1,5 @@
 import type { TravelTrip } from "./travelTypes";
-import { isGenericRouteToken, normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
+import { keywordTokens, normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
 import { stripTripNamesForIntent } from "./customerTurn";
 
 type Day = { day: number; title: string; description: string };
@@ -34,16 +34,17 @@ function firstSentence(text: string, max = 220): string {
  * answer is the day that goes there. The bot used to re-send the trip card,
  * which shows only the first days, so the customer concluded the city was
  * missing and the card came back a second time. Only place words from the
- * trip's own title count, so generic words ("аялал", "хөтөлбөр") never match.
+ * trip's own title count, so generic words ("аялал", "хөтөлбөр") never match — nor
+ * the home city, which flight titles name ("<улс> – Улаанбаатар - <хот> нислэг") and
+ * every first and last day mentions: "…Улаанбаатар орох…" is not a question about a
+ * place on the trip (live, 2026-11-04).
  */
 export function buildPlaceDaysReply(trip: TravelTrip, turn: string): string | null {
   if (!ASKS_ABOUT_PLACE.test(turn)) return null;
-  // Only places: kind-of-trip words in the title ("шууд нислэгтэй") are not places, and the trip's
-  // own full name typed to identify it is not a question about its places. "velmor shuud
+  // The trip's own full name typed to identify it is not a question about its places: "velmor shuud
   // nislegtei 3 dahi udur…" listed the flight days (held-out 2026-11-02).
   turn = stripTripNamesForIntent(turn, [trip]);
-  const titlePlaces = new Set(normText(trip.route_name).split(/[^\p{L}]+/u)
-    .filter((word) => word.length >= 4 && !isGenericRouteToken(word)).map(phoneticLatinText));
+  const titlePlaces = new Set(keywordTokens(trip.route_name).filter((word) => word.length >= 4).map(phoneticLatinText));
   const asked = phoneticWords(turn).filter((word) => [...titlePlaces].some((place) => phoneticTokenMatches(word, place)));
   if (!asked.length) return null;
   const days = itineraryDays(trip).filter((day) =>

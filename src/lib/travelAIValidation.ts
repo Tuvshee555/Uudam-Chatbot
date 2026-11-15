@@ -34,6 +34,30 @@ import {
   isCompleteCleanAction,
 } from "./travelDb";
 import { filterFutureDepartureDates } from "./travelDates";
+import { validateTripDataChange } from "./tripDataValidation";
+import type { TripFactInput } from "./tripDataValidation";
+import { sharedDistinctive } from "./tripNameTokens";
+import { isDamageKind, markTripDamage } from "./tripDamage";
+import {
+  dateStateProblem,
+  dateStatusOf,
+  expandFareChangeAll,
+  fareChangeOf,
+  isTripEditVerb,
+  partnerEditProblem,
+  planTripEdit,
+  sanitizeTripEditAction,
+} from "./tripActionPlan";
+
+// The agent track calls these before it proposes (B8: a day not on the website is refused here,
+// in Mongolian, instead of being promised and then failing at save).
+export { dateStateProblem, expandFareChangeAll, partnerEditProblem, planTripEdit } from "./tripActionPlan";
+
+/** The trip as it would be after `fields` (extra merged one top-level key at a time, as patchTrip does). */
+function tripAfter(trip: TravelTrip, fields: AITripAction["fields"]): TripFactInput {
+  const extra = { ...trip.extra, ...((fields?.extra as Record<string, unknown> | undefined) || {}) };
+  return { ...trip, ...(fields || {}), extra } as unknown as TripFactInput;
+}
 
 export function instructionForbidsTripCreation(instruction: string): boolean {
   const text = instruction.toLowerCase().replace(/\s+/g, " ").trim();
@@ -191,6 +215,10 @@ export function validateAIChangeProposal(
       !isDocumentedMealExceptionConflict(conflict),
   );
   const sanitizedActions: AITripAction[] = [];
+  const sameNameNotes: ConflictItem[] = [];
+  /** What the admin should read before saving a planned edit (fare slips, a poster that cannot follow). */
+  const planNotes: ConflictItem[] = [];
+  const now = options?.now ?? new Date();
 
   for (const rawAction of normalized.actions) {
     if (!rawAction || typeof rawAction !== "object") continue;
@@ -226,18 +254,102 @@ export function validateAIChangeProposal(
       );
     }
 
-    if (verb !== "upsert" && verb !== "patch" && verb !== "cancel") {
+    // A fare rule over many trips is never applied as it is: one patch per trip, each with its
+    // own version, partner and non-tugrik trips left out with the reason on the card.
+    if (verb === "fare_change_all") {
+      const change = fareChangeOf(rawAction.change);
+      if (!change) {
+        blockingConflicts.push("Олон аяллын үнийн өөрчлөлт тодорхойгүй байна (шинэ үнэ эсвэл +/− дүн).");
+        continue;
+      }
+      const filter = (rawAction.filter && typeof rawAction.filter === "object" ? rawAction.filter : {}) as { trip_ids?: unknown; all_active?: unknown };
+      const ids = Array.isArray(filter.trip_ids) ? filter.trip_ids.map((id) => String(id || "").trim()).filter(Boolean) : tripId ? [tripId] : [];
+      const expansion = expandFareChangeAll(existingTrips, change, { trip_ids: ids, all_active: filter.all_active === true });
+      for (const skip of expansion.skipped) planNotes.push({ text: `«${skip.route_name}» алгасагдсан: ${skip.reason}`, severity: "warning", type: "fare_change_skipped", data: { trip_id: skip.trip_id } });
+      for (const note of expansion.notes) planNotes.push({ text: note, severity: "info", type: "fare_note" });
+      if (!expansion.actions.length) {
+        blockingConflicts.push(ids.length || filter.all_active === true ? "Үнэ нь өөрчлөгдөх аялал алга." : "Аль аяллуудын үнийг өөрчлөхийг заагаагүй байна.");
+        continue;
+      }
+      sanitizedActions.push(...expansion.actions.map((action) => ({ ...action, fields: cleanFields(action.fields || {}) })));
+      continue;
+    }
+
+    if (
+      verb !== "upsert" && verb !== "patch" && verb !== "cancel" && verb !== "set_date_state" && verb !== "delete" &&
+      !isTripEditVerb(verb)
+    ) {
       blockingConflicts.push(`${label}: unsupported action "${verb || "unknown"}".`);
       continue;
     }
 
     if (
-      (verb === "patch" || verb === "cancel") &&
+      (verb === "patch" || verb === "cancel" || verb === "set_date_state" || verb === "delete" || isTripEditVerb(verb)) &&
       tripId &&
       !existingTrips.some((trip) => trip.id === tripId)
     ) {
       blockingConflicts.push(`${label}: target trip was not found.`);
       continue;
+    }
+
+    // One departure day's state, or one exact part of one trip (a date's price, the hidden flag,
+    // a program day, the age bands, a photo): the trip must be known (by id or an unambiguous
+    // name) and the change is planned here on the trip as it is, so whatever apply would refuse
+    // is refused now with the reason.
+    if (verb === "set_date_state" || isTripEditVerb(verb)) {
+      if (!tripId && !match.route_name && !match.operator_name) {
+        blockingConflicts.push(`${label}: аль аяллыг өөрчлөхийг заагаагүй байна.`);
+        continue;
+      }
+      if (!tripId && matchingTrips.length === 0) {
+        blockingConflicts.push(`«${match.route_name || routeName}» гэдэг нэртэй аялал бүртгэлд алга байна.`);
+        continue;
+      }
+      if (!tripId && matchingTrips.length > 1) {
+        blockingConflicts.push(`«${match.route_name || routeName}» нэртэй төстэй ${matchingTrips.length} аялал байгаа тул алийг нь өөрчлөхийг таамаглаж чадсангүй.`);
+        continue;
+      }
+      const trip = (tripId ? existingTrips.find((entry) => entry.id === tripId) : matchingTrips[0]) as TravelTrip;
+      const action = sanitizeTripEditAction({ ...rawAction, action: verb as AITripAction["action"], trip_id: trip.id });
+      delete action.match;
+      if (verb === "set_date_state") {
+        action.date = normalizeDateText(String(rawAction.date || ""));
+        const problem = dateStateProblem(trip, action.date, rawAction.state, now);
+        if (problem) {
+          blockingConflicts.push(problem);
+          continue;
+        }
+        // The day as this proposal saw it: apply refuses the change once the day shows something
+        // else (a seat button changed it), instead of overwriting that later change.
+        if (!action.observed_status) {
+          const seen = dateStatusOf(trip, action.date);
+          if (seen) action.observed_status = seen;
+        }
+      } else {
+        const planned = planTripEdit(trip, action, null, now);
+        if (!planned.ok) {
+          blockingConflicts.push(planned.reason.includes(trip.route_name) ? planned.reason : `«${trip.route_name}»: ${planned.reason}`);
+          continue;
+        }
+        const introduced = validateTripDataChange(tripAfter(trip, planned.plan.fields), trip as unknown as TripFactInput, now).introducedErrors;
+        if (introduced.length) {
+          blockingConflicts.push(...introduced.map((issue) => `«${trip.route_name}»: ${issue.message}`));
+          continue;
+        }
+        for (const warning of planned.plan.warnings) planNotes.push({ text: `«${trip.route_name}»: ${warning}`, severity: "warning", type: "plan_warning" });
+      }
+      sanitizedActions.push(action);
+      continue;
+    }
+
+    // A partner-synced trip's fares, dates and seats come from the partner every 30 minutes.
+    const knownTarget = tripId ? existingTrips.find((trip) => trip.id === tripId) : matchingTrips.length === 1 ? matchingTrips[0] : undefined;
+    if (knownTarget && (verb === "patch" || verb === "upsert")) {
+      const problem = partnerEditProblem(knownTarget, { action: "patch", fields: cleanedFields });
+      if (problem) {
+        blockingConflicts.push(problem);
+        continue;
+      }
     }
 
     if (!isReasonableMoney(cleanedFields.adult_price)) {
@@ -321,7 +433,7 @@ export function validateAIChangeProposal(
       }
     }
 
-    if ((verb === "patch" || verb === "cancel") && !tripId && !match.route_name && !match.operator_name) {
+    if ((verb === "patch" || verb === "cancel" || verb === "delete") && !tripId && !match.route_name && !match.operator_name) {
       blockingConflicts.push(`${label}: update/cancel actions must include trip_id or match fields.`);
       continue;
     }
@@ -354,16 +466,32 @@ export function validateAIChangeProposal(
       }
 
       if (!tripId && !match.route_name && fieldsRoute && fieldsOperator) {
-        const duplicateTrips = findTripMatches(existingTrips, fieldsOperator, fieldsRoute);
+        // An archived trip of the same name is not a duplicate: a new trip is always a new
+        // record (owner's rule), so only live trips are compared here.
+        // Only a trip sharing a place is the same name: «Шинэ жилийн Хөх хотын аялал» and «ХАЙНАН … ШИНЭ
+        // ЖИЛИЙН АЯЛАЛ» share only generic words (tripNameTokens.ts, 2026-11-14).
+        const duplicateTrips = findTripMatches(existingTrips.filter((trip) => trip.status !== "archived"), fieldsOperator, fieldsRoute)
+          .filter((trip) => sharedDistinctive(trip.route_name, fieldsRoute) > 0);
         if (duplicateTrips.length > 0) {
-          confirmationConflicts.push(
-            `${label}: an existing trip already matches this operator and route, so review before creating a duplicate.`,
-          );
+          const program = (cleanedFields.extra as Record<string, unknown> | undefined)?.itinerary_days;
+          if (Array.isArray(program) && program.length >= 2) {
+            // A whole program read from a file is a new trip (see keepFileProgramsNew): said in
+            // the review, in Mongolian, without a question that would cost another model call.
+            sameNameNotes.push({
+              text: `«${fieldsRoute}»: ижил нэртэй аялал бүртгэлд аль хэдийн байна («${duplicateTrips[0].route_name}»). Хадгалбал ШИНЭ аялал болж нэмэгдэнэ, одоо байгаа аялал өөрчлөгдөхгүй. Давхардуулахгүй бол «Болих» дарна уу.`,
+              severity: "warning",
+              type: "same_name_exists",
+            });
+          } else {
+            confirmationConflicts.push(
+              `${label}: an existing trip already matches this operator and route, so review before creating a duplicate.`,
+            );
+          }
         }
       }
     }
 
-    if ((verb === "patch" || verb === "cancel" || verb === "upsert") && !tripId && (match.route_name || match.operator_name)) {
+    if ((verb === "patch" || verb === "cancel" || verb === "delete" || verb === "upsert") && !tripId && (match.route_name || match.operator_name)) {
       const askedName = (match.route_name || routeName || "").trim();
       const askedTag = askedName ? `«${askedName}» ` : "";
       if (matchingTrips.length === 0 && verb !== "upsert") {
@@ -422,6 +550,9 @@ export function validateAIChangeProposal(
       ...(tripId ? { trip_id: tripId } : {}),
       ...(match.operator_name || match.route_name ? { match } : {}),
       ...(Object.keys(cleanedFields).length > 0 ? { fields: cleanedFields } : {}),
+      ...(typeof rawAction.expected_updated_at === "string" && rawAction.expected_updated_at ? { expected_updated_at: rawAction.expected_updated_at } : {}),
+      ...(typeof rawAction.summary === "string" && rawAction.summary.trim() ? { summary: rawAction.summary.trim().slice(0, 500) } : {}),
+      ...(Array.isArray(rawAction.acknowledged_damage) ? { acknowledged_damage: rawAction.acknowledged_damage.filter(isDamageKind) } : {}),
     };
     sanitizedActions.push(sanitizedAction);
   }
@@ -475,8 +606,16 @@ export function validateAIChangeProposal(
   const newBlockingItems: ConflictItem[] = blockingConflicts
     .filter((text) => !existingItemTexts.has(text))
     .map((text) => ({ text, severity: "blocker" as ConflictSeverity, type: "validation" }));
-  const finalConflictItems: ConflictItem[] = [...filteredItems, ...newBlockingItems];
+  const finalConflictItems: ConflictItem[] = [
+    ...filteredItems.filter((item) => item.type !== "same_name_exists"),
+    ...sameNameNotes.filter((note, index, all) => all.findIndex((other) => other.text === note.text) === index),
+    ...planNotes.filter((note, index, all) => all.findIndex((other) => other.text === note.text) === index
+      && !filteredItems.some((item) => item.text === note.text)),
+    ...newBlockingItems,
+  ];
 
+  // What a change would break on a saved trip is marked for the card; save checks it again (tripDamage.ts).
+  markTripDamage(finalActions, existingTrips, options?.now);
   const finalProposal: AIChangeProposal = {
     ...normalized,
     needs_confirmation: needsConfirmation,

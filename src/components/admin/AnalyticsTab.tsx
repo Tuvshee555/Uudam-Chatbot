@@ -3,6 +3,7 @@ import { Alert, Badge, Button, Card, Icons, Skeleton, cx } from "@/components/ui
 import { ADMIN_ISSUE_LABELS, type AnalyticsResponse, type CoverageTopic, type OverviewData, type SilenceReason } from "@/lib/adminAnalyticsTypes";
 import type { TabKey } from "@/lib/adminTypes";
 import { TabHeader } from "./AdminShared";
+import { PartnerWatchCard } from "./PartnerWatchCard";
 import { QualityPanel } from "./QualityPanel";
 
 /**
@@ -237,10 +238,13 @@ export function AnalyticsTab({
   apiFetch,
   onNavigate,
   onUnauthorized,
+  onAskAssistant,
 }: {
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
   onNavigate: (tab: TabKey) => void;
   onUnauthorized?: () => void;
+  /** Opens the AI туслах with this instruction in the box (the admin reviews and sends it). */
+  onAskAssistant?: (instruction: string) => void;
 }) {
   const [snapshot, setSnapshot] = useState<AnalyticsResponse | null>(null);
   const [periodDays, setPeriodDays] = useState<7 | 30>(7);
@@ -315,7 +319,7 @@ export function AnalyticsTab({
 
       {error && <Alert tone="danger">{error}{snapshot && " Доор хамгийн сүүлд ачаалсан мэдээллийг харуулж байна."}</Alert>}
       {Boolean(snapshot?.warnings?.length) && <Alert tone="warning">Тоймын зарим хэсгийг ачаалж чадсангүй. Шинэчилнэ үү.</Alert>}
-      {overview && overview.aiOutages24h > 0 && (
+      {overview && overview.aiOutages24h > 0 && !overview.aiRecovered && (
         <Alert tone="danger">
           Сүүлийн 24 цагт AI үйлчилгээ {number(overview.aiOutages24h)} удаа тасарч, бот хариулж чадаагүй
           {overview.lastAiOutageAt ? ` (сүүлд ${snapshotTime(overview.lastAiOutageAt)})` : ""}. OpenAI-ийн төлбөр, кредитийг шалгана уу.
@@ -345,6 +349,8 @@ export function AnalyticsTab({
           ) : <EmptyNote>Энэ хугацааны тоог ачаалж чадсангүй. Шинэчилнэ үү.</EmptyNote>}
 
           <QualityPanel apiFetch={apiFetch} />
+
+          <PartnerWatchCard apiFetch={apiFetch} onAskAssistant={onAskAssistant} refresh={refresh} />
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
             <Card className="flex min-w-0 flex-col p-4 sm:p-5">

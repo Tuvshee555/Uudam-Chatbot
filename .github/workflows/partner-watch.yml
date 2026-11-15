@@ -1,0 +1,30 @@
+name: Partner page watch
+
+on:
+  schedule:
+    - cron: '13 */6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: partner-page-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check trips made from partner pages against those pages
+        env:
+          PARTNER_SYNC_URL: ${{ vars.PARTNER_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.PARTNER_SYNC_CRON_SECRET }}
+        run: |
+          test -n "$PARTNER_SYNC_URL" && test -n "$CRON_SECRET"
+          URL="${PARTNER_SYNC_URL%/api/cron/partner-sync}/api/cron/partner-watch"
+          curl --fail-with-body --silent --show-error --retry 1 --retry-delay 20 \
+            --max-time 310 --request POST \
+            --header "Authorization: Bearer $CRON_SECRET" "$URL" \
+            --output "$RUNNER_TEMP/partner-watch.json"
+          jq -e '.ok == true' "$RUNNER_TEMP/partner-watch.json"
+          jq '{ok, results}' "$RUNNER_TEMP/partner-watch.json"

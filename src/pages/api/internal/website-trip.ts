@@ -1,5 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getEnv } from "@/lib/env";
 import { safeSecretCompare } from "@/lib/adminAuth";
 import { logError, logWarn } from "@/lib/observability";
 import { deleteTrip, getTripById, patchTrip, upsertTrip } from "@/lib/travelDb";
@@ -15,7 +14,7 @@ import { TripDataValidationError } from "@/lib/tripDataValidation";
 
 /**
  * A website delivery carries the trip, its baseline and their departures.
- * Next's default 1 MB body limit refused the 2026-10-26 Санья edit (HTTP 413)
+ * Next's default 1 MB body limit refused a 2026-10-26 partner-trip edit (HTTP 413)
  * on every attempt; the website now sends only what this route reads, and
  * this limit (under Vercel's 4.5 MB request cap) keeps a large trip in reach.
  */
@@ -38,7 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).end();
   }
 
-  const expected = process.env.WEBSITE_TRIP_SYNC_SECRET || getEnv().adminSecret;
+  // Its own secret only: unset = every call refused (no fallback to an admin credential).
+  const expected = process.env.WEBSITE_TRIP_SYNC_SECRET || "";
   const provided = typeof req.headers["x-trip-sync-secret"] === "string"
     ? req.headers["x-trip-sync-secret"]
     : "";

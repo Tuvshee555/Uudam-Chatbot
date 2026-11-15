@@ -16,9 +16,9 @@ jobs:
       TOKEN_PAGE: ci-page-token
       FACEBOOK_PAGE_ID: "1234567890"
       META_APP_SECRET: ci-meta-secret
-      ADMIN_SECRET: ci-admin-secret
+      # Dummy, CI only: a 32+ character admin session key (env validation requires one).
+      ADMIN_SESSION_SECRET: ci-session-key-6b2f8d4a0e7c3f9b-1d5a9e3c7f2b6d0a
       TRUST_PROXY_HEADERS: "true"
-      ALLOW_ADMIN_SECRET_QUERY: "false"
       REDIS_STATE_ENABLED: "false"
       REDIS_RATE_LIMIT_ENABLED: "false"
       REDIS_REPLAY_ENABLED: "false"
@@ -73,6 +73,11 @@ jobs:
           # connects: preflight only reads the config.
           DATABASE_URL: "postgres://user:pass@example.com/db"
           CRON_SECRET: ci-cron-secret
+          # The admin is Google-only, so a production-shaped config has Google sign-in for at
+          # least two accounts (dummies: nothing contacts Google here).
+          GOOGLE_CLIENT_ID: ci-client.apps.googleusercontent.com
+          GOOGLE_CLIENT_SECRET: ci-google-client-secret
+          ADMIN_GOOGLE_EMAILS: "owner@example.test,staff@example.test"
         run: npm run preflight
 
       - name: Remind about golden-question QA

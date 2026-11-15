@@ -6,7 +6,7 @@ import { replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/me
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
-import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
+import { getRecentTripIds, getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { groundedTripIds, tripsNamedIn, ungroundedTripInReply, type GroundingContext } from "../../lib/tripGrounding";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
@@ -26,10 +26,17 @@ import {
   THANKS_REPLY,
 } from "../../lib/greetingPhrases";
 import { adultCountAnswer, optionChosenByNumber } from "../../lib/selectionAnswer";
+import { programOfferAccepted } from "../../lib/programOffer";
+import { scheduleSweepsFromTraffic } from "../../lib/trafficSweep";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
+import { asksCommercialTerm, classifyMessageNeed, extractNeedConstraints, isSocialMessage } from "../../lib/messageNeed";
+import { dispatchNeed, needModelMode } from "../../lib/needDispatch";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { soldOutNamedReply } from "../../lib/soldOutNamed";
+import { judgeDateMiss } from "../../lib/dateMiss";
+import { unanswerableForList } from "../../lib/listCompleteness";
 import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply, replyPreferences } from "../../lib/chatbotReplyPolicy";
@@ -39,11 +46,10 @@ import { getReplyMediaPolicy, limitReplyPhotos, recordReplyMediaDelivery } from 
 import type { TripSelection } from "../../lib/tripRequest";
 import type { TravelLead, TravelTrip } from "../../lib/travelTypes";
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
-import { buildCatalogListingReply } from "../../lib/catalogListing";
+import { buildCatalogListingReply, listingAnswersDespitePlace, withEndedTripNotice } from "../../lib/catalogListing";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
-import { ACKNOWLEDGEMENT_REPLY, DEFERRAL_REPLY, isAcknowledgementOnly, isDeferralOnly } from "../../lib/acknowledgements";
 import { replyModel } from "../../lib/modelConfig";
 
 // A Messenger message holds 2,000 characters; 1,000 tokens is longer than any reply the rules allow.
@@ -54,27 +60,27 @@ import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest,
 import { detectStaffTakeover, fetchThreadMessages, markStaffReply, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
 import { isStaffTakeoverSendBlocked } from "../../lib/takeoverGuard";
 import { classifyEcho, echoEnforcementEnabled, recordEchoEvent, verifyHumanEcho, type EchoVerdict } from "../../lib/echoObserver";
-import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
+import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardInventedCommercialClaims, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pauseReason, trackSender } from "../../lib/pause";
 import { BOOKED_STATUS_HEADING, bookedFollowupReply, bookedStatusTurn, followupLeadLine, isBookingStatusQuestion } from "../../lib/bookedFollowup";
 import { inboundStatus, newInboundOutcome, noteInbound, traceInbound, type InboundOutcome } from "../../lib/inboundTrace";
 import { latestCustomerLead, recordLeadFollowup } from "../../lib/travelLeadsDb";
-import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
+import { buildScopedNotScheduledReply } from "../../lib/dateNotScheduled";
 import { conversationLeadContext } from "../../lib/leadContext";
-import { withoutNegatedTrips } from "../../lib/negatedTrip";
+import { commercialFactsText } from "../../lib/commercialFacts";
+import { mayNegateTrip, ruleOutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
-import { dbAppendStaffMessages } from "../../lib/travelDb";
+import { dbAppendStaffMessages, dbHasRecentStaffMessage } from "../../lib/travelDb";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceOrBudgetReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, withoutHiddenTrips, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
   scheduleAttachmentDocumentPipeline,
   handleAttachmentOnlyMessage,
 } from "../../lib/webhookAttachments";
-import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { ensureDurableLead } from "../../lib/durableLead";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { getCollectState } from "../../lib/bookingCollect";
@@ -119,6 +125,9 @@ import { rememberSenderName } from "../../lib/senderNames";
 import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, isContactOperatorTap, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
+import { placeWeatherAnswer } from "../../lib/placeWeather";
+import { catalogueFollowupLabel, handleCatalogueTurn, handleTesterPairingTurn, noteBlockedCatalogueRequest } from "../../lib/webhookCatalogue";
+import { planReplyQuestion, settleFollowUp } from "../../lib/replyQuestion";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
@@ -277,6 +286,8 @@ async function handleMessageTurn(
   staffThread.catch(() => {});
   if (await isPagePaused(pageId)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
+    // A catalogue request is not dropped while the page is paused: staff see it as a lead.
+    if (!attachmentReply) await noteBlockedCatalogueRequest({ platform, senderId, text, reason: "page_paused" });
     noteInbound((outcome) => { outcome.silent = "page_paused"; });
     logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,
@@ -288,9 +299,9 @@ async function handleMessageTurn(
     return;
   }
   // A message from a customer staff own is kept on their lead, which goes back to unread in the
-  // Leads tab (and pings staff when a channel is set): it used to be stored where nobody looked.
-  const recordPausedFollowup = async (label?: string, options: { notify?: boolean } = {}): Promise<TravelLead | null> => {
-    const line = followupLeadLine(text, undefined, label);
+  // Leads tab: it used to be stored where nobody looked.
+  const recordPausedFollowup = async (label?: string): Promise<TravelLead | null> => {
+    const line = followupLeadLine(text, undefined, label ?? catalogueFollowupLabel(text));
     const lead = await latestCustomerLead(senderId).catch(() => null);
     const details = { platform, senderId, customerMessage: text, kind: lead?.kind || "handoff" as const, context: line };
     if (lead) {
@@ -298,9 +309,6 @@ async function handleMessageTurn(
     } else {
       const created = await ensureDurableLead(details).catch(() => null);
       if (!created?.lead) return null;
-    }
-    if (options.notify !== false) {
-      await notifyStaffOfLead(details, { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.paused_followup" }).catch(() => {});
     }
     return lead || await latestCustomerLead(senderId).catch(() => null);
   };
@@ -314,7 +322,7 @@ async function handleMessageTurn(
   // the bot stays out.
   if (activePause && !waitingForConsultant && (activePause !== "booked_customer" || attachmentReply)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
-    const followup = !attachmentReply && !isThanksOnly(text) ? await recordPausedFollowup() : null;
+    const followup = !attachmentReply && !isSocialMessage(text) ? await recordPausedFollowup() : null;
     noteInbound((outcome) => { outcome.silent = `paused:${activePause}`; });
     logInfo("webhook.sender_paused", {
       requestId: trace?.requestId,
@@ -346,7 +354,7 @@ async function handleMessageTurn(
       // The consultant owns the conversation until «Ботод буцаах» (no duration: travelSessionDb.ts).
       await pauseBot(senderId, undefined, "operator_reply").catch(() => {});
       await markStaffReply(senderId, staffAt, takeover.staff.origin).catch(() => {});
-      if (!attachmentReply && !isThanksOnly(text)) await recordPausedFollowup();
+      if (!attachmentReply && !isSocialMessage(text)) await recordPausedFollowup();
       noteInbound((outcome) => { outcome.silent = "staff_takeover"; });
       logInfo("webhook.staff_takeover_detected", {
         requestId: trace?.requestId,
@@ -361,7 +369,7 @@ async function handleMessageTurn(
       return;
     }
     // The thread could not be read: never taken as "no consultant". Where a consultant may own
-    // the conversation the message waits for staff (visible on the lead, staff pinged); any
+    // the conversation the message waits for staff (visible on the lead in the Leads tab); any
     // other customer is answered as usual, so one failed lookup does not silence the bot.
     if (takeover.status === "unverified") {
       const risk = await takeoverRisk(senderId);
@@ -381,28 +389,32 @@ async function handleMessageTurn(
   await assertLockHealthy();
   // Read history and pre-routing identity evidence together.
   const replyStartedAt = Date.now();
-  const [history, customerMemory, groundingPending, groundingSelection] = await Promise.all([
+  const [history, customerMemory, groundingPending, groundingSelection, groundingRecent] = await Promise.all([
     getHistory(senderId),
     getCustomerMemoryText(senderId),
     getClarificationState(senderId),
     getTripSelection(senderId),
+    getRecentTripIds(senderId),
   ]);
   // "1" under a bulleted hotel / package / date question is that option, not a number with no list.
-  text = adultCountAnswer(history, text) ?? optionChosenByNumber(history, text) ?? text;
-  // "<place> биш, …" rules that place out: only the rest is matched, and that place's
-  // trips are left out of this turn's catalogue (negatedTrip.ts).
+  // "тийм" under the follow-up's programme offer is the «Хөтөлбөр үзэх» button (programOffer.ts).
+  text = programOfferAccepted(history, text) ?? adultCountAnswer(history, text) ?? optionChosenByNumber(history, text) ?? text;
+  // "<place> биш / хэрэггүй / орохгүй / -гүй / -аас бусад" rules that place out: only the rest is matched,
+  // and the trips it names are left out of this turn's catalogue (negatedTrip.ts).
   const excludedTripIds = new Set<string>();
-  if (/биш|bish/iu.test(text)) {
-    const active = (await listTrips({ limit: 5000 })).filter((trip) => trip.status === "active").map(sanitizeTripForCustomers);
-    const resolve = (word: string) => resolveTripFromUserMessage(word, active, { allowLooseFallback: false });
-    const corrected = withoutNegatedTrips(text, (word) => resolve(word).status !== "not_found");
-    for (const word of corrected.negated) {
-      const ruledOut = resolve(word);
-      for (const trip of ruledOut.status === "verified" ? [ruledOut.trip] : ruledOut.status === "ambiguous" ? ruledOut.candidates : []) excludedTripIds.add(trip.id);
-    }
+  // The need gate reads the customer's own words: "<place> хэрэггүй" is part of a custom-route ask.
+  const textBeforeNegation = text;
+  if (mayNegateTrip(text)) {
+    const active = withoutHiddenTrips(await listTrips({ limit: 5000 })).filter((trip) => trip.status === "active").map(sanitizeTripForCustomers);
+    const corrected = ruleOutNegatedTrips(text, active);
+    for (const id of corrected.excludedTripIds) excludedTripIds.add(id);
     text = corrected.text;
   }
   const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
+  // What the customer needs, read from their own words before any catalogue lookup (messageNeed.ts).
+  const lastBotReply = history.findLast((message) => message.role === "assistant")?.text ?? null;
+  const hasTripContext = Boolean(groundingSelection?.tripId) || Boolean(groundingPending?.candidateTripIds?.length);
+  const needHit = attachmentReply ? null : classifyMessageNeed(textBeforeNegation, { lastBotReply, hasTripContext });
   // Non-blocking: the memory merge continues after the response via waitUntil.
   // It used to be awaited inline while holding the conversation lock, which
   // serialized a long model call behind every reply.
@@ -421,19 +433,13 @@ async function handleMessageTurn(
    */
   const captureLead = async (
     input: Omit<Parameters<typeof ensureDurableLead>[0], "platform" | "senderId" | "customerMessage"> & { customerMessage?: string },
-    source: string,
   ) => {
     const details = { platform, senderId, customerMessage: text, ...input };
-    const result = await ensureDurableLead(details);
-    if (result.created) {
-      await notifyStaffOfLead(details, {
-        requestId: trace?.requestId, correlationId: trace?.correlationId, source,
-      });
-    }
-    return result;
+    return ensureDurableLead(details);
   };
   let pauseAfterContactCapture = false;
   let factualScope: TravelTrip[] | null = null;
+  let existingCustomer: boolean | undefined;
   // The exit check every reply passes (tripGrounding.ts): named trips must be supported by
   // trip this conversation points to — the customer's words, an open list, the selected trip, an
   // earlier turn. Freeze that evidence before routing: a newly selected model ID cannot
@@ -441,7 +447,7 @@ async function handleMessageTurn(
   let groundingTrips: TravelTrip[] | null = null;
   const getGroundingTrips = async (): Promise<TravelTrip[]> => {
     try {
-      groundingTrips ||= (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+      groundingTrips ||= withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
       return groundingTrips;
     } catch (cause) {
       const error = new RetryableWebhookError("grounding_unavailable");
@@ -452,9 +458,14 @@ async function handleMessageTurn(
   const findUngroundedTrip = async (reply: string, catalogTripIds?: string[]): Promise<TravelTrip | null> =>
     ungroundedTripInReply(reply, {
       customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
-      selectionTripId: groundingSelection?.tripId || null, catalogTripIds, trips: await getGroundingTrips(),
+      selectionTripId: groundingSelection?.tripId || null, recentTripIds: groundingRecent, catalogTripIds, trips: await getGroundingTrips(),
+      ruledOutTripIds: [...excludedTripIds],
     });
   let currentSelection: TripSelection | null = null;
+  // What the next-question hook reads at both exits (replyQuestion.ts); staff-owned customers get none.
+  const questionContext = () => ({ senderId, platform, customerText: text, history, trips: getGroundingTrips,
+    staffOwned: waitingForConsultant || pauseAfterContactCapture,
+    isExistingCustomer: async () => (existingCustomer ??= await dbHasRecentStaffMessage(senderId)) });
   const deliverFastPathReply = async (input: {
     reply: string;
     failTag: string;
@@ -472,7 +483,7 @@ async function handleMessageTurn(
     });
     const verificationScope = input.verifyConfiguredFacts ? await getGroundingTrips()
       : input.catalogTripIds ? (await getGroundingTrips()).filter(trip => input.catalogTripIds!.includes(trip.id)) : factualScope;
-    const reply = verificationScope && !input.decision
+    let reply = verificationScope && !input.decision
       ? verifyTripReply({ reply: presented, trips: verificationScope, selection: currentSelection })
       : presented;
     const missingData = input.decision ? input.decision.outcome === "handoff" : isReferReply(reply) || shouldSilenceNoDataReply(reply);
@@ -480,8 +491,8 @@ async function handleMessageTurn(
     // against evidence frozen before routing, not the newly written selection.
     const ungroundedPlan = !missingData && input.decision && !answerPlanHasCustomerEvidence(input.decision.plan.tripId, {
       customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
-      selectionTripId: groundingSelection?.tripId || null, catalogTripIds: input.catalogTripIds,
-      trips: await getGroundingTrips(),
+      selectionTripId: groundingSelection?.tripId || null, recentTripIds: groundingRecent, catalogTripIds: input.catalogTripIds,
+      trips: await getGroundingTrips(), ruledOutTripIds: [...excludedTripIds],
     });
     const ungroundedTrip = missingData ? null : await findUngroundedTrip(reply, input.catalogTripIds);
     const noDataReply = missingData || Boolean(ungroundedTrip) || Boolean(ungroundedPlan);
@@ -504,18 +515,21 @@ async function handleMessageTurn(
       await captureLead({
         kind: "handoff",
         context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${input.decision?.missingFacts.length ? ` [${input.decision.missingFacts.join(", ")}]` : ""}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}${ungroundedPlan ? ` [plan.trip=${input.decision!.plan.tripId}]` : ""}`,
-      }, "api.webhook.no_data_handoff");
+      });
       // The bot doesn't know the answer, so it says NOTHING to the customer (owner's
       // rule: an unknown answer is met with silence, never a "passed to a
       // consultant" notice). Staff got the lead above. The bot is NOT paused: one
-      // unknown answer used to silence every later message for an hour, and with no
-      // staff alert channel no human came — real customers asked answerable
+      // unknown answer used to silence every later message for an hour, and until
+      // someone opened the Leads tab no human came — real customers asked answerable
       // questions into that silence and left (2026-10-26..29). A staff reply in
       // the thread still pauses the bot (staff takeover check above).
       if (input.counter) recordCounter(input.counter, 1, { platform });
       return false;
     }
     noteInbound((outcome) => { outcome.route = input.failTag; });
+    // A trip answer that asks nothing gets the next question; the reply arms the follow-up (replyQuestion.ts).
+    const asked = await planReplyQuestion({ ...questionContext(), failTag: input.failTag, reply, decisionOutcome: input.decision?.outcome });
+    reply = asked.reply;
     recordReplyPresentation({ reply, userText: text, path: "webhook_code", latencyMs: Date.now() - replyStartedAt });
     await assertLockHealthy();
     let delivered: boolean;
@@ -588,12 +602,17 @@ async function handleMessageTurn(
         classification: classifyError(error),
       });
     }
+    await settleFollowUp(senderId, asked);
     if (!noDataReply && input.afterDeliver) await input.afterDeliver();
     await rememberTurn(noDataReply ? `${input.rememberSource}_handoff` : input.rememberSource);
     if (pauseAfterContactCapture) await pauseBookedCustomer(senderId);
     if (input.counter) recordCounter(input.counter, 1, { platform });
     return true;
   };
+
+  // Staff pairing a test device for the catalogue ("Тестер холбох"): the message is exactly a one-time code.
+  // After the paused-page / paused-sender / staff-takeover checks above, before any routing below.
+  if (!attachmentReply && await handleTesterPairingTurn({ platform, senderId, pageId, text, deliver: deliverFastPathReply, trace })) return;
 
   // Facebook: a customer waiting for a consultant after a booking request, and no consultant
   // reply in the thread. A status question gets the lead's real status (deterministic, never a
@@ -615,7 +634,7 @@ async function handleMessageTurn(
       }
       return;
     }
-    if (!isThanksOnly(text)) await recordPausedFollowup("Хүлээж байхдаа асуусан (бот хариулсан)", { notify: false });
+    if (!isSocialMessage(text)) await recordPausedFollowup("Хүлээж байхдаа асуусан (бот хариулсан)");
   }
 
   // Instagram (no thread check there): the bot's own pause after a booking gives one status reply
@@ -623,7 +642,7 @@ async function handleMessageTurn(
   // reopens the lead for staff). Never a confirmation or a call time (bookedFollowup.ts).
   if (activePause === "booked_customer" && !waitingForConsultant) {
     await appendMessage(senderId, "user", text);
-    const lead = isThanksOnly(text) ? null : await recordPausedFollowup();
+    const lead = isSocialMessage(text) ? null : await recordPausedFollowup();
     const alreadyTold = Boolean(history.findLast((message) => message.role === "assistant")?.text.startsWith(BOOKED_STATUS_HEADING));
     const reply = lead && !alreadyTold ? bookedFollowupReply(lead) : null;
     if (!reply) noteInbound((outcome) => { outcome.silent = lead ? "booked_followup_already_told" : "booked_followup_thanks_or_unrecorded"; });
@@ -683,6 +702,7 @@ async function handleMessageTurn(
     recordCounter("webhook.reengagement_contact_sent_total", 1, { platform });
   }
   if (botControl.photo_only && platform === "facebook" && token) {
+    await noteBlockedCatalogueRequest({ platform, senderId, text, reason: "photo_only" });
     await handlePhotoOnlyMode({
       platform,
       senderId,
@@ -712,7 +732,7 @@ async function handleMessageTurn(
 
   if (platform === "facebook" && token && (isGreetingButton(text) || isSeasonButton)) {
     try {
-      const allTrips = await listTrips({ limit: 5000 });
+      const allTrips = withoutHiddenTrips(await listTrips({ limit: 5000 }));
       if (isAllTripsButton || isSeeAllButton) {
         const greeting = resolveGreetingConfig(botSettings.extra);
         let album: string[] = [];
@@ -923,13 +943,6 @@ async function handleMessageTurn(
               failTag: "flow_quick", rememberSource: "api.webhook.flow_quick" }));
           }
         : undefined,
-      notifyOwner: async (msg: string) => {
-        if (flowWithheld) return;
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: msg, senderId },
-          { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.flow" },
-        ).catch(() => {});
-      },
       captureLead: async (state: FlowRuntimeState) => {
         if (flowWithheld) return;
         await ensureDurableLead({
@@ -976,10 +989,10 @@ async function handleMessageTurn(
       }
     }
   }
-  // The customer asked for a person: lead, confirmation, bot paused. Shared by the keyword check
-  // here and by the understanding step's reading further down.
-  const handOffToStaff = async (recordMessage: boolean, source: string) => {
-    await captureLead({ kind: "handoff" }, "api.webhook.handoff");
+  // The customer asked for a person: lead, confirmation, bot paused. Shared by the keyword check,
+  // the need dispatcher and the understanding step's reading further down.
+  const handOffToStaff = async (recordMessage: boolean, source: string, context?: string) => {
+    await captureLead({ kind: "handoff", ...(context ? { context } : {}) });
     if (recordMessage) await appendMessage(senderId, "user", text);
     const handoffConfirmation =
       botSettings.handoff_reply ||
@@ -999,23 +1012,24 @@ async function handleMessageTurn(
       senderHash: hashIdentifier(senderId), pauseMinutes: botSettings.handoff_pause_minutes,
     });
   };
+  const performHandoff = (context?: string) => handOffToStaff(true, "dispatch", context);
+  // Corporate catalogue, trip-code replies ("A01, 25 хүн, 1-р сар") and group quotations: webhookCatalogue.ts.
+  // One PDF + one short text, or a staff lead; a specific-trip question is left to the flow below.
+  // A thank-you, a payment-terms question, a booking already made or a complaint is never a catalogue
+  // request, even when it says "компани / хамт олон" (need gate, messageNeed.ts).
+  const catalogueMayAnswer = (!needHit || needHit.need === "business_group") && !asksCommercialTerm(text);
+  if (catalogueMayAnswer && await handleCatalogueTurn({ platform, senderId, pageId, token, text, trace, history, getTrips: getGroundingTrips, deliver: deliverFastPathReply, captureLead,
+    hasTripContext, groupNeed: needHit?.need === "business_group" })) {
+    // A group the catalogue answered is still a classified need (the observe/enforce comparison counts it).
+    if (needHit) logInfo("webhook.need_classified", { requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
+      senderHash: hashIdentifier(senderId), need: needHit.need, source: "rule", signals: needHit.signals, handledBy: "catalogue" });
+    return;
+  }
   if (
     isContactOperatorTap(text) ||
     (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
   ) {
     await handOffToStaff(true, "keywords");
-    return;
-  }
-  // ── Acknowledgement / deferral ─────────────────────────────────────────────
-  // "за ok", "ойлголоо", "маргааш лавлая", "бодож үзье" ask nothing. They went to the free-text
-  // model, and when it said REFER staff were paged and the customer heard nothing (dev
-  // evaluation 2026-11-02). One short line, no lead, no phone request.
-  if (isAcknowledgementOnly(text) || isDeferralOnly(text)) {
-    await appendMessage(senderId, "user", text).catch(() => {});
-    await deliverFastPathReply({
-      reply: isDeferralOnly(text) ? DEFERRAL_REPLY : ACKNOWLEDGEMENT_REPLY,
-      failTag: "acknowledgement", rememberSource: "api.webhook.acknowledgement", counter: "webhook.acknowledgement_total",
-    });
     return;
   }
   const contactReply = buildContactReply(text, contactSettingsOf(botSettings.extra));
@@ -1053,7 +1067,7 @@ async function handleMessageTurn(
   // ── Phone-number lead capture ───────────────────────────────────────────────
   // The AI's #1 rule asks the customer for a phone number; this is where the
   // answer is actually caught. Any message containing a Mongolian mobile
-  // number creates a lead + staff alert (once per open lead). A phone-only
+  // number creates a lead in the Leads tab (once per open lead). A phone-only
   // message gets a deterministic thank-you; a phone bundled with a question
   // falls through so the AI answers the question too.
   const detectedPhone = extractPhoneNumber(text);
@@ -1061,7 +1075,7 @@ async function handleMessageTurn(
     const note = (await conversationLeadNote().catch(() => null))?.context;
     const captured = await captureLead({
       kind: "booking", contactPhone: detectedPhone, context: note ? `Чатад утасны дугаараа үлдээсэн.\n${note}` : "Чатад утасны дугаараа үлдээсэн.",
-    }, "api.webhook.phone_capture");
+    });
     if (captured.created) recordCounter("webhook.phone_lead_captured_total", 1, { platform });
     if (isPhoneOnlyMessage(text)) {
       await appendMessage(senderId, "user", text);
@@ -1111,7 +1125,7 @@ async function handleMessageTurn(
   scheduleDriveAutoSync({ source: "api.webhook" });
   // The catalog is focused on the trips this message is about inside
   // buildPromptParts (aiTripContext.ts) — shared with the demo endpoint.
-  const { systemPrompt: fileSystemPrompt, business, pinnedButtonLabels } = await readBusinessData();
+  const { systemPrompt: fileSystemPrompt, business, pinnedButtonLabels, knowledge } = await readBusinessData();
   await assertLockHealthy();
   const lastReply = await getLastReplyConsistent(sessionId);
   // Phone already given this conversation (current message or history). Every
@@ -1124,22 +1138,39 @@ async function handleMessageTurn(
       (message) => message.role === "user" && extractPhoneNumber(message.text),
     );
   const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
+  // A payment claim or a bank-account ask is answered by its own branch below, never by the booking collector.
   const customerWantsToBook =
-    botSettings.handoff_enabled && isBookingIntent(text);
-  if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
-  await appendMessage(senderId, "user", text);
+    botSettings.handoff_enabled && isBookingIntent(text) && !hasPaymentClaimIntent(text) && !hasBankAccountRequest(text);
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
     if (cachedTrips) return cachedTrips;
-    cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers).filter((trip) => !excludedTripIds.has(trip.id));
+    cachedTrips = withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers).filter((trip) => !excludedTripIds.has(trip.id));
     return cachedTrips;
   };
+  // The need gate (needDispatch.ts): thanks, an organisation or group, barter / contract, a ticket-only wish,
+  // a booking already made. Decided from the customer's own words, before the booking collector and before
+  // any trip is looked up; no model call.
+  const dispatchFor = (hit: NonNullable<typeof needHit>, source: "rule" | "model") => dispatchNeed({
+    hit, source, text, senderId, platform, lastBotReply, trace, trips: getTrips, configuredFacts: commercialFactsText([], knowledge),
+    selectedTripId: groundingSelection?.tripId ?? null, hasTripContext,
+    // A complaint about a service already received goes to a person the same way (when hand-off is on).
+    handoff: botSettings.handoff_enabled ? performHandoff : undefined,
+    deliver: (input) => deliverFastPathReply(input), captureLead: (input) => captureLead(input),
+  });
+  if (needHit && (await dispatchFor(needHit, "rule"))) return;
+  // A group staff already hold (an open business-group lead from the last day): the customer's next messages
+  // ("шууд X руу, өөр юу ч үзэхгүй", a head count, a month) belong on that lead, not to a trip answer
+  // (owner 2026-11-11: the bot does not know group terms, so it stays quiet). needDispatch appends it.
+  if (!needHit && (await dispatchFor({ need: "business_group", signals: ["inquiry_answer"], constraints: {} }, "rule"))) return;
+  if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
+  await appendMessage(senderId, "user", text);
   // Only fetched on the miss path (nothing in the active catalogue matched),
   // so a normal message never pays for this extra query.
   let cachedArchivedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getArchivedTrips = async () => {
     if (cachedArchivedTrips) return cachedArchivedTrips;
-    cachedArchivedTrips = await listTrips({ status: "archived", limit: 500 });
+    // A hidden trip is not announced as "ended, will come back" either.
+    cachedArchivedTrips = withoutHiddenTrips(await listTrips({ status: "archived", limit: 500 }));
     return cachedArchivedTrips;
   };
   // Stateful routing for the deterministic matchers: answers to a
@@ -1156,9 +1187,10 @@ async function handleMessageTurn(
       history,
       trips: await getTrips(),
       understand: tripUnderstandingEnabled()
-        ? async (pendingTripIds, selection) =>
-            understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, selection, ask: understandingModel(trace) })
+        ? async (pendingTripIds, selection, recentTripIds) =>
+            understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, selection, recentTripIds, ask: understandingModel(trace) })
         : undefined,
+      getEndedTrips: getArchivedTrips,
     });
     currentSelection = routedCache.selection || null;
     factualScope = routedCache.chosenTripId
@@ -1167,6 +1199,18 @@ async function handleMessageTurn(
     return routedCache;
   };
   const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+  /** Delivers "this trip is full / paused, these are open"; false = there was nothing to say. */
+  const deliverSoldOutNamed = async (soldOutReply: string | null): Promise<boolean> => {
+    if (!soldOutReply) return false;
+    await deliverFastPathReply({
+      reply: appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply)), phoneAlreadyRequested),
+      failTag: "sold_out_named",
+      catalogTripIds: tripsNamedIn(soldOutReply, await getTrips()).map(trip => trip.id),
+      rememberSource: "api.webhook.sold_out_named",
+      counter: "webhook.sold_out_named_total",
+    });
+    return true;
+  };
   // What is being ASKED: the customer's words with trip names removed. A tapped
   // "…шууд нислэгтэй аялал" button is a choice of trip, not a flight question.
   const intentText = stripTripNamesForIntent(text, await getTrips());
@@ -1181,13 +1225,13 @@ async function handleMessageTurn(
   // Staff/catalog maintenance notes are not customer questions. They often
   // contain dates, "суудал дүүрсэн", and duration numbers; answering those as
   // prices or availability is exactly how a "5 шөнө" row turns into a bogus
-  // "5 сая" conversation. Save the inbound text for the inbox, alert staff,
+  // "5 сая" conversation. Save the inbound text for the inbox, record a lead,
   // and stay quiet to the customer.
   if (isLikelyCatalogMaintenanceText(text)) {
     await captureLead({
       kind: "handoff", contactPhone: detectedPhone || "",
       context: "Дотоод каталог/status тэмдэглэл шиг харагдсан тул бот автоматаар хариулаагүй.",
-    }, "api.webhook.catalog_note_suppressed");
+    });
     logInfo("webhook.catalog_note_suppressed", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -1211,16 +1255,16 @@ async function handleMessageTurn(
   const asksBankAccount = hasBankAccountRequest(text);
   if (hasPaymentClaimIntent(text) || asksBankAccount) {
     // The deferral reply PROMISES the customer a consultant will check and
-    // get back to them — that promise is only real if staff actually hear
-    // about it. A payment claim is the strongest buy signal there is; without
-    // this lead+alert, a paying customer would wait on a follow-up nobody
+    // get back to them — that promise is only real if staff actually see
+    // it in the Leads tab. A payment claim is the strongest buy signal there is;
+    // without this lead, a paying customer would wait on a follow-up nobody
     // knew to make.
     await captureLead({
       kind: "handoff", contactPhone: detectedPhone || "",
       context: asksBankAccount
         ? "Хэрэглэгч төлбөрийн дансны мэдээлэл асуусан — зөвлөх албан ёсоор илгээнэ үү."
         : "Төлбөр шилжүүлсэн гэж мэдэгдсэн — зөвлөх шалгаж баталгаажуулна уу.",
-    }, "api.webhook.payment_claim");
+    });
     await deliverFastPathReply({
       reply: asksBankAccount
         ? BANK_ACCOUNT_REQUEST_REPLY
@@ -1259,11 +1303,59 @@ async function handleMessageTurn(
       return;
     }
   }
+  // The one understanding call may also name a non-trip need. Logged always; it acts only with NEED_MODEL=enforce
+  // and only when the rules above named none (tripUnderstanding.ts validates it against the customer's own words).
+  {
+    const modelNeed = (await getRouted()).understanding?.need;
+    if (modelNeed && needModelMode() !== "off") {
+      logInfo("webhook.need_observed", { requestId: trace?.requestId, correlationId: trace?.correlationId, platform, senderHash: hashIdentifier(senderId),
+        need: modelNeed.need, source: "model", agreesWithRule: modelNeed.need === (needHit?.need ?? null), mode: needModelMode() });
+      if (needModelMode() === "enforce" && !needHit
+        && (await dispatchFor({ need: modelNeed.need, signals: ["model"], constraints: extractNeedConstraints(text) }, "model"))) return;
+    }
+  }
   if ((await getRouted()).unsupportedRequest) {
     await deliverFastPathReply({ reply: "REFER", failTag: "unsupported_request",
       rememberSource: "api.webhook.unsupported_request" });
     return;
   }
+
+  // "That date doesn't suit me": the nearest other departures of the same kind (dateRejection.ts). Staff hear
+  // about it either way; a customer a consultant already works with is sold no other dates (dateMiss.ts rule).
+  {
+    const alternatives = (await getRouted()).dateAlternatives;
+    if (alternatives) {
+      const existing = (existingCustomer ??= await dbHasRecentStaffMessage(senderId).catch(() => false));
+      // "REFER": nothing else to offer (every other departure of that kind was already shown): staff only.
+      const nothingToOffer = alternatives.reply === "REFER";
+      await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: existing
+        ? "Зөвлөхтэй өмнө нь харилцсан хэрэглэгч санал болгосон огноо тохирохгүй гэсэн; бот өөр огноо санал болгоогүй, зөвлөх хариулна уу."
+        : nothingToOffer
+          ? "Хэрэглэгч санал болгосон огноо тохирохгүй гэсэн; санал болгох өөр гарах өдөр байхгүй тул бот хариулсангүй, зөвлөх хариулна уу."
+          : "Хэрэглэгч санал болгосон огноо тохирохгүй гэсэн; бот ойр гарах өөр өдрүүдийг хэлсэн." });
+      await deliverFastPathReply({
+        reply: existing || nothingToOffer ? "REFER" : sanitizeAssistantReply(alternatives.reply),
+        failTag: existing ? "existing_customer_date_rejection" : nothingToOffer ? "date_alternatives_none" : "date_alternatives",
+        catalogTripIds: existing || nothingToOffer ? undefined : alternatives.tripIds,
+        rememberSource: "api.webhook.date_alternatives",
+        counter: "webhook.date_alternatives_total",
+      });
+      return;
+    }
+  }
+
+  // A weather question about a place several trips share, or a full trip's place, is answered as weather (placeWeather.ts).
+  if (isWeatherTurn(intentText, history)) {
+    const place = await placeWeatherAnswer({ routed: await getRouted(), trips: await getTrips(), text, askedText: intentText });
+    if (place) {
+      await deliverFastPathReply({ reply: sanitizeAssistantReply(place.reply), failTag: "weather_place", catalogTripIds: place.candidates.map((trip) => trip.id),
+        rememberSource: "api.webhook.weather_place", counter: "webhook.weather_fast_path_total" });
+      return;
+    }
+  }
+  // The customer named a trip that is sold out or paused: say so (soldOutNamed.ts) before an answer
+  // plan prices it as open or a list of its siblings stands in for it.
+  if (await deliverSoldOutNamed(soldOutNamedReply({ routed: await getRouted(), text, trips: await getTrips() }))) return;
 
   // Compare questions intentionally mention multiple destinations/products.
   // Answer them as comparisons before scoped clarification narrows the message
@@ -1281,7 +1373,7 @@ async function handleMessageTurn(
       if (decision.outcome !== "handoff" && plan.staffLine && plan.staffNotes?.length) {
         const notes = plan.staffNotes.join("\n");
         // An open lead from the last hours is not duplicated: the note goes onto it instead.
-        const written = await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: notes }, "api.webhook.answer_plan_preference")
+        const written = await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: notes })
           .then(async (result) => {
             if (result.created) return true;
             const open = await latestCustomerLead(senderId);
@@ -1343,16 +1435,37 @@ async function handleMessageTurn(
   // the date the customer wanted, in case another one can be arranged.
   {
     const routed = await getRouted();
+    const catalogueNow = await getTrips();
     const notScheduledReply = routed.unavailableDateWithinScope && routed.scopedClarify?.length
-      ? buildDateNotScheduledReply(routed.scopedClarify) : null;
+      ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText, new Date(), catalogueNow) : null;
     if (notScheduledReply && routed.scopedClarify) {
+      // Not "no trip then" for a departure that exists and is closed, and no alternatives sold to a
+      // customer a consultant is already working with (dateMiss.ts).
+      const miss = await judgeDateMiss({ text, scope: routed.scopedClarify, trips: await getTrips(), loadArchived: getArchivedTrips,
+        isExistingCustomer: async () => (existingCustomer ??= await dbHasRecentStaffMessage(senderId).catch(() => false)) });
+      if (miss) {
+        await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: miss.context });
+        await deliverFastPathReply({
+          reply: miss.kind === "closed" ? miss.reply : "REFER",
+          failTag: miss.kind === "closed" ? "departure_closed" : "existing_customer_date_miss",
+          catalogTripIds: miss.kind === "closed" ? miss.tripIds : undefined,
+          rememberSource: `api.webhook.${miss.kind === "closed" ? "departure_closed" : "existing_customer_date_miss"}`,
+          counter: "webhook.date_miss_total",
+        });
+        return;
+      }
       await captureLead({ kind: "handoff", contactPhone: detectedPhone || "",
-        context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." },
-      "api.webhook.date_not_scheduled");
+        context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." });
+      // The reply lists trips by distance from the asked date: "1" / "эхнийх" under it means the first one SHOWN,
+      // not the first in catalogue order (found by review), so the pending list follows the displayed order.
+      // The shown rows include other trips leaving around the asked date (dateAlternatives.ts similarTripsAround).
+      const shownInOrder = displayedClarificationTrips(notScheduledReply, [...routed.scopedClarify,
+        ...catalogueNow.filter((trip) => !routed.scopedClarify!.some((scoped) => scoped.id === trip.id))]);
+      if (shownInOrder.length) await setClarificationState(senderId, shownInOrder.map(trip => trip.id));
       await deliverFastPathReply({
         reply: notScheduledReply,
         failTag: "date_not_scheduled",
-        catalogTripIds: routed.scopedClarify.map(trip => trip.id),
+        catalogTripIds: [...new Set([...routed.scopedClarify.map(trip => trip.id), ...shownInOrder.map(trip => trip.id)])],
         rememberSource: "api.webhook.date_not_scheduled",
         counter: "webhook.date_not_scheduled_total",
       });
@@ -1367,6 +1480,13 @@ async function handleMessageTurn(
   {
     const routed = await getRouted();
     if (routed.scopedClarify && routed.scopedClarify.length > 0 && !wantsDateAvailability) {
+      // A list answers "which trip?", not a question none of these trips can answer (listCompleteness.ts).
+      const unanswerable = unanswerableForList({ text: routed.requestText || text, trips: await getTrips(), understanding: routed.understanding });
+      if (unanswerable.length) {
+        await deliverFastPathReply({ reply: "REFER", failTag: `scoped_clarify_unanswerable:${unanswerable.join(",")}`,
+          rememberSource: "api.webhook.scoped_clarify_unanswerable", counter: "webhook.scoped_clarify_unanswerable_total" });
+        return;
+      }
       const totalReply = buildAmbiguousPassengerTotalReply(await getFastPathText(), routed.scopedClarify);
       const clarifyBody = routed.scopedClarifyNote
         ? totalReply
@@ -1394,7 +1514,7 @@ async function handleMessageTurn(
     // "далайтай нь" is a kind of trip the catalogue lists (sea, direct flight, a month),
     // not an unknown place: the model's place reading must not silence that list.
     const categoryListing = routed.notInCatalog ? buildCatalogListingReply(intentText, await getTrips()) : null;
-    if (routed.notInCatalog && !(categoryListing?.authoritative && categoryListing.listed.length)) {
+    if (routed.notInCatalog && !listingAnswersDespitePlace(categoryListing, routed.notInCatalog, intentText, await getTrips())) {
       // A place no trip goes to is a question the bot cannot answer: silence and a staff
       // lead, never "Уучлаарай, «<газар>» чиглэлийн аялал манайд байхгүй" (owner's rule;
       // the place reading is a guess — ordinary words were read as destinations).
@@ -1425,27 +1545,13 @@ async function handleMessageTurn(
   }
   // The customer named a trip that is sold out: say so (and offer the same
   // destination's open trips) instead of quoting a near-name sibling's price.
-  {
-    const soldOutReply = buildSoldOutPrecedenceReply(text, await getTrips());
-    if (soldOutReply) {
-      await deliverFastPathReply({
-        reply: appendLeadCaptureCta(
-          enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply)),
-          phoneAlreadyRequested,
-        ),
-        failTag: "sold_out_named",
-        catalogTripIds: tripsNamedIn(soldOutReply, await getTrips()).map(trip => trip.id),
-        rememberSource: "api.webhook.sold_out_named",
-        counter: "webhook.sold_out_named_total",
-      });
-      return;
-    }
-  }
+  if (await deliverSoldOutNamed(buildSoldOutPrecedenceReply(text, await getTrips()))) return;
   // A question about the catalog ("шууд нислэгтэй аялал байна уу", "бүх
   // аяллын хуваарь") when neither the message nor the context names a trip:
   // list it from the DB instead of a silent no-data handoff.
   {
-    const listing = buildCatalogListingReply(intentText, await getTrips());
+    let listing = buildCatalogListingReply(intentText, await getTrips());
+    if (listing?.unknownPlace) listing = withEndedTripNotice(listing, intentText, await getArchivedTrips());
     if (listing && (
       listing.authoritative === true ||
       resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found"
@@ -1482,6 +1588,7 @@ async function handleMessageTurn(
       const archivedNotice = buildArchivedTripNotice(
         fastPathText,
         await getArchivedTrips(),
+        await getTrips(),
       );
       if (archivedNotice) {
         await deliverFastPathReply({
@@ -1530,7 +1637,10 @@ async function handleMessageTurn(
         !hasCompareIntent(intentText) &&
         !hasBudgetIntent(intentText) &&
         !hasDiscountIntent(intentText) &&
-        !hasSeatsIntent(intentText)
+        !hasSeatsIntent(intentText) &&
+        // "991000 гэсэн үнэтэй аялал байна лээ": a quoted price names no trip by word, but the
+        // bare-price path below finds the trip sold at it.
+        !isBarePriceMessage(text)
       ) {
         // No destination named at all ("Үнэ", "Хөтөлбөр", "Хэд хоногийн аялал
         // хэдэн төг вээ"): ask which trip. Handing this to staff and pausing
@@ -1650,7 +1760,7 @@ async function handleMessageTurn(
   // nothing — it carries on to the other paths rather than being handed to staff.
   if (isBarePriceMessage(text)) {
     const trips = await getTrips();
-    const barePriceReply = buildBarePriceReply(text, trips);
+    const barePriceReply = buildBarePriceOrBudgetReply(text, trips);
     if (barePriceReply) {
       await deliverFastPathReply({
         reply: appendLeadCaptureCta(
@@ -1802,6 +1912,7 @@ async function handleMessageTurn(
     const archivedNotice = buildArchivedTripNotice(
       programFastPathText,
       await getArchivedTrips(),
+      await getTrips(),
     );
     if (archivedNotice) {
       await deliverFastPathReply({
@@ -1984,8 +2095,8 @@ async function handleMessageTurn(
     if (fallbackText) {
       aiReply = fallbackText;
     } else {
-      // Both models are down. Route to the REFER path so a lead is created and
-      // staff are alerted — never a fake customer-facing answer.
+      // Both models are down. Route to the REFER path so a lead is created for
+      // the Leads tab — never a fake customer-facing answer.
       aiOutage = true;
       aiReply = "REFER";
     }
@@ -1997,6 +2108,8 @@ async function handleMessageTurn(
   // outage.
   const guardCandidateTrips = factualScope || reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
   aiReply = guardInventedBookingTerms(aiReply, promptParts.user, guardCandidateTrips);
+  // A discount, group price, barter or contract the data does not hold is never stated (reply.ts).
+  aiReply = guardInventedCommercialClaims(aiReply, commercialFactsText(guardCandidateTrips, knowledge));
   if ((isReferReply(aiReply) || shouldSilenceNoDataReply(aiReply)) && isGenericTripRequest(text)) {
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
     // nothing to look up and said REFER. Ask which trip rather than paging staff.
@@ -2025,7 +2138,7 @@ async function handleMessageTurn(
     await captureLead({
       kind: "handoff", contactPhone: detectedPhone || "",
       context: aiOutage ? "AI түр саатсан тул зөвлөхөд шилжүүлэв." : "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.",
-    }, "api.webhook.ai_refer");
+    });
     // An AI outage is never unexplained silence (owner, 2026-10-30): once the lead above is
     // saved, the customer is told in one short line, at most once until the bot replies again.
     // The bot is not paused, so the customer is answered normally as soon as the AI recovers.
@@ -2144,7 +2257,7 @@ async function handleMessageTurn(
       context: wrongTripLeak
         ? `AI өөр аяллын (${wrongTripLeak.offendingTripName}) хариу өгөх гэсэн тул хэрэглэгчид илгээлгүй зөвлөхөд шилжүүлэв.`
         : "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
-    }, "api.webhook.ai_no_data_handoff");
+    });
     // Silent: a reply the guards suppressed (no data / another trip's facts) is
     // never replaced by a notice to the customer. The lead is above; no pause,
     // so the customer's next, answerable question is still answered.
@@ -2158,6 +2271,8 @@ async function handleMessageTurn(
     });
     return;
   }
+  // The model's answer is never extended; it only arms the follow-up (replyQuestion.ts).
+  const asked = await planReplyQuestion({ ...questionContext(), failTag: "model_reply", reply: safeReply });
   recordReplyPresentation({ reply: safeReply, userText: text, path: "webhook_ai", latencyMs: Date.now() - replyStartedAt });
   let replyButtons: string[] = [...aiButtons];
   if (platform === "facebook") {
@@ -2227,6 +2342,7 @@ async function handleMessageTurn(
       classification: classifyError(error),
     });
   }
+  await settleFollowUp(senderId, asked);
   await rememberTurn("api.webhook.reply");
   await sendTripMediaForReply(
     platform,
@@ -2476,8 +2592,9 @@ export default async function handler(
                 text?: string;
                 quick_reply?: { payload?: string };
                 metadata?: string;
+                sticker_id?: number | string;
                 attachments?: Array<{ type?: string; id?: string; mime_type?: string;
-                  payload?: { url?: string; attachment_id?: string } }>;
+                  payload?: { url?: string; attachment_id?: string; sticker_id?: number | string } }>;
               };
               postback?: { title?: string; payload?: string };
               referral?: Record<string, unknown>;
@@ -2696,7 +2813,7 @@ export default async function handler(
               if (adReferral && senderId) {
                 await rememberAdReferral({
                   senderId, platform: payload.object === "instagram" ? "instagram" : "facebook", referral: adReferral,
-                  trips: await listTrips({ limit: 5000 }).catch(() => []), pageToken: pageTokenFor(pageId, senderId),
+                  trips: withoutHiddenTrips(await listTrips({ limit: 5000 }).catch(() => [])), pageToken: pageTokenFor(pageId, senderId),
                 });
               }
               // Postback taps (Get Started button, persistent menu) carry no
@@ -2766,6 +2883,7 @@ export default async function handler(
                       timestamp: event.timestamp,
                       token,
                       attachments,
+                      stickerId: event?.message?.sticker_id,
                       deliverReply: reply => enqueueAttachmentReply({ platform, senderId, pageId, token,
                         trace: { requestId: trace.requestId, correlationId: trace.correlationId } }, reply),
                       trace: {
@@ -2914,6 +3032,8 @@ export default async function handler(
             }
           }
         }
+        // The follow-up and get-started sweeps also run on traffic (GitHub's schedule ran them hours late).
+        scheduleSweepsFromTraffic();
         return res.status(200).json({ ok: true });
       } catch (err) {
         if (isRetryableWebhookError(err)) {

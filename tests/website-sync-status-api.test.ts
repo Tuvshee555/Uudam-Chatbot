@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 
 test("sync status protects diagnostics, distinguishes missing configuration and reports failures honestly", async (context) => {
   applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/sync-status-fixture", BOOKING_DATABASE_URL: undefined });
@@ -27,7 +28,7 @@ test("sync status protects diagnostics, distinguishes missing configuration and 
       setHeader(name: string, value: unknown) { this.headers[name] = value; },
       status(code: number) { this.statusCode = code; return this; },
       json(value: Record<string, unknown>) { this.body = value; return this; }, end() { return this; } };
-    await handler({ method, headers: authorized ? { "x-admin-secret": "test-admin-secret" } : {}, query: {} } as never, response as never);
+    await handler({ method, headers: authorized ? adminCookieHeaders() : {}, query: {} } as never, response as never);
     return response;
   }
   try {

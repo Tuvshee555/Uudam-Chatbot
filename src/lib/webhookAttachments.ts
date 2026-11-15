@@ -13,7 +13,6 @@ import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, 
 import { reserveCustomerImages, scheduleReservedCustomerImages } from "./customerImageIngest";
 import { isPaused } from "./pause";
 import { createLead, hasRecentOpenLead, isPagePaused, listTrips } from "./travelOps";
-import { notifyStaffOfLead } from "./staffAlerts";
 import type { AttachmentReplyPayload, Platform } from "./webhookDedup";
 import {
   classifyError,
@@ -28,6 +27,24 @@ const ATTACHMENT_LABELS: Record<string, string> = {
   audio: "дуут мессеж",
   file: "файл",
 };
+
+// Facebook serves every Messenger sticker from this CDN path.
+const STICKER_CDN_PATH = /\/t39\.1997-6\//;
+
+/**
+ * Messenger stickers (the 👍 "like" above all) arrive as an image plus a second
+ * non-image entry for the same picture, so they read as "зураг, файл": the bot
+ * answered a thumbs-up with "Файл хүлээн авлаа." and spent a vision run on it
+ * (32 of 42 real stickers got a "received" reply, 2026-09-16 → 11-03).
+ */
+export function isStickerAttachment(attachment: {
+  type?: string;
+  payload?: { url?: string; sticker_id?: unknown };
+}) {
+  return attachment?.type === "sticker"
+    || (attachment?.payload?.sticker_id !== undefined && attachment?.payload?.sticker_id !== null)
+    || STICKER_CDN_PATH.test(String(attachment?.payload?.url || ""));
+}
 
 export function extractImageAttachmentUrls(
   attachments: Array<{ type?: string; payload?: { url?: string } }>,
@@ -170,10 +187,6 @@ async function leadForUnmatchedTripScreenshot(
       customerMessage: "[Аяллын зураг]",
       context: `Хэрэглэгч аяллын зураг илгээсэн${summary ? ` (${summary})` : ""}, аль аялал болохыг бот тогтоож чадсангүй — «Ирсэн зургууд»-аас үзээд хариулна уу.`,
     });
-    await notifyStaffOfLead(
-      { kind: "handoff", platform: input.platform, customerMessage: "[Аяллын зураг]", senderId: input.senderId },
-      { requestId: input.trace?.requestId, correlationId: input.trace?.correlationId, source: "api.webhook.trip_screenshot_unmatched" },
-    );
   } catch (error) {
     logWarn("webhook.trip_screenshot_lead_failed", {
       requestId: input.trace?.requestId,
@@ -270,11 +283,26 @@ export async function handleAttachmentOnlyMessage(input: {
   timestamp?: number;
   token?: string;
   attachments: Array<{ type?: string; id?: string; mime_type?: string;
-    payload?: { url?: string; attachment_id?: string } }>;
+    payload?: { url?: string; attachment_id?: string; sticker_id?: unknown } }>;
+  /** Messenger's message-level `sticker_id`, set when the whole message is a sticker. */
+  stickerId?: unknown;
   deliverReply: AttachmentDelivery;
   trace?: { requestId: string; correlationId: string };
 }) {
   const { platform, senderId, pageId, token, attachments, trace } = input;
+  // A sticker is a reaction ("ok", "thanks"), not a document and not a question:
+  // kept for the inbox, never acknowledged, never sent to the vision model.
+  const isSticker = (input.stickerId !== undefined && input.stickerId !== null)
+    || (attachments.length > 0 && attachments.every(isStickerAttachment));
+  if (isSticker) {
+    const stickerUrl = attachments
+      .map((a) => String(a?.payload?.url || "").trim())
+      .find((url) => url.startsWith("http"));
+    await appendMessage(senderId, "user", "[Хэрэглэгч стикер илгээсэн]",
+      stickerUrl ? [{ type: "image", url: stickerUrl }] : []);
+    recordCounter("webhook.sticker_only_total", 1, { platform });
+    return;
+  }
   const kinds = Array.from(
     new Set(attachments.map((a) => a?.mime_type?.startsWith("image/")
       ? "зураг" : ATTACHMENT_LABELS[a?.type || ""] || "файл")),
@@ -321,7 +349,7 @@ export async function handleAttachmentOnlyMessage(input: {
 
   // The bot cannot listen to a voice note, but staff can. It used to get the
   // generic "write it in text" ack and nothing else — a paying customer sent a
-  // dozen voice notes over a week that no alert ever pointed staff to.
+  // dozen voice notes over a week that no lead ever showed staff.
   const isVoiceNote = attachments.some((attachment) => attachment?.type === "audio");
   if (isVoiceNote) {
     try {
@@ -333,10 +361,6 @@ export async function handleAttachmentOnlyMessage(input: {
           customerMessage: "[Дуут мессеж]",
           context: "Хэрэглэгч дуут мессеж илгээсэн — бот сонсож чадахгүй тул зөвлөх сонсоод хариулна уу.",
         });
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: "[Дуут мессеж]", senderId },
-          { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.voice_note" },
-        );
       }
     } catch (error) {
       logWarn("webhook.voice_note_lead_failed", {

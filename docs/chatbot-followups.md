@@ -10,11 +10,11 @@ tagged f441aaf). Deterministic paths still answered; every AI-dependent turn end
 lead. Live replays run on the same key that day helped drain it. The balance was restored by 08:02 UTC
 (Messenger webhook AI calls succeeded again; one controlled demo test at 08:09 succeeded on all models).
 **Safeguards:** mocked CI, opted-in and capped evaluation runs (one at a time, never against the
-production site), spend tracking per environment with a daily budget alert, an outage notice to the
-customer instead of silence, immediate staff alerts on billing/key failures. The owner chose to keep one
-OpenAI key for production and testing.
-**Optional, not required:** a real-time staff channel (`STAFF_NOTIFY_PSIDS` or Telegram) so alerts are
-pushed, not only shown in admin.
+production site), spend tracking per environment with a daily budget warning in the admin system check,
+an outage notice to the customer instead of silence, and an `ai_outage` critical issue on the admin
+dashboard. The owner chose to keep one OpenAI key for production and testing.
+**No realtime staff alert (owner, 2026-11-04):** leads and outages live in the admin Leads tab and
+system check only; the Telegram / Messenger staff-ping system was removed.
 
 ## P1-0 — Latin-script month words — FIXED (deployed 2026-10-30)
 Production 2026-10-30: "<place> aylal neg sariin eheer sonirhoj bb" (early January, Latin script) got
@@ -127,13 +127,40 @@ answered, and the Messenger menu carries «Хүнтэй холбогдох» (`s
 «Ботод буцаах» (stored as a far-future expiry, `UNTIL_RELEASED_AT`; timed pauses keep their time). The
 45 conversations held at the switch were re-verified against Meta's threads and moved over (one false
 take-over — Meta's welcome burst — was released instead). Every customer message while held still
-reaches staff as a lead follow-up and a Telegram ping.
+reaches staff as a lead follow-up in the admin Leads tab (there is no realtime staff alert).
 **OPEN — desktop consultant within 20 s.** Meta tags a consultant on a computer and its own automations
 alike; a desktop consultant's FIRST reply within 20 s of the customer's message reads as an automation,
 so the bot may answer the customer's next message once (`test.todo`). 14 days of threads held no
 desktop consultant at all (1,261 phone replies, which are never affected), and the live desktop test is
 pending. If desktop use grows, the fix is a memory of Meta's automation texts (the same text sent to
 many customers), which would let a unique message within 20 s count as a person.
+
+## P1-6 — Messages with no trip in them were forced through the trip pipeline — FIXED on branch `fix/understanding-need` (not deployed)
+Real shapes (2026-10-31 .. 2026-11-05): an organisation of 50-60 got "the system is down" (credit outage) or a
+per-person fare card; "organisation of 40-45, any discount?" got an invented "Тийм, тусгай хямдрал"; "barter?"
+re-sent a trip list; a ticket-only wish or a border pick-up with a place word got a trip list or an itinerary; a long
+thank-you naming "хөтөлбөр" / "санал" got a programme; "ok" under a price got "Ямар аялал сонирхож байна?";
+"захиалгаа цуцлах боломжтой юу" got "Утасны дугаараа бичнэ үү." and no lead.
+**Now.** `messageNeed.ts` names the need from the customer's own words BEFORE any trip is looked up
+(social, business_group, commercial_policy, transport_only, existing_booking, complaint) and `needDispatch.ts`
+acts on it with no model call: thanks / praise get one warm line, an acknowledgement is silent; a group or
+organisation gets a typed lead (`[need:business_group]`, head count, destination words, month, the customer's
+words; an open lead gets the new message appended) and ONE reply made only of the company's published custom-trip
+wording plus ONE question (the "passed to the consultant" sentence only when the lead was really saved);
+barter / contract / instalments and ticket-only or pick-up wishes are a typed lead and silence; a booking
+question is never the collector's phone ask. Owner-entered discount policies, offers and FAQ make the commercial gate
+step aside so the model can answer from them; a reply that states a discount, group price, barter or contract the data does
+not hold becomes REFER (`guardInventedCommercialClaims`). Journeys: `tests/understanding-need-journeys.test.ts`.
+**Measured on real traffic (read-only, `scripts/replay-needs.ts`, 2026-11-07):** of 1,760 distinct customer texts of the
+last 60 days the gate names 66 (3.8%): 28 group / organisation / custom-route, 8 barter / invoice / instalments, 4 ticket-only or
+pick-up or hotel-only, 15 thanks, 11 acknowledgements, 0 booking questions, 0 complaints. The first pass wrongly took another
+agency's company, a pasted advertisement and a 565-character thank-you for groups; those are fixed and have tests.
+**Rollout knob:** `NEED_MODEL` = `observe` (default; the understanding call's own `need` is only logged as
+`webhook.need_observed`, no behaviour change), `enforce` (a validated model need acts like a rule need), `off`.
+Compare `webhook.need_observed.agreesWithRule` in the admin logs for several days before choosing `enforce`.
+**Still open:** `demo.ts` does not mirror the gate (a tester sees the old answers); the booking-collector start
+still answers "how do I book?"; destination-free weather and the constraint ledger (month / party carried across a
+trip switch) are separate work.
 
 ## P1-3 — Test traffic in the production conversation table — MITIGATED (2026-10-30)
 `demo:` sessions (87% of rows) are written beside real customers. Every analytics and quality query on
@@ -167,6 +194,81 @@ alerts nobody (0 `demo:` leads exist). **Impact:** the endpoint serves this app'
 admin test chat, not the booking website; the last 30 days hold 0 landing-page/admin sessions (all `demo:`
 sessions were QA tooling), so no real customer was affected in that period.
 
+## P2-6 — "Шинэ жилийн аялал" from the agency's own post — FIXED (2026-11-04)
+The page posted "байгууллагын шинэ жилийн аялалаа энд хийгээрэй"; customers then asked for "the New Year
+trip" as if it were one named trip ("Sain bnuu ene shine jiliin ayalal haashaa be", "шинэ жилийн аяллын
+мэдээлэл авъя"). No trip carries that name, so the free-text model answered "no trip with that special
+name; which country?", and the follow-up quoting the post's price in chat words ("<price> geed bga yum")
+ended in a staff hand-off although the trip sold at exactly that price was in the catalogue.
+**Now.** "шинэ жил / shine jil / шинэ оны / new year" with a trip or information word is a catalogue
+question: the reply lists the trips leaving between December 1 and January 10 (the real departures and
+fares), always with the website for the full schedule, and asks the customer to pick one. When nothing
+leaves in that window the reply says so, gives the website, and shows the nearest departures instead.
+A quoted price wrapped in chat words ("гээд байгаа юм", "geed bga yum", "гэсэн үнэтэй аялал байна лээ")
+is read as the pasted price it is: the bare-price path names the trip sold at exactly that price (it is no
+longer mistaken for a price objection or a trip question with no trip). A price no trip sells at is still
+never matched to a near one. Journey `a New Year trip question lists the New Year departures…`
+(`tests/forensic-regressions.test.ts`) fails without the fix. `npm run gate` and `npm run qa:live` were
+not run for this change (no database or model key in the build environment).
+
+## P2-2b — The home city named a trip — FIXED (2026-11-04)
+Live 2026-11-04: "<border town>-аас Улаанбаатар орох хүн авах боломж байдаг уу" (a one-way pick-up the
+agency does not sell) was answered with the one flight trip whose title names the home city, listing its
+Ulaanbaatar days as the answer. Every trip leaves from and returns to the home city, so the word
+(any case ending, Cyrillic or Latin, "УБ") now counts as a generic route word: it never identifies a trip
+and is never "a place on the trip" for the day-list answer. "The two / three of us" words ("2 уулаа",
+"хоёулаа") are generic too; typed in Latin they were a letter away from a red-named stop. The pick-up
+question now gets silence plus a staff lead. Journey `the home city in a trip's title never picks that
+trip…` (`tests/forensic-regressions.test.ts`) fails without the fix. Gate replay: 12 decisions changed,
+all read (the home-city trip stops handicapping itself in the score, so pasted titles narrow from 6 to 3).
+
+## P2-2d — Holidays as travel dates — FIXED (2026-11-04)
+Live 2026-11-04: "цагаан сарын үейр ямар аялалууд байна" got the catalogue's soonest (November)
+departures. Nothing read "цагаан сар" as a time, and "аялалууд" made it a whole-catalogue question.
+**Now** (`src/lib/holidayCalendar.ts`): Цагаан сар (per-year table of the published days off, 2026–2030),
+Наадам (11–15 July) and Шинэ жил (the agency's December–early January window) resolve to real dates with
+the year, next occurrence first; "…дараа / өмнө" look 30 days after / before; "2028 оны цагаан сар" uses
+that year. The shared date parser returns the window, so the catalogue list, the per-trip date answer, the
+booking request and both model prompts all read it. The list puts trips whose days overlap the holiday
+first, then departures within 7 days; nothing then gives "одоогоор алга" plus the closest departures as
+nearby dates (or "хуваарь гараагүй" when they are months away). A year with no published Tsagaan Sar days
+is never guessed: silence plus a staff lead. "Баярын өдрүүдээр" asks which holiday; the holiday greeting
+("Сар шинэдээ сайхан шинэлж байна уу") is not answered with trips. Holiday names never identify a trip
+(a trip titled "… ШИНЭ ЖИЛИЙН АЯЛАЛ" added the same day had become the answer to every New Year question
+and to "Шинэ аялал гарсан уу"). **Maintenance:** add each new year's Tsagaan Sar days to the table when the
+government announces them (the table ends at 2030). Journeys: `a holiday is a time…`
+(`tests/forensic-regressions.test.ts`), rules in `tests/holiday-calendar.test.ts`; both fail without the fix.
+
+## P2-2e — Calendar group: holiday + place, ordinary-word date follow-ups, unknown place, party fares, quoted price — FIXED (2026-11-07)
+Live 2026-11-01..06 (six conversations). The decision "which window / which place" was made by word lists, so one
+unlisted word flipped the answer. **Now**, one path each: (1) a holiday ask, with or without a place, is answered by
+`holidayWindowListing` (`catalogListing.ts`): the window is named ("Цагаан сарын үеэр (2027 оны 2 сарын 6–9 орчим)"),
+trips on the road over the holiday come first and are marked, the one titled for it before the rest, departures only
+near it are marked "ойролцоо", and with nothing in the window the departures NEAREST TO THE WINDOW are shown (or
+"хуваарь гараагүй" when months away) - never "Тэр хугацаанд гарах аялал алга" followed by earlier dates. The
+catalogue-word gate (`isHolidayCatalogQuestion`) is gone. (2) A message is a NEW destination only when a word nothing
+else explains (not a date, party, verb, filler or catalogue word) is left (`placeLikeTokens.ts`); the whitelist verdict
+(`calendarWordsAreContextOnly`) is gone, so "2027 ионы 2-р сард аялах юмаа" is a date question about the trip on
+screen, and the year the customer states is the year. (3) A place no trip goes to is a constraint: a time-only
+listing says nothing (silence + lead) instead of listing other places' trips; an ended trip named by part of its name
+gets the ended-trip notice. A place typed in Latin letters is matched by sound. (4) A party named by ages under a
+displayed list is priced per trip through each trip's age bands (`buildAmbiguousPassengerTotalReply`). (5) A quoted
+price (990000 / 990k / 990 мянга / 1 сая) matches ADULT fares first, weekday-schedule trips included; a round
+amount no trip sells is read as a budget (a full digit string typed like an advert's price is still not guessed).
+**Seam:** `getInheritedDateScope(history)` (`inheritedDateScope.ts`) is the one place the window of an earlier turn
+is read; a sender-level constraint ledger (month, holiday, passengers, exclusions kept across turns) replaces its body.
+**Open:** a month carried over from an earlier turn that the named place does not leave in stays silent + lead
+(only a carried HOLIDAY window is answered, because that reply names the window it assumed). Journeys:
+`tests/understanding-holiday-journeys.test.ts`, rules `tests/understanding-holiday-units.test.ts`; both fail without the fix.
+
+## P2-2c — Two trips of one country both stop in the asked city — OPEN
+"<улс> аялал <хот>-д ямар буудалд буудаллах вэ": two tours of that country list the city among their
+aliases, and the score picks one (before 2026-11-04 it asked, but offered a tour that does not visit the
+city and left out the one named after it). The honest answer is "which of these two?". A rule
+"two or more trips cover every named place → ask" was tried and reverted: it also turned fully typed
+sibling names into questions (51 gate changes). Needs a rule that excludes names the customer typed
+in full or in order.
+
 ## P2-3 — Look-alike destinations — OPEN
 Fuzzy matching can take a destination one letter away for another. Needs a data-side "not this place"
 field, not code.
@@ -195,7 +297,33 @@ run against the production database with placeholder page ids from `.env.local`.
 deployment seeds page rows (a missing row means "not paused"); the five fixture rows were deleted, the two
 real pages kept.
 
-## P2-6 — Accuracy and cost work (branch `work/chatbot-accuracy-cost`, 2026-11-02) — OPEN items
+## P2-6 — Identity and context — OPEN remainder (owner decision + Instagram data)
+Fixed on the branch (journeys `tests/understanding-routing-*.test.ts`): the selected trip stays the
+default unless the customer names something it lacks; transport words and the trip's own towns never
+switch it; "not that one, the other" resolves among the trips shown before; a weak alias inside a
+longer word names no trip; a named full trip is announced as full with the open ones; closed
+departures are called closed; a customer a consultant wrote to within 30 days is not sold
+alternatives on a date miss; clock times only from the itinerary; a list never answers a question
+none of its trips can answer.
+**Fixed 2026-11-12.** A nickname carried by a full trip AND an open sibling no longer names the open one
+alone (it quoted the open trip's price as the answer about the full one): when the customer's own words do
+not clearly favour the open trip (score lead under 5), the reply says the full trip is full and lists the
+open ones, the chosen one among them (`soldOutNamed.ts`, journey in
+`tests/understanding-routing-unavailable.test.ts`, fails without the fix). Only on the turn the trip enters
+the conversation; a trip typed in full, or already chosen, is answered as before. Model unavailable: a
+switch named by one destination word already chooses that trip (260 combinations swept, no one-trip menu);
+now guarded by a journey in `tests/understanding-routing-journeys.test.ts`.
+Measured read-only on the live catalogue (2,084 real non-demo messages, 60 days): 30 change, all one pair (a full
+direct-flight trip and its open land+flight sibling sharing the landmark name), including "<landmark> шууд аялалын
+мэдээлэл" and "<landmark> Суудал дүүрсэн юм уу", which used to get the land+flight card. A menu tap on the open trip is
+unchanged. Small open item: the full-trip notice is a bulleted list, so a bare "1" under it (here and in case 13) is
+silence + a lead rather than a pick; the name or "эхнийх" works.
+Still open (each a `test.todo` in `tests/understanding-routing-journeys.test.ts`):
+- An existing customer who names one trip and a date it does not depart on still gets that trip's
+  nearest departures (only the multi-trip date miss is silent). Owner decision: is that selling?
+- Instagram threads carry no consultant rows, so the existing-customer signal is Facebook-only.
+
+## P2-7 — Accuracy and cost work (branch `work/chatbot-accuracy-cost`, 2026-11-02) — OPEN items
 Full results: `docs/chatbot-accuracy-cost-report-2026-11.md`. Still open after that work:
 - **Seat questions for a date with no seat data.** "<trip> <date>-нд суудал байна уу" for a listed
   departure the website has no seat row for goes silent with a staff lead (owner's no-data rule). The

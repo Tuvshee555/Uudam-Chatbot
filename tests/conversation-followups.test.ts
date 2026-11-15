@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { NOT_SCHEDULED_LIST_START } from "./helpers/notScheduled";
 import test from "node:test";
 import { conversationGateHarness, type FixtureTrip } from "./helpers/conversationGateHarness";
 import { isPassengerCountOnly } from "../src/lib/travelFastPathsPricing";
@@ -35,7 +36,9 @@ test("follow-ups under a trip list are answered from the data, never looped or s
         const reply = result.sends[0].text;
         assert.match(reply, /ЛУМАРА НИСЛЭГТЭЙ АЯЛАЛ: 6,833,000₮/);
         assert.match(reply, /ЛУМАРА ГАЗРЫН АЯЛАЛ: 4,866,000₮/);
-        assert.ok(reply.split("\n").includes("• ЛУМАРА + ТЭВРИН АЯЛАЛ"), "no infant fare: name only, no estimate");
+        // Changed 2026-11-11: the trip's bare name read as an unanswered line; it now says the fare for
+        // that age is not recorded. Still no estimate: no amount on that trip's line.
+        assert.ok(reply.split("\n").includes("• ЛУМАРА + ТЭВРИН АЯЛАЛ — энэ насны үнэ бүртгэгдээгүй"), `no infant fare: said for that trip, no estimate: ${reply}`);
       }
     });
 
@@ -43,8 +46,9 @@ test("follow-ups under a trip list are answered from the data, never looped or s
       await harness.turn("date", "Лумара", several);
       const unscheduled = await harness.turn("date", "4 сарын 20-нд бга юу", { ...several, place: null, date: "2098-04-20" });
       assert.equal(unscheduled.sends.length, 1);
-      assert.match(unscheduled.sends[0].text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/);
-      assert.match(unscheduled.sends[0].text, /ЛУМАРА НИСЛЭГТЭЙ АЯЛАЛ: 3 сарын 15, 3 сарын 20/);
+      assert.match(unscheduled.sends[0].text, NOT_SCHEDULED_LIST_START);
+      // Since 2026-11-13 the rows are the departures nearest the asked date (dateAlternatives.ts): the trip's real departure is still listed.
+      assert.match(unscheduled.sends[0].text, /ЛУМАРА НИСЛЭГТЭЙ АЯЛАЛ: (?:3 сарын 15, )?3 сарын 20/);
       assert.ok(unscheduled.leads.some((lead) => lead.kind === "handoff"), "staff still hear about the wanted date");
       // The off-schedule date does not ride along into the pick that follows.
       const next = await harness.turn("date", "Лумара газрын аялал үнэ хэд вэ", { certainty: "one", tripId: "lum-land" });
@@ -90,7 +94,10 @@ test("a trip list is numbered cards, and the picked trip gets the full card with
     assert.match(card, /^✈️ ЛУМАРА-ГАЗАР НИСЛЭГ ХОСОЛСОН\n\n🗓 Хугацаа: 9 өдөр 8 шөнө\n\n💰 Үнэ:/);
     assert.match(card, /Нярай \/0-23 сар\/: 351,000₮/);
     assert.doesNotMatch(card, /Энэ нь газар \+ нислэг хосолсон аялал/, "the title already says it");
-    assert.doesNotMatch(card, /дугаараа/, "no phone request on a trip card");
+    // The card itself asks for no phone; since 2026-11-14 (owner: "wanted numbers most") the separate phone ask may
+    // follow it as the last line (nextQuestion.ts phoneInvite), never inside the card.
+    const { withoutNextQuestion } = await import("../src/lib/nextQuestionText");
+    assert.doesNotMatch(withoutNextQuestion(card), /дугаараа/, "no phone request inside the trip card");
   } finally {
     await harness.close();
   }

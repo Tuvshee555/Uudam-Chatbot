@@ -8,9 +8,12 @@
 import { departureMatchesScope, filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, requestedDepartureScope, type RequestedDepartureScope, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
 import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
-import { buildFarePriceLines, onSaleDepartureText, shortDate, upcomingDepartures } from "./tripFareBlock";
+import { buildFarePriceLines, displayAgeBand, onSaleDepartureText, shortDate, upcomingDepartures } from "./tripFareBlock";
 import { verifyTripReply } from "./tripReplyVerification";
 import { customerDate } from "./customerDate";
+import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
+import { holidayWindowOf } from "./askedWindow";
+import { holidayDatesFor, holidayDatesToShow, type ResolvedHoliday } from "./holidayDepartures";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -1116,7 +1119,8 @@ export function extractNormalizedPrice(text: string): number | null {
     }
   }
 
-  const kiloMatch = /(?:^|[^\d])(\d{3,5}(?:[.,]\d+)?)\s*[кk]\b/i.exec(compact);
+  // "990k", "990К" and "990 мянга / мянгатай / мянганы": thousands, however it is typed.
+  const kiloMatch = /(?:^|[^\d])(\d{3,5}(?:[.,]\d+)?)\s*(?:[кk](?![\p{L}\d])|(?:мянга|myanga|mynga)\p{L}*)/iu.exec(compact);
   if (kiloMatch) {
     const amount = Number.parseFloat(kiloMatch[1].replace(",", "."));
     if (!Number.isNaN(amount)) return Math.round(amount * 1000);
@@ -1343,12 +1347,17 @@ export function formatExtraFeesLine(trip: TravelTrip): string {
   return `⚠️ Дээрх үнэ дээр нэмэлт төлбөр орно: ${parts.join("; ")}`;
 }
 
+/**
+ * A trip's price lines: the shared card's (tripFareBlock.ts), the same canonical fares the
+ * trip card and the reply checker read, for every trip. A trip the resolver has no fare for
+ * prints the no-data sentence, which the webhook turns into silence and a staff lead. The
+ * extra-fees line sits under prices only: "on top of the price above" under no price was
+ * nonsense.
+ */
 export function formatTripBasePricePremium(trip: TravelTrip, now = new Date()) {
-  // Same canonical fares as the trip card and the reply checker (tripFareBlock.ts);
-  // the raw-field reader below is only for trips without dated fares.
-  const shared = buildFarePriceLines(trip, now);
-  const priceBlock = shared ? shared.lines.join("\n") : formatTripBasePricePremiumCore(trip, now);
-  const feesLine = formatExtraFeesLine(trip);
+  const block = buildFarePriceLines(trip, now);
+  const priceBlock = block.lines.join("\n");
+  const feesLine = block.kind === "no_fare" || block.kind === "sold_out" ? "" : formatExtraFeesLine(trip);
   return feesLine ? `${priceBlock}\n${feesLine}` : priceBlock;
 }
 
@@ -1397,154 +1406,6 @@ function structuredGroupsOnDate(trip: TravelTrip, ymd: string, now: Date): Array
       parseDepartureDateText(dateText, now).some((date) => date.slice(5) === monthDay),
     ),
   );
-}
-
-function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
-  const currency = trip.currency || "MNT";
-  const sections: string[] = ["💰 Үнэ:"];
-  const structuredGroups = getStructuredPriceGroups(trip);
-
-  if (structuredGroups.length > 0) {
-    type GroupedPrice = { priceKey: string; priceLines: string[]; dates: string[]; label: string; hotel: string; packageId: string };
-    const grouped: GroupedPrice[] = [];
-    for (const g of structuredGroups) {
-      const priceLines = structuredGroupPriceLines(trip, g, currency);
-      if (!priceLines.length) continue;
-      const hotel = typeof g.hotel === "string" ? g.hotel.trim() : "";
-      // A hotel sold as several packages: without the package name the card
-      // showed the same hotel twice at two prices (Санья, 2026-10-16).
-      const packageId = typeof g.package_id === "string" ? g.package_id.trim() : "";
-      const priceKey = `${hotel}|${packageId}|${priceLines.join("|")}`;
-      const rawDates = getPriceGroupDisplayDates(g);
-      const futureDates = filterFutureDepartureDates(rawDates, now, tripResolvedDates(trip));
-      if (rawDates.length > 0 && futureDates.length === 0) continue;
-      // "Үнэ" is the poster table's column header, not a departure label; as a
-      // heading it printed "💰 Үнэ:" followed by a second "Үнэ".
-      const rawLabel = typeof g.label === "string" ? g.label.trim() : "";
-      const label = /^(үнэ|үнийн мэдээлэл|price|prices)$/i.test(rawLabel) ? "" : rawLabel;
-      const existing = grouped.find((entry) => entry.priceKey === priceKey);
-      if (existing) existing.dates.push(...futureDates);
-      else grouped.push({ priceKey, priceLines, dates: [...futureDates], label, hotel, packageId });
-    }
-    // Only commit to the price-group rendering if at least one group survived
-    // the departed-dates filter; otherwise fall through so the room/flat price
-    // tiers below can answer instead of returning a bare "💰 Үнэ:" header.
-    if (grouped.length > 0) {
-      for (const entry of grouped) {
-        const dateLabel = entry.dates.length > 0 ? formatGroupDateLabel(entry.dates) : entry.label;
-        const groupLabel = entry.label.trim();
-        const labelHasDates = normalizeMnDate(groupLabel).length > 0;
-        const heading = groupLabel && !labelHasDates && dateLabel && groupLabel !== dateLabel
-          ? `${groupLabel}\n${dateLabel}`
-          : (dateLabel || (labelHasDates ? "" : groupLabel));
-        if (heading) sections.push("", heading);
-        if (entry.hotel) sections.push(`Буудал: ${entry.hotel}`);
-        if (entry.packageId && entry.packageId !== groupLabel) sections.push(`Багц: ${entry.packageId}`);
-        sections.push(...entry.priceLines);
-      }
-      return sections.join("\n");
-    }
-  }
-
-  const legacyGroups = getPriceGroups(trip);
-  if (legacyGroups.length > 0) {
-    // Buffer the group lines so an all-departed set of groups falls through to
-    // the room/flat price tiers instead of returning a header on its own.
-    const groupSections: string[] = [];
-    for (const group of legacyGroups) {
-      const rawDates = getPriceGroupDisplayDates(group);
-      const futureDates = filterFutureDepartureDates(rawDates, now, tripResolvedDates(trip));
-      if (rawDates.length > 0 && futureDates.length === 0) continue;
-      const dateLabel = futureDates.length > 0 ? formatGroupDateLabel(futureDates) : (group.label || "");
-      const priceLines = formatPassengerPriceLines({
-        adult: group.adult_price ?? null,
-        child: group.child_price ?? null,
-        infant: group.infant_price ?? trip.infant_price ?? null,
-        currency,
-        childFree: isDocumentedFreeFare(trip, "child"),
-        infantFree: isDocumentedFreeFare(trip, "infant"),
-      });
-      if (!priceLines.length) continue;
-      if (dateLabel) groupSections.push("", dateLabel);
-      groupSections.push(...priceLines);
-    }
-    if (groupSections.length > 0) {
-      return [...sections, ...groupSections].join("\n");
-    }
-  }
-
-  const extra = (trip.extra || {}) as Record<string, unknown>;
-  const roomPrices = Array.isArray(extra.room_prices)
-    ? (extra.room_prices as Array<Record<string, unknown>>)
-    : [];
-  const roomLines = roomPrices
-    .map((room) => {
-      const roomType = typeof room.room_type === "string" && room.room_type.trim()
-        ? room.room_type.trim()
-        : "Өрөөний үнэ";
-      const amount = typeof room.price === "number"
-        ? formatMoney(room.price, typeof room.currency === "string" ? room.currency : currency)
-        : "";
-      return amount ? `• ${roomType}: ${amount}` : "";
-    })
-    .filter(Boolean);
-  if (roomLines.length > 0) {
-    return [...sections, "", "Өрөөний төрлөөр:", ...roomLines.slice(0, 8)].join("\n");
-  }
-
-  // A single flat child_price can silently pick ONE of several age-banded child
-  // fares this catalog stores in child_rules (observed: a trip with a
-  // 1,111,111₮ tier for one birth-year band and a SEPARATE 999,999₮ tier for
-  // another, collapsed by the extraction to one flat trip.child_price; the
-  // amounts here are synthetic on purpose) —
-  // quoting that single number to every family either over- or under-charges
-  // whichever band it doesn't match. When child_rules documents more than one
-  // distinct non-infant fare, break them out instead.
-  const childTierLines = formatDistinctChildTiers(trip, currency);
-  if (childTierLines.length > 0) {
-    const lines = [...sections, ""];
-    const adultText = formatPassengerMoney(trip.adult_price, currency);
-    if (adultText) lines.push(`• Том хүн: ${adultText}`);
-    lines.push(...childTierLines);
-    if (isDocumentedFreeFare(trip, "infant")) lines.push("• Нярай: Үнэгүй");
-    return lines.join("\n");
-  }
-
-  const bands = tripAgeBands(trip);
-  const flatLines = formatPassengerPriceLines({
-    adult: trip.adult_price,
-    adultText: formatPriceRange((trip.extra || {}).adult_price_range, currency),
-    child: trip.child_price,
-    infant: trip.infant_price,
-    childAge: bands.child,
-    infantAge: bands.infant,
-    currency,
-    childFree: isDocumentedFreeFare(trip, "child"),
-    infantFree: isDocumentedFreeFare(trip, "infant"),
-  });
-  // "Infants ride free" is a trip-level policy from child_rules, not a fare
-  // attached to any one departure — so it must survive the fall-through that
-  // happens once every price group's dates have passed. Without this, a live
-  // trip awaiting new dates silently stopped mentioning free infants in its
-  // main price answer, while the infant-specific question still said Үнэгүй:
-  // two different answers to the same question depending on how it was asked.
-  if (isDocumentedFreeFare(trip, "infant") && !flatLines.some((line) => line.startsWith("• Нярай"))) {
-    flatLines.push("• Нярай: Үнэгүй");
-  }
-  if (!flatLines.length) return "💰 Үнийн мэдээлэл одоогоор тодорхойгүй байна.";
-  return [...sections, "", ...flatLines].join("\n");
-}
-
-/**
- * Distinct age-banded child fares from child_rules/child_price_rules, infant
- * tiers excluded (those render separately as "Нярай: Үнэгүй"). Returns [] when
- * there is nothing to break out — either no rules, or every rule agrees with
- * the flat trip.child_price, in which case the existing single-line render is
- * already correct and adding a second identical line would be noise.
- */
-/** "2014-2015 он" → "2014-2015 онд төрсөн"; any other band unchanged. */
-export function displayAgeBand(band: string): string {
-  return band.trim().replace(/^((?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2})\s*он$/u, "$1 онд төрсөн");
 }
 
 /**
@@ -1600,28 +1461,6 @@ function groupChildTierLines(group: Record<string, unknown>, currency: string): 
       return priceText ? `• Хүүхэд${band ? ` /${band}/` : ""}: ${priceText}` : "";
     })
     .filter(Boolean);
-}
-
-function formatDistinctChildTiers(trip: TravelTrip, currency: string): string[] {
-  const extra = (trip.extra || {}) as Record<string, unknown>;
-  const rules = [extra.child_rules, extra.child_price_rules]
-    .flatMap((value) => (Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []))
-    .filter((rule) => typeof rule.price === "number" && rule.price > 0)
-    .filter((rule) => {
-      const label = normText(typeof rule.label === "string" ? rule.label : "");
-      const ageRange = typeof rule.age_range === "string" ? rule.age_range : "";
-      return !isInfantShapedAge(label, ageRange);
-    });
-  const distinctPrices = new Set(rules.map((rule) => rule.price));
-  if (distinctPrices.size < 2) return [];
-  return rules
-    .map((rule) => {
-      const priceText = formatPassengerMoney(rule.price as number, currency);
-      if (!priceText) return "";
-      const ageRange = typeof rule.age_range === "string" && rule.age_range.trim() ? ` /${displayAgeBand(rule.age_range)}/` : "";
-      return `• Хүүхэд${ageRange}: ${priceText}`;
-    })
-    .filter((line): line is string => Boolean(line));
 }
 
 export function extractMonthOnlyFromText(text: string): number | null {
@@ -1752,12 +1591,16 @@ const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "
  * date sold at another price the reply verifier rightly rejected it, and the
  * whole "which trip?" question became silence plus a paused customer.
  */
-function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: RequestedDepartureScope | null = null): { fares: ListedFares | null; dates: string[]; soldOut?: boolean; outsideScope?: boolean; qualifications?: string[]; ageLabels?: Partial<Record<PassengerKind, string>> } {
+function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: RequestedDepartureScope | null = null, holiday: ResolvedHoliday | null = null): { fares: ListedFares | null; dates: string[]; soldOut?: boolean; outsideScope?: boolean; qualifications?: string[]; ageLabels?: Partial<Record<PassengerKind, string>> } {
   // The dated departures come from the same resolver the reply checker uses, so a
   // line can never print a date the checker does not know (a cancelled or copied
   // date made it reject the whole list). Weekly schedules ("Ням гараг бүр") have no
   // calendar dates and keep the trip's own text.
-  const dated = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope)).slice(0, scope?.kind === "dates" ? scope.dates.length : 8);
+  const inScope = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope));
+  // Under a holiday list the card prints the departures that list showed (the ones over the holiday),
+  // not the earliest dates of the search window.
+  const forHoliday = holiday ? holidayDatesToShow(holidayDatesFor(trip, holiday, now), 8).filter(date => inScope.includes(date)) : [];
+  const dated = (forHoliday.length ? forHoliday : inScope).slice(0, scope?.kind === "dates" ? scope.dates.length : 8);
   if (scope && !dated.length) return { fares: null, dates: [], outsideScope: true };
   const future = dated.length ? dated : withFutureDepartureDates(trip, now).departure_dates.slice(0, 8);
   // A sold-out or closed departure is not on sale: listing it with a price made
@@ -1814,6 +1657,7 @@ export function buildAmbiguousTripReply(
   now = new Date(),
 ) {
   const scope = options.customerText ? requestedDepartureScope(options.customerText, now) : null;
+  const holiday = options.customerText ? holidayWindowOf(options.customerText, now) : null;
   if (scope?.kind === "unsupported") return "REFER";
   const candidates = scope ? trips.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, scope))) : trips;
   const text = options.customerText || "";
@@ -1824,7 +1668,7 @@ export function buildAmbiguousTripReply(
   const asksChild = /хүүх|child|huuh|huvh/i.test(text);
   const asksInfant = /нярай|infant|nyarai/i.test(text);
   const shown = candidates.slice(0, limit)
-    .map((trip) => ({ trip, listed: listedFaresAndDates(trip, now, scope) }))
+    .map((trip) => ({ trip, listed: listedFaresAndDates(trip, now, scope, holiday) }))
     .filter(({ listed }) => !listed.outsideScope);
   const cards = shown.map(({ trip, listed }, index) => {
     const currency = trip.currency || "MNT";
@@ -1905,8 +1749,13 @@ export function buildDateNotScheduledReply(trips: TravelTrip[], now = new Date()
     DATE_NOT_SCHEDULED_HEADING,
     ...shown.map(({ trip, dates }) => `• ${trip.route_name}: ${dates.slice(0, 3).map((date) => customerDate(date, now)).join(", ")}`),
     ...(scheduled.length > shown.length ? [`Өөр ${scheduled.length - shown.length} сонголт бий.`] : []),
+    // Owner 2026-11-11: point to every other trip too, and let the customer say which one.
+    "", OTHER_TRIPS_LINK_LINE,
   ].join("\n");
 }
+
+/** The closing line of a "not then" reply: the whole catalogue on the website, and an invitation to name a trip. */
+export const OTHER_TRIPS_LINK_LINE = `Бусад аяллуудыг эндээс харж болно: ${BOOKING_WEBSITE_URL} — сонирхсон аяллаа бичээрэй 😊`;
 
 /** Legacy text for integrations that explicitly request contact. */
 export const LEAD_CAPTURE_CTA =

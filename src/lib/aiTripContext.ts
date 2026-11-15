@@ -23,6 +23,8 @@
  */
 
 const MODULES_HEADER = "Modules:";
+// The section headers formatKnowledgeBase (businessData.ts) writes, in its order.
+const SECTION_HEADERS = new Set(["Trip categories:", MODULES_HEADER, "Special offers:", "Discount policies:", "Verified credentials:", "FAQ:"]);
 export const FOCUS_HEADER = "Trips in focus (full detail):";
 const RECENT_MESSAGES_FOR_FOCUS = 4;
 // Full detail for at most this many trips. The matcher's picks come first; a trip list in the
@@ -40,6 +42,9 @@ const SUMMARY_FIELDS = ["duration", "price", "Ангилал", "Child price", "I
 const PRICE_TABLE_FIELDS = new Set(["Огноо тус бүрийн үнэ", "Price groups", "Discount groups", "Хямдрал"]);
 const MAX_PRICE_TABLE_CHARS = 2_400;
 
+/** One trip of the list: its "- name | field | …" line and the lines its text runs on to. */
+type Entry = { name: string; lines: string[] };
+
 function normalizeName(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
@@ -48,25 +53,36 @@ function moduleName(line: string): string {
   return line.slice(2).split(" | ")[0]?.trim() || "";
 }
 
-/** The Modules section: its line range and its trip lines (continuation lines joined to their trip). */
-function modulesSection(lines: string[]): { start: number; end: number; modules: string[] } | null {
+/** Every trip line has at least "- name | price: …"; a bullet inside a trip's notes has no " | ". */
+function isEntryStart(line: string): boolean {
+  return line.startsWith("- ") && line.includes(" | ");
+}
+
+/** The text before the trip list, the trips, and the sections after them. */
+function splitModules(knowledgeBase: string): { before: string[]; entries: Entry[]; after: string[] } {
+  const lines = knowledgeBase.split("\n");
   const start = lines.findIndex((line) => line.trim() === MODULES_HEADER);
-  if (start < 0) return null;
-  let end = start + 1;
-  while (end < lines.length && lines[end].trim()) end += 1;
-  const modules: string[] = [];
-  for (const line of lines.slice(start + 1, end)) {
-    if (line.startsWith("- ")) modules.push(line);
-    // A description that still carries a line break belongs to the trip above it.
-    else if (modules.length) modules[modules.length - 1] += ` / ${line.trim()}`;
+  if (start < 0) return { before: lines, entries: [], after: [] };
+  const before = lines.slice(0, start + 1);
+  const entries: Entry[] = [];
+  let index = start + 1;
+  for (; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (SECTION_HEADERS.has(line.trim())) break;
+    if (isEntryStart(line)) entries.push({ name: moduleName(line), lines: [line] });
+    else if (entries.length) entries[entries.length - 1].lines.push(line);
+    else before.push(line);
   }
-  return { start, end, modules };
+  const after = lines.slice(index);
+  // The blank line that separates the list from the next section is not part of the last trip.
+  const last = entries[entries.length - 1];
+  while (last && last.lines.length > 1 && !last.lines[last.lines.length - 1].trim()) after.unshift(last.lines.pop()!);
+  return { before, entries, after };
 }
 
 /** Trip names as they appear in the catalog's module lines. */
 export function catalogTripNames(knowledgeBase: string): string[] {
-  const section = modulesSection(knowledgeBase.split("\n"));
-  return section ? section.modules.map(moduleName).filter(Boolean) : [];
+  return splitModules(knowledgeBase).entries.map((entry) => entry.name).filter(Boolean);
 }
 
 /** Catalog trips whose full name appears in the latest messages of the chat. */
@@ -94,10 +110,13 @@ function summaryField(field: string): string {
   return `Departure dates: ${dates.slice(0, INDEX_DEPARTURES).join(", ")} (+${dates.length - INDEX_DEPARTURES} more dates)`;
 }
 
-function summaryLine(line: string): string {
-  const [head, ...fields] = line.split(" | ");
-  const kept = fields.filter((field) => SUMMARY_FIELDS.includes(field.split(":")[0].trim())).map(summaryField);
-  return [head, ...kept, "summary only"].join(" | ");
+/** One line: the kept fields, each collapsed onto that line. */
+function summaryLine(entry: Entry): string {
+  const [head, ...fields] = entry.lines.join("\n").split(" | ");
+  const kept = fields
+    .filter((field) => SUMMARY_FIELDS.includes(field.split(":")[0].trim()))
+    .map((field) => summaryField(field.replace(/\s+/g, " ").trim()));
+  return [head.trim(), ...kept, "summary only"].join(" | ");
 }
 
 /** A focused trip's full line with each price table cut at a row boundary. */
@@ -120,16 +139,13 @@ function focusedLine(line: string): string {
  * names, every trip is an index line and no focus section is added.
  */
 export function focusKnowledgeBase(knowledgeBase: string, focusNames: string[]): string {
-  const lines = knowledgeBase.split("\n");
-  const section = modulesSection(lines);
-  if (!section) return knowledgeBase;
-  const byName = new Map(section.modules.map((line) => [normalizeName(moduleName(line)), line]));
+  const { before, entries, after } = splitModules(knowledgeBase);
+  if (!entries.length) return knowledgeBase;
+  const byName = new Map(entries.map((entry) => [normalizeName(entry.name), entry]));
   const focused = [...new Set(focusNames.map(normalizeName).filter((name) => byName.has(name)))].slice(0, MAX_FOCUSED_TRIPS);
-  const catalogue = [
-    ...lines.slice(0, section.start + 1),
-    ...section.modules.map(summaryLine),
-    ...lines.slice(section.end),
-  ].join("\n");
+  const catalogue = [...before, ...entries.map(summaryLine), ...after].join("\n");
   if (!focused.length) return catalogue;
-  return `${catalogue}\n\n${FOCUS_HEADER}\n${focused.map((name) => focusedLine(byName.get(name)!)).join("\n")}`;
+  // A focused trip keeps every line of its text as written (a checkup trip's test list).
+  const detail = focused.map((name) => byName.get(name)!.lines.map(focusedLine).join("\n").replace(/\s+$/, ""));
+  return `${catalogue}\n\n${FOCUS_HEADER}\n${detail.join("\n")}`;
 }

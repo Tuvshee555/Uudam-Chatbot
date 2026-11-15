@@ -17,8 +17,10 @@ import { departureAvailability, departureIsClosed } from "./departureAvailabilit
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
 import { buildFareSection, dateIsOnSale, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice, upcomingDepartures } from "./tripFareBlock";
+import { budgetReplyForQuotedPrice, quotedPriceRows, safeDurationText } from "./quotedPriceReply";
 import { buildTripRequest } from "./tripRequest";
-import { renderTripOfferReply, resolveTripOffer, type OfferFare, type ResolvedTripOffer } from "./tripOffers";
+import { isUnknownPartyFareLine, partyFareChoiceLine, unknownPartyFareLine } from "./partyFareLine";
+import { renderTripOfferReply, resolveTripOffer, type OfferFare, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import { compactReplyOptions, replyPreferences } from "./chatbotReplyPolicy";
 import {
   buildDepartureDateAvailabilityReply,
@@ -40,7 +42,6 @@ import {
   getStructuredPriceGroups,
   getTripNameHaystack,
   getTripSearchHaystack,
-  isGenericConfirmationText,
   keywordTokens,
   matchScoreForPriceKind,
   normText,
@@ -64,6 +65,7 @@ import {
 } from "./travelFastPathsSearch";
 import { buildTripProgramReply } from "./travelFastPathsProgram";
 import { phoneticTokenMatches } from "./travelTextNorm";
+import { aliasOccursInText } from "./aliasMatch";
 import { CUSTOMER_TURN_MARK, customerTurn, intentTextOf, joinContextAndTurn } from "./customerTurn";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
@@ -111,16 +113,6 @@ import {
   parseLooseMonthDays,
   priceGroupMatchesTicketPreference,
 } from "./travelFastPathsPricing";
-
-/**
- * duration_text is free text an admin/AI-extraction pass can leave as an
- * internal QA sentinel ("... тодорхойгүй, баталгаажуулах шаардлагатай")
- * instead of an actual duration. Never echo that straight to a customer.
- */
-function safeDurationText(durationText: string | null | undefined): string {
-  if (!durationText || isGenericConfirmationText(durationText)) return "";
-  return durationText;
-}
 
 function hasInfantPrice(trip: TravelTrip): boolean {
   if (typeof trip.infant_price === "number" && trip.infant_price > 0) return true;
@@ -207,21 +199,26 @@ function parsePassengerTotalRequest(text: string): { adultCount: number; childCo
   return { adultCount, childCount, infantCount };
 }
 
-function formatPassengerTotalLine(trip: TravelTrip, text: string, counts: { adultCount: number; childCount: number; infantCount: number }, now: Date): string | null {
+function formatPassengerTotalLine(trip: TravelTrip, text: string, counts: { adultCount: number; childCount: number; infantCount: number } | null, now: Date): string | null {
   const turn = customerTurn(text);
   const request = buildTripRequest(turn, [trip], undefined, now);
   if (request.unsupportedDateWindow || request.packagePreference && !request.package) return null;
-  const passengers = request.passengers.length ? request.passengers : [
+  const passengers = request.passengers.length || !counts ? request.passengers : [
     { kind: "adult" as const, count: counts.adultCount },
     { kind: "child" as const, count: counts.childCount },
     { kind: "infant" as const, count: counts.infantCount },
   ].filter(passenger => passenger.count > 0);
+  if (!passengers.length) return null;
+  // A party named by ages, no count word ("4 болон 7 настай хүүхэд төлбөр хэд вэ"): each trip's fare for each, read through its age
+  // bands. Children alone have no "total" (live 2026-10-30: read as the family's price): fares per person.
+  const perPerson = !counts && !passengers.some(passenger => passenger.kind === "adult");
   const scope = requestedDepartureScope(turn, now);
   const dates = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope));
   const offers: ResolvedTripOffer[] = [];
   for (const date of dates) {
     const result = resolveTripOffer(trip, { date, hotel: request.hotel, packageId: request.package, passengers }, now);
-    if (result.status !== "ready" || !result.offer.total) return null;
+    // No fare for that age: said per trip ("— энэ насны үнэ бүртгэгдээгүй"), never the trip's bare name.
+    if (result.status !== "ready" || !result.offer.total) return result.status === "ready" ? null : unknownPartyFareLine(trip, result.reason);
     offers.push(result.offer);
   }
   if (!offers.length) return null;
@@ -239,6 +236,18 @@ function formatPassengerTotalLine(trip: TravelTrip, text: string, counts: { adul
   const labels = { adult: "том хүн", child: "хүүхэд", infant: "нярай" };
   const parts = first.passengerPrices.map(passenger => `${passenger.count} ${labels[passenger.kind]}${passenger.ageRange ? ` /${passenger.ageRange}/` : ""} x ${money(passenger.fare)}`);
   const qualifications = [first.hotel, first.packageId, ...first.conditions].filter(Boolean);
+  if (perPerson) {
+    // Same band and fare together: "2 хүүхэд /2-11 нас/ x 2,690,000₮", not one line per child.
+    const grouped = new Map<string, { kind: PassengerKind; count: number; ageRange?: string | null; fare: OfferFare }>();
+    for (const passenger of first.passengerPrices) {
+      const key = `${passenger.kind}|${passenger.ageRange || ""}|${JSON.stringify(passenger.fare)}`;
+      const row = grouped.get(key);
+      if (row) row.count += passenger.count;
+      else grouped.set(key, { kind: passenger.kind, count: passenger.count, ageRange: passenger.ageRange, fare: passenger.fare });
+    }
+    const rows = [...grouped.values()].map(row => `${row.count} ${labels[row.kind]}${row.ageRange ? ` /${row.ageRange}/` : ""} x ${money(row.fare)}`);
+    return `• ${trip.route_name}: ${rows.join(" + ")}${qualifications.length ? ` · ${qualifications.join(" · ")}` : ""}`;
+  }
   return `• ${trip.route_name}: ${money(first.total!)} (${parts.join(" + ")})${qualifications.length ? ` · ${qualifications.join(" · ")}` : ""}`;
 }
 
@@ -248,15 +257,20 @@ export function buildAmbiguousPassengerTotalReply(
   now = new Date(),
 ): string | null {
   const counts = parsePassengerTotalRequest(text);
-  if (!counts || trips.length < 2) return null;
+  if (trips.length < 2) return null;
+  if (!counts) {
+    // No head count and no "нийт", but a party named by ages and a fare asked ("4 болон 7 настай хүүхэд төлбөр
+    // хэд вэ"): the party's fare per trip. A discount or any other question with a party in it is not a fare ask.
+    const asked = buildTripRequest(customerTurn(text), trips, undefined, now);
+    if (!asked.passengers.length || !asked.topics.includes("price") || asked.topics.includes("discount")) return null;
+  }
   const shown = trips.slice(0, replyPreferences(text).full ? 8 : 3);
   const totals = shown.map((trip) => formatPassengerTotalLine(trip, text, counts, now));
-  // One trip whose total the data cannot give alone (no infant fare, or it depends
-  // on a date, hotel or child age) must not throw away the totals the others do
-  // give: that left the customer with the same list again (live 2026-10-26).
-  // That trip keeps its name only — never an estimated total.
-  if (shown.length < 2 || !totals.some(Boolean)) return null;
-  const lines = totals.map((line, index) => line || `• ${shown[index].route_name}`);
+  // One trip whose total the data cannot give alone (no infant fare, or it depends on a date, hotel or
+  // child age) must not throw away the totals the others give (live 2026-10-26); never an estimated total.
+  // Every trip unknown is no answer at all (staff take it).
+  if (shown.length < 2 || !totals.some((line) => line && !isUnknownPartyFareLine(line))) return null;
+  const lines = totals.map((line, index) => line || partyFareChoiceLine(shown[index]));
   return [
     ...lines,
     ...(trips.length > lines.length ? [`Өөр ${trips.length - lines.length} сонголт бий.`] : []),
@@ -264,16 +278,26 @@ export function buildAmbiguousPassengerTotalReply(
   ].join("\n");
 }
 
+// "тусгай" (special) is in DISCOUNT_KEYWORDS_MN for ranking, but as an intent it turned "тусгай маршрут" (a
+// bespoke route) into a discount question. The Latin spellings customers type ("hymdral", "hyamdral",
+// "hongololt", "uramshuulal") are read in phonetic space, as Cyrillic is.
+const DISCOUNT_INTENT_MN = DISCOUNT_KEYWORDS_MN.filter((keyword) => keyword !== "тусгай");
+const DISCOUNT_INTENT_EN = DISCOUNT_KEYWORDS_EN.filter((keyword) => keyword !== "special");
+const DISCOUNT_INTENT_PHONETIC = /\bh[iy]?[ae]?m?dral|\bh[ou]ng[ou]l(?:[ou]l)?t|\buram?sulal|\burimsulal/;
+
 export function hasDiscountIntent(text: string): boolean {
   const normalized = normText(text);
-  const hasMn = DISCOUNT_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
-  const hasEn = DISCOUNT_KEYWORDS_EN.some((keyword) => normalized.includes(keyword));
-  return hasMn || hasEn || /хямдрах|хямдруул|hyamdrah|hyamdruul/i.test(normalized);
+  const hasMn = DISCOUNT_INTENT_MN.some((keyword) => normalized.includes(keyword));
+  const hasEn = DISCOUNT_INTENT_EN.some((keyword) => normalized.includes(keyword));
+  return hasMn || hasEn || /хямдрах|хямдруул|hyamdrah|hyamdruul/i.test(normalized) || DISCOUNT_INTENT_PHONETIC.test(phoneticLatinText(text));
 }
 
 export function hasPriceObjectionIntent(text: string): boolean {
   const normalized = normText(text);
   if (!normalized) return false;
+  // A quoted price with nothing but chat words around it ("991000 гэсэн үнэтэй аялал байна
+  // лээ") names an advertised fare, it does not call it expensive: the price lookup answers it.
+  if (isBarePriceMessage(text)) return false;
   if (
     /(?:үнэтэй|unetei).{0,24}(?:үнэгүй|unegui)|(?:үнэгүй|unegui).{0,24}(?:үнэтэй|unetei)/i.test(normalized) ||
     /төлбөртэй.{0,24}төлбөргүй|төлбөргүй.{0,24}төлбөртэй/i.test(normalized)
@@ -490,22 +514,13 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date(), intentText = 
 
   // Prices and dates come from the canonical resolver (tripFareBlock.ts), the
   // same one the reply checker uses, so the card can no longer be rejected as
-  // contradicting itself. The raw-field block stays only for trips without
-  // dated fares (weekly "<гараг> бүр" schedules).
-  const fareSection = buildFareSection(rawTrip, now);
-  let showDepartureSection = false;
-  if (fareSection) {
-    lines.push(...fareSection);
-    showDepartureSection = fareSection.includes("📅 Гарах өдрүүд:");
-  } else {
-    const priceBlock = formatTripBasePricePremium(trip, now);
-    lines.push(priceBlock);
-    const departureText = formatCompactDepartureList(trip.departure_dates).trim();
-    showDepartureSection = Boolean(departureText && !priceBlock.includes(departureText));
-    if (showDepartureSection) {
-      lines.push("", `📅 Гарах өдрүүд:`, departureText);
-    }
-  }
+  // contradicting itself. Every trip gets it: a weekly "<гараг> бүр" schedule
+  // prints under its own text, and a trip with no fare prints the no-data
+  // sentence (silence and a staff lead). Mandatory extra fees sit under the prices.
+  const fees = formatExtraFeesLine(rawTrip);
+  const fareSection = buildFareSection(rawTrip, now, fees ? [fees] : []);
+  lines.push(...fareSection);
+  const showDepartureSection = fareSection.includes("📅 Гарах өдрүүд:");
 
   const seatMessage = getSeatSalesMessage(trip);
   if (seatMessage) {
@@ -858,6 +873,10 @@ export function hasStandalonePriceLookupIntent(text: string): boolean {
 export function isBarePriceMessage(text: string): boolean {
   if (extractNormalizedPrice(text) === null) return false;
   const rest = normText(text)
+    // "990k", "990К": the unit written against the number is part of the price, not a word.
+    .replace(/(\d)\s*[кk](?![\p{L}\d])/giu, "$1")
+    // The unit of an amount said in words, in any case ending: "990 мянган төгрөг", "1 саяын".
+    .replace(/(?<![\p{L}])(?:сая(?:ын|д|тай|аас|аар|н)?|мянга(?:н|ны|нд|тай|аас|аар)?|myanga(?:n|tai)?|mynga(?:n|tai)?)(?![\p{L}])/giu, " ")
     .replace(/\d+(?:[.,]\d+)*/g, " ")
     .replace(/[₮.,:;!?()\-–—]/g, " ")
     .split(/\s+/)
@@ -865,7 +884,13 @@ export function isBarePriceMessage(text: string): boolean {
     .filter((word) => !BARE_PRICE_FILLER.has(word));
   return rest.length === 0;
 }
-const BARE_PRICE_FILLER = new Set(["аялал", "аяллын", "аяллууд", "үнэ", "үнэтэй", "төгрөг", "мнт", "mnt", "сая", "саяын", "саяд", "aylal", "une"]);
+// Besides money words, the chat words a customer wraps a quoted price in: "991,000 гээд байгаа
+// юм", "991000 geed bga yum", "… гэсэн үнэтэй аялал байна лээ" (the price from the agency's
+// post). Live 2026-11-04 the Latin one ended in a staff hand-off while the trip at that price was
+// in the catalogue. A word that changes the meaning ("төлсөн", "2 хүн") is still not filler.
+const BARE_PRICE_FILLER = new Set(["аялал", "аяллын", "аяллууд", "үнэ", "үнэтэй", "төгрөг", "төгрөгийн", "мнт", "mnt", "сая", "саяын", "саяд", "саятай", "мянга", "мянгатай", "мянганы", "орчим", "хавьцаа", "багц", "багцын", "багцтай", "bagts", "bagc", "bagtsiin", "package", "aylal", "ayalal", "une", "unetei", "orchim",
+  "гээд", "гэсэн", "гэж", "гэдэг", "байгаа", "байна", "байсан", "бга", "бгаа", "бна", "юм", "юмаа", "юу", "уу", "үү", "вэ", "бэ", "лээ", "шүү", "л", "энэ", "тэр", "ийм", "дээр", "зар", "зарын", "зард", "пост", "постон", "бичсэн",
+  "geed", "gesen", "gej", "gedeg", "baigaa", "baina", "baisan", "bga", "bgaa", "bna", "bn", "yum", "ym", "yu", "uu", "ve", "be", "lee", "shuu", "l", "ene", "ter", "iim", "deer", "zar", "zariin", "post", "bichsen"]);
 
 /**
  * The trips that have exactly this price, or null. A bare price with no exact
@@ -892,16 +917,24 @@ function priceLookupReply(price: number, trips: TravelTrip[]): string | null {
   if (matches.length === 0) return null;
   const priceText = formatMoney(price, "MNT") || `${price}`;
   const lines = [`${priceText} үнэтэй тохирох аяллууд:`];
-  for (const { trip, label, dates } of matches.slice(0, 6)) {
-    const duration = safeDurationText(trip.duration_text);
-    const parts = [`• ${trip.route_name}`, label];
-    if (duration) parts.push(duration);
-    if (dates.length) parts.push(`гарах: ${dates.slice(0, 6).map((date) => shortDate(date)).join(", ")}${dates.length > 6 ? " …" : ""}`);
-    lines.push(parts.join(" — "));
-  }
+  lines.push(...quotedPriceRows(matches));
   if (matches.length > 6) lines.push(`... нийт ${matches.length} тохирол байна.`);
+  // The price alone does not say which advert it came from: never claim to know which trip it is.
+  lines.push("Зарын постер эсвэл линкээ илгээвэл яг аль аялал болохыг баталгаажуулъя.");
   lines.push("Аль аяллыг нь сонирхож байна вэ?");
   return lines.join("\n");
+}
+
+/**
+ * A quoted price (a pasted advert price, "990k", "1 саяын аялал") as the customer meant it. Trips that
+ * sell an ADULT fare at exactly that amount come first. When none does, a round amount is read as a
+ * budget (quotedPriceReply.ts): never silence for a price that is simply between two fares, and never
+ * the claim that a trip IS the advertised one.
+ */
+export function buildBarePriceOrBudgetReply(text: string, trips: TravelTrip[], now = new Date()): string | null {
+  if (!isBarePriceMessage(text)) return null;
+  const price = extractNormalizedPrice(text) as number;
+  return priceLookupReply(price, trips) ?? budgetReplyForQuotedPrice(text, price, trips, now);
 }
 
 /**
@@ -1027,7 +1060,7 @@ export function buildGroupSizeReply(matchText: string, trips: TravelTrip[]): str
   const price = formatPassengerMoney(trip.adult_price, trip.currency || "MNT");
   const lines = [`✈️ ${formatRouteName(trip.route_name)}`];
   if (price) lines.push(`💰 Том хүн: ${price} (нэг хүний үнэ)`);
-  lines.push("", `${label} хүний группийн нийт үнэ, хөнгөлөлтийг манай аяллын зөвлөх тооцоод хэлж өгнө.`);
+  lines.push("", `${label} хүний группийн нийт үнийг манай аяллын зөвлөх тооцоод хэлж өгнө.`);
   return lines.join("\n");
 }
 
@@ -1199,7 +1232,7 @@ function findCombinedDatePriceMatches(
     if (bestForTrip) {
       const finalMatch = bestForTrip as CombinedDatePriceMatch;
       if (query.includes(normText(trip.route_name))) finalMatch.score += 8;
-      if (getAliases(trip).some((alias) => query.includes(normText(alias)))) finalMatch.score += 5;
+      if (getAliases(trip).some((alias) => aliasOccursInText(alias, query))) finalMatch.score += 5;
       matches.push(finalMatch);
     }
   }
@@ -1395,7 +1428,16 @@ function buildUnavailableTripReply(
     ].join("\n");
   }
   if (!best) return null;
+  return buildUnavailableReplyForTrip(best, trips, status);
+}
 
+/**
+ * "This trip is full / paused" for a trip already identified (by the customer's words or by the
+ * router), with the open trips of the same destination. soldOutNamed.ts uses it when the router has
+ * chosen the unavailable trip itself.
+ */
+export function buildUnavailableReplyForTrip(best: TravelTrip, trips: TravelTrip[], status: "sold_out" | "paused"): string {
+  const wording = UNAVAILABLE_STATUS_WORDING[status];
   // An unavailable answer that stops there buries the sellable catalog: a
   // generic "<хот>" question was leading with the dead <city> trip while
   // three bookable <city> trips went unmentioned. Pitch ACTIVE trips that
@@ -1941,8 +1983,9 @@ export function buildStructuredTripReply(
 export function buildProgramOrStructuredReply(
   text: string,
   trips: TravelTrip[],
+  now = new Date(),
 ): TripProgramReplyResult | null {
-  const programReply = buildTripProgramReply(text, trips);
+  const programReply = buildTripProgramReply(text, trips, now);
   if (!programReply || programReply.reply !== TRIP_MEDIA_UNAVAILABLE_SILENT) {
     return programReply;
   }
@@ -1961,7 +2004,7 @@ export function buildProgramOrStructuredReply(
     hasDirectFlightIntent(intentText) ||
     hasExistenceIntent(intentText);
   if (!asksSomethingElse) return programReply;
-  const structuredReply = buildStructuredTripReply(text, trips);
+  const structuredReply = buildStructuredTripReply(text, trips, now);
   if (!structuredReply) return programReply;
   return {
     reply: structuredReply,

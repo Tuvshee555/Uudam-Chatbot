@@ -6,9 +6,9 @@ function ensureEnv() {
   process.env.TOKEN_PAGE ||= "chaos-page-token";
   process.env.FACEBOOK_PAGE_ID ||= "1234567890";
   process.env.META_APP_SECRET ||= "chaos-meta-secret";
-  process.env.ADMIN_SECRET ||= "chaos-admin-secret";
+  // A dummy 32+ character session key: env validation requires one (chaos never signs anyone in).
+  process.env.ADMIN_SESSION_SECRET ||= "chaos-session-key-5d1f9b3e7a2c6f0d-8b4e2a6c0f9d3b7e";
   process.env.TRUST_PROXY_HEADERS ||= "true";
-  process.env.ALLOW_ADMIN_SECRET_QUERY ||= "false";
   process.env.REDIS_STATE_ENABLED ||= "false";
   process.env.REDIS_RATE_LIMIT_ENABLED ||= "false";
   process.env.REDIS_REPLAY_ENABLED ||= "false";

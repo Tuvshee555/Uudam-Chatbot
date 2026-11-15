@@ -1,4 +1,5 @@
-import { askOpenAIParts, type OpenAIPart } from "./openaiProvider";
+import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
+import { aiCallFailureKind, askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import {
   classifyError,
   logError,
@@ -7,9 +8,8 @@ import {
   recordCounter,
 } from "./observability";
 import { queryNeon } from "./neonDb";
-import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal } from "./travelTypes";
-import { wait, ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
-import type { TravelTrip } from "./travelTypes";
+import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal, TravelTrip } from "./travelTypes";
+import { AI_BILLING_FAILURE_SUMMARY, AI_KEY_FAILURE_SUMMARY, wait, ensureTravelSchema, listTrips, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
 import {
   AI_CHANGE_OPENAI_TIMEOUT_MS,
   AI_CHANGE_OPENAI_MAX_RETRIES,
@@ -40,14 +40,9 @@ import {
 } from "./travelAIValidation";
 export * from "./travelAIValidation";
 // Prompt-string builders live in travelAIGuides.ts (kept this file under the cap).
-import { buildProposalGuide, buildProposalRepairGuide } from "./travelAIGuides";
-
-type AIActionSnapshot = {
-  action: AITripAction;
-  trip_id: string;
-  before: TravelTrip | null;
-  after: TravelTrip | null;
-};
+import { buildExtractionGuidance, buildInstructionGuide, buildProposalGuide, buildProposalRepairGuide } from "./travelAIGuides";
+import { applyTripChoice, bindActionTargets, hasOpenQuestions, knownDepartureDays } from "./assistantBrain";
+import { houseRulesPrompt } from "./assistantHouseRules";
 
 type ProposalSource = {
   label: string;
@@ -57,92 +52,19 @@ type ProposalSource = {
   photoUrls?: string[];
 };
 
+import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
+import { liftDayStates, withPricedDaysOnCalendar, withRowYearsOfCalendar } from "./tripDayStates";
+import { cleanRowHotels, cleanTripTitle, settleRowInfantFares, unsetZeroFares } from "./tripRowFares";
+import { guardFileProposal, mergeSameFileNewTrips } from "./fileProposalGuards";
+import { applyPriceTable, readPriceTable, type PriceTable } from "./tripPriceTable";
+
 function buildBatchSourceParts(input: {
   note?: string;
   sources: ProposalSource[];
 }) {
   const parts: OpenAIPart[] = [];
   const sourceLabels = input.sources.map((source) => source.label).join(", ");
-  const guidance = [
-    `Sources: ${sourceLabels}`,
-    input.note ? `Admin note: ${input.note}` : "",
-    "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
-    "EVIDENCE RULE: sources whose names share the same original filename are text and visual evidence for ONE document. Reconcile them into one tour record; never create duplicate actions for parsed-text and visual-page sources.",
-    "TRANSLATION RULE: when the same title, duration, route, prices, and numbered itinerary are repeated in another language, that is one bilingual copy of the SAME tour. Merge it into one action and count every itinerary day only once. Photo/facility-only pages are supporting media, not extra tours.",
-    "Use BOTH the parsed text and rendered page image. Before declaring a field missing, re-check page 1 visually, its headings, and nearby blocks. A missed extraction is not a document conflict.",
-    "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
-    "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
-    "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
-    "MESSENGER-SPLIT POSTER RULE: if several attached images come from the same '*-messenger-split.zip', treat them as slices/pages of ONE poster unless a later slice clearly starts a new complete product with its own top-level title AND price/date table. Numbered day-card headings such as 'Day 6: <city>-<city>', city stop headings, meal rows, and route legs are itinerary items inside the parent tour, not separate trips.",
-    "TRIP VARIANT RULE: the same destination with a different transport mode (flight, ground/bus, rail, combined), duration, itinerary, or package type is a DIFFERENT trip and must stay in a separate action. Different departure dates alone remain one trip with date groups.",
-    "PHOTO SOURCE RULE: write the exact source label shown in Sources into fields.extra.source_file_name for every extracted action. When one ZIP contains trip-named folders, use each image's full folder path to decide which trip it belongs to; never assign a generic numbered image by list order.",
-    "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 1,111,111 write 1111111, not 1111000.",
-    "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
-    "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
-    "Ignore logos, agency headers, footers, contact details, and page decorations UNLESS they contain trip-specific data (price, date, seats) attached to a real trip row.",
-    "The route_name must be the DESTINATION or TRIP TITLE — a single city name, a hyphenated multi-city route, or a '+'-combined route, exactly as the source writes it. NEVER use the agency name as the route_name.",
-    "TITLE VS ROUTE: route_name is the canonical tour/product title used by this database. Store the actual full path (each leg joined by hyphens, as printed in the source) separately in fields.extra.route. Store the same canonical title in fields.extra.tour_title.",
-    "Read the canonical title from the largest title block near the top of page 1. Correct harmless OCR spelling errors, but preserve the source typo in fields.extra.original_title_text. Ask only if the correction changes meaning.",
-    "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
-    "Treat UUDAM, UUDAM TRAVEL, and UUDAM TRAVEL AGENCY as the same brand and normalize them to 'UUDAM TRAVEL AGENCY'. A clear page-1 logo/header/contact match gives high operator confidence and MUST NOT create an operator question.",
-    "Never use the filename as operator when a visible operator exists. The filename may hint at the tour title only. Ask about operator only when two genuinely different companies compete in main logo/header positions.",
-    "CANCELLATION RULE: Never use action='cancel', never set status='cancelled', and never write a cancellation warning UNLESS the document contains explicit cancellation language such as: цуцлагдсан, цуцлагдлаа, цуцлах, canceled, cancelled, trip cancelled, no longer available, зогсоосон, худалдаалагдахгүй. Normal itinerary end-phrases such as 'аялал өндөрлөнө', 'буцна', 'ниссэнээр аялал өндөрлөнө', 'чөлөөт өдөр', 'аялал дуусна' do NOT mean cancellation — they are normal tour program language. If the PDF has a title, price, dates, duration, and itinerary, classify it as an active tour (status='active').",
-    "SOLD-OUT RULE: Never set status='sold_out' or seats_left=0 or seats_total=0 UNLESS the document explicitly says: суудал дууссан, суудал дүүрсэн, sold out, fully booked, no seats left, бүрэн захиалагдсан. Booking-intent phrases such as 'суудал авах', 'суудал нөөцлөх', 'захиалга хийх', 'холбогдоорой', 'утасдана уу' mean the tour IS AVAILABLE and open for booking — these are the OPPOSITE of sold out. If the PDF has prices and future departure dates, always default to status='active'.",
-    "STALE RECORD RULE: If an existing database record has departure dates from a different year (e.g. 2023, 2024) and the uploaded PDF clearly has NEW departure dates for 2025 or 2026, do NOT use action='patch' on the old record. Create a NEW action='upsert' with the new dates instead. Only match and patch an existing record when the trip title, destination, duration, AND year/season all clearly refer to the same product run.",
-    "Do not treat normal adult/child price differences as conflicts. An adult price HIGHER than the child price is normal and expected — NEVER flag it, never ask about it. Only flag the child/adult price if the CHILD price is higher than the adult price, or the source is genuinely unreadable.",
-    "If a departure date IS written in the source (e.g. '06/10, 06/19, 06/22' or '06 сарын 17-21'), put it in departure_dates and treat it as known. NEVER list dates you found and then say the date is 'unclear' or 'тодорхойгүй' — that is a contradiction and is forbidden. Only flag a missing date if there is genuinely NO date anywhere in the source for that trip.",
-    "Search date headings and variants: АЯЛЛЫН ОГНОО, АЯЛЛЫН ОГНОО / ХУВААРЬ, АЯЛЛЫН ОГНОО/ХУГАЦАА, ОГНОО, ХУВААРЬ. Expand '6 сарын 4, 11, 18' into usable departure_dates and also store grouped month/day data in fields.extra.departure_date_groups. Missing year is not a conflict; use year=null in extra.",
-    "If recurring text (Пүрэв/Баасан гариг болгон, долоо хоног бүр, сар бүр) and exact dates both exist, keep BOTH: recurring text in departure_dates and fields.extra.recurring_schedule, exact dates in departure_dates. They support each other and are not a conflict.",
-    "Normalize duration such as '8 өдөр / 7 шөнө' into duration_text and fields.extra.duration_days=8, duration_nights=7. Matching repeated durations are not conflicts; two different meaningful durations are blockers.",
-    "When a trip has base prices in MNT plus a medical/exam fee in CNY, store the base adult/child prices as MNT and write the CNY fee clearly in notes/source_description.",
-    "ROOM/CABIN PRICE TABLE RULE: if the source prices the trip by room/cabin category or occupancy, preserve every documented option in fields.extra.price_groups. Set adult_price to the lowest documented adult/per-person base fare, child_price to the explicit child fare when present, and keep the printed currency unchanged. Do not convert currencies and do not leave all base prices empty merely because several room options exist.",
-    "ITINERARY RULE: when the source contains numbered day programs, store every day once in fields.extra.itinerary_days. A translated duplicate of the same numbered program is supporting evidence, not additional days.",
-    "Keep currencies separate: adult_price/child_price and currency hold the base price, while CNY medical fees, infant prices, and single-room supplements go into fields.extra.foreign_currency_fees / infant_prices / single_room_supplements and are repeated clearly in notes. Never add MNT and CNY together.",
-    "A malformed price such as '2,6360,000₮' is a real OCR warning. Do not guess. Create one precise blocker quoting the exact malformed text and plausible interpretations when justified.",
-    "Store transport, included items, excluded items, daily itinerary, source filename, and per-field confidence in fields.extra. Confidence is high when page-1 label/visual and text agree, medium when readable once, low only when cut off/garbled/ambiguous.",
-    "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
-    "Recurring schedules such as 'Пүрэв гараг бүр' are valid departure_dates; do not report them as missing dates.",
-    "If meals are generally included but specific days/meals are self-paid or unavailable, set has_food=true and write the exceptions in notes/source_description instead of raising a meal conflict.",
-    "If a source lists хөтөлбөртэй and чөлөөт package prices for the same route, prefer separate actions with route names that include the variant instead of forcing one base price.",
-    "Do not infer the operator from the uploaded filename when the document content already has a brand/operator.",
-    "If possible, match against existing trips to update them; otherwise propose adding new trips.",
-    "The Admin note is a hard operation constraint. If it says do not add/create trips or says to only fill/update names, return PATCH actions targeting existing trip_id values only. Never return an upsert/create action in that mode.",
-    "For an ordered rename of unnamed trips from a complete source, map source names to the existing unnamed trips by created_order (1, 2, 3...). If the source label says it is part/chunk X/Y, match each row by its price, dates, duration, and other fields instead of restarting at created_order=1. Change route_name only; preserve all other fields.",
-    "",
-    "CRITICAL — count every distinct trip in the source and produce one action per trip:",
-    "A single PDF may contain 2, 3, or more separate trips on different pages or sections. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after finding the first trip.",
-    "To identify trip boundaries: look for new price tables, new route headings, new departure date sets, or new itinerary blocks. Each new combination = a new trip.",
-    "",
-    "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
-    "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
-    "Correct behavior: create ONE trip action with ALL departure_dates combined, set adult_price to the LOWEST (base/earliest) price among all groups, set child_price to the corresponding lowest child price, and ALWAYS populate fields.extra.departure_date_groups with every group.",
-    "fields.extra.departure_date_groups format — you MUST fill this whenever prices differ by date:",
-    '  "departure_date_groups": [',
-    '    { "label": "A бүлэг", "dates": ["6 сарын 27"], "adult_price": 1111111, "child_price": 999999, "infant_price": null, "notes": "" },',
-    '    { "label": "B бүлэг", "dates": ["7 сарын 18", "8 сарын 8"], "adult_price": 2222222, "child_price": 999999, "infant_price": null, "notes": "" }',
-    "  ]",
-    "Also write ALL date-specific prices in notes/source_description in plain Mongolian (e.g. '6 сарын 27: Том хүн 1,111,111₮ / Хүүхэд 999,999₮; 7 сарын 18, 8 сарын 8: Том хүн 2,222,222₮ / Хүүхэд 999,999₮').",
-    "NEVER raise a conflict or ask the user when prices differ only because departure dates or months differ.",
-    "DATE-PRICE GROUP PATTERN: Many Mongolian travel programs show prices in grouped blocks: a date heading followed by adult and child prices for that specific date. These are NOT competing prices — they are separate departure options. Each group goes into departure_date_groups AND all dates go into departure_dates.",
-    "PASSENGER TYPE PRICES: adult_price > child_price > infant_price is always normal and expected. Never compare adult vs child vs infant prices as if they conflict. They are different passenger categories.",
-    "A true price conflict is ONLY when: same trip name + same exact departure date + same passenger type + two different prices + no explanation. ALL four conditions must be true simultaneously.",
-    "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, passenger types, room types, or packages? If ANY of those differ → store all in notes, no conflict, no question.",
-    "QUESTION GATE: ask a human only for a required low-confidence value or two meaningful values that genuinely disagree. The question must quote the exact tour and exact conflicting text, and the answer must change a database value. Never emit a generic 'route/operator/price/date unclear' question.",
-    "BATCH RULE: each PDF is one separate tour unless that PDF visibly contains multiple complete products. Different filenames, routes, dates, prices, or the same operator across PDFs are expected and are not cross-file conflicts.",
-    "",
-    "CRITICAL — count every distinct trip in the source and produce one action per trip:",
-    "A document may contain 10, 20, or 30+ numbered trips. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after the first few trips.",
-    "Numbered list rule: every numbered TRIP heading (1, 2, 3 … or #1, #2 introducing a distinct route/destination with its own price) marks a new trip. Count those first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
-    "NOT separate trips — never count these as trips: 'DAY 1/DAY 2', 'ӨДӨР 1', or date headings inside an itinerary (those are days WITHIN one trip); numbered activity/included-items lists; multiple uploaded images that are slices or pages of the SAME poster (same title/route across images = ONE trip, merge them into one action).",
-    "Table/free-form rule: trip boundaries = new price table + new route heading + new departure dates = new trip.",
-    "",
-    "YEAR RULE: If the source only lists month and day (e.g. '6 сарын 4', '07/16') WITHOUT a year, do NOT invent a year. Do not write 2023, 2024, or any year that is not stated. Store month-day only in extra.departure_date_groups with year: null. If there is no year anywhere in the source, set needs_confirmation=true with one single question 'Эдгээр аяллын жилийг тодруулна уу (2025 эсвэл 2026?)' — never silently assume a year.",
-    "SEATS RULE: If the source does NOT state a seat count, set seats_total=null and seats_left=null. NEVER output seats_total=0 unless the source explicitly says '0 суудал' or 'sold out'. A 0 value means the tour is full, which is dangerous if invented.",
-    "FLEXIBLE DEPARTURE RULE: If a tour says 'хүссэн өдрөө сонгоно', '15+ хүнтэй групп өдрөө сонгоно', 'group may choose date', or similar — the departure date is NOT fixed. In this case: leave departure_dates empty/null, store the rule text in notes and in extra.recurring_schedule. NEVER invent example dates like '2025-07-15' for a flexible tour.",
-    "BOOKING TERMS RULE: if the source states any of deposit/prepayment (урьдчилгаа), payment method or timing (төлбөр), required documents (бүрдүүлэх бичиг баримт, паспорт, гэрэл зураг), visa (виз), or cancellation/refund policy (цуцлалт, буцаан олголт), put them in fields.extra.booking_terms as { deposit, payment, documents, visa, cancellation } — short Mongolian strings copied from the source. Leave any field that is NOT stated as an empty string; NEVER invent a deposit amount, document list, visa rule, or cancellation policy.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const guidance = buildExtractionGuidance(sourceLabels, input.note);
   parts.push({ text: guidance });
 
   for (const source of input.sources) {
@@ -160,6 +82,42 @@ function buildBatchSourceParts(input: {
   return { parts, sourceLabels };
 }
 
+/**
+ * A file that carries a whole day-by-day program is a NEW trip, whatever existing trip it
+ * resembles (owner's rule, 2026-10-31: "add trip" never revives or edits a same-name trip).
+ * The model read such a file as an edit of the live trip it matched, and saving it would
+ * have overwritten that trip's program, hotel wording and photos (seen 2026-11-05). A price
+ * list without a program still updates the trips it names.
+ */
+const ADD_OR_UPDATE_QUESTION = /шинэ аялал болгон нэмэх үү|одоо байгааг шинэчлэх үү/i;
+
+export function keepFileProgramsNew(proposal: AIChangeProposal): void {
+  let programs = 0;
+  for (const action of proposal.actions) {
+    const fields = action.fields as Record<string, unknown> | undefined;
+    const days = (fields?.extra as Record<string, unknown> | undefined)?.itinerary_days;
+    if (!Array.isArray(days) || days.length < 2 || action.action === "cancel") continue;
+    if (typeof fields?.route_name !== "string" || !fields.route_name.trim()) continue;
+    action.action = "upsert";
+    delete action.trip_id;
+    delete action.match;
+    programs += 1;
+  }
+  // The model's own "add as new or update the existing one?" is already answered for these.
+  if (programs > 0 && programs === proposal.actions.length) {
+    proposal.conflict_items = (proposal.conflict_items || []).filter((item) => item.type !== "duplicate_route" && !ADD_OR_UPDATE_QUESTION.test(item.text));
+    proposal.conflicts = (proposal.conflicts || []).filter((item) => !ADD_OR_UPDATE_QUESTION.test(item));
+  }
+}
+
+const SAME_TRIP_MAX_SOURCES = 6;
+const SAME_TRIP_NOTE = [
+  "These sources together describe ONE trip: the document is its day-by-day program, and each image is that same trip's departure schedule and price table (or its poster).",
+  "Return exactly one action for it. Take the name, days, meals, hotels and conditions from the document; take every departure date and the tugrug selling prices per date from the image (fields.departure_dates and fields.extra.departure_date_groups), and the year the image states.",
+  "A column of yuan or land prices in the image is the partner's cost and is left out; the tugrug 'зарах / зарлах үнэ' columns are the selling prices.",
+  "Read the price table row by row: one departure_date_groups entry per row, each with that row's own adult price and every child column of that row.",
+].join(" ");
+
 // Max chars per individual OpenAI call for text-only sources. JSON-mode
 // structured extraction can be slow, so keep each call small.
 const MAX_TEXT_CHARS_PER_BATCH = 18_000;
@@ -169,9 +127,18 @@ const MAX_TEXT_CHARS_PER_BATCH = 18_000;
 const MAX_TRIPS_PER_CHUNK = 4;
 
 /** Counts numbered-heading lines ("1.", "2.", "12)") in the text. */
+/**
+ * Numbered lines that start a trip block ("1. ХАЙНАН…"). A numbered TABLE row ("1. | Дүүрсэн | 12 сарын 11 | …")
+ * is one departure of the same trip, never a new trip: counting those split one partner page into half-trips.
+ */
+function tripHeadingLines(text: string): number[] {
+  return [...text.matchAll(/(^|\n)[ \t]*\d{1,2}[.)][^\n]*/g)]
+    .filter((match) => !match[0].includes("|"))
+    .map((match) => (match.index ?? 0) + match[1].length);
+}
+
 function countNumberedTrips(text: string): number {
-  const matches = text.match(/(?:^|\n)[ \t]*\d{1,2}[.)]/g);
-  return matches ? matches.length : 0;
+  return tripHeadingLines(text).length;
 }
 
 function sourceDigits(text: string): string {
@@ -320,13 +287,8 @@ export function enforceTextSourceEvidence(
 function splitTextIntoChunks(text: string, maxChars: number): string[] {
   // Collect positions of numbered headings (each starts a new trip block)
   const positions: number[] = [0];
-  const re = /\n[ \t]*\d{1,2}[.)]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const pos = m.index + 1; // position right after the \n
-    if (pos - positions[positions.length - 1] > 100) {
-      positions.push(pos);
-    }
+  for (const pos of tripHeadingLines(text)) {
+    if (pos > 0 && pos - positions[positions.length - 1] > 100) positions.push(pos);
   }
 
   // No numbered structure → fall back to plain char slicing.
@@ -386,8 +348,11 @@ function splitLargeTextSources(
   for (const source of sources) {
     const text = source.contentText ?? "";
     const tripCount = countNumberedTrips(text);
+    // One web page is one source (readWebPage caps it at 20,000 characters): cut in two, each half was read
+    // as its own trip with part of the schedule (2026-11-11).
+    const webPage = /^https?:\/\//i.test(source.label.trim());
     const needsSplit =
-      !source.inline &&
+      !source.inline && !webPage &&
       (text.length > MAX_TEXT_CHARS_PER_BATCH || tripCount > MAX_TRIPS_PER_CHUNK);
 
     if (needsSplit) {
@@ -648,6 +613,11 @@ async function verifyProposalAgainstSource(opts: {
   }
 }
 
+// A typed instruction is one short JSON extraction over an 8k-token guide that is mostly the
+// same every call: gpt-4.1 (cheaper input and cached-input than gpt-4o, same family as the
+// customer replies) since 2026-11-05. OPENAI_INSTRUCTION_MODEL overrides.
+const OPENAI_INSTRUCTION_MODEL = process.env.OPENAI_INSTRUCTION_MODEL || "gpt-4.1";
+
 async function requestProposalFromModel(opts: {
   condensedTrips: unknown;
   userParts: OpenAIPart[];
@@ -657,11 +627,16 @@ async function requestProposalFromModel(opts: {
   repairTimeoutMs?: number;
   model?: string;
   verify?: boolean;
+  /** A typed instruction: the guide adds the house rules and the trips it most likely concerns. */
+  instruction?: { focusTrips: unknown[] };
 }) {
   // OpenAI handles all proposal extraction (file parsing + text instructions).
   // PDF inputs are rendered/extracted before reaching this path.
+  const guide = opts.instruction
+    ? buildInstructionGuide(opts.condensedTrips, { focusTrips: opts.instruction.focusTrips, houseRules: houseRulesPrompt() })
+    : buildProposalGuide(opts.condensedTrips);
   const result = await askOpenAIParts(
-    [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
+    [{ text: guide }, ...opts.userParts],
     {
       source: opts.source,
       jsonMode: true,
@@ -669,7 +644,7 @@ async function requestProposalFromModel(opts: {
       maxRetries: opts.maxRetries,
       model: opts.model,
       preferOpenAI: true,
-      openaiModel: OPENAI_FILE_PARSE_MODEL,
+      openaiModel: opts.instruction ? OPENAI_INSTRUCTION_MODEL : OPENAI_FILE_PARSE_MODEL,
       maxOutputTokens: 16_384,
     },
   );
@@ -686,7 +661,7 @@ async function requestProposalFromModel(opts: {
           maxRetries: 0,
           model: opts.model,
           preferOpenAI: true,
-          openaiModel: OPENAI_FILE_PARSE_MODEL,
+          openaiModel: opts.instruction ? OPENAI_INSTRUCTION_MODEL : OPENAI_FILE_PARSE_MODEL,
         },
       );
       parsed = parseJsonFromModel(repaired.text);
@@ -764,6 +739,65 @@ async function requestProposalFromPrompt(opts: {
   return parsed ? normalizeProposal(parsed) : proposalFallbackFromRawText(result.text);
 }
 
+/** One trip as the model should see it when an instruction is about it: every fact it may need. */
+export function focusTripDetail(trip: TravelTrip, now = new Date()) {
+  const groups = Array.isArray(trip.extra?.price_groups) ? (trip.extra.price_groups as unknown[]) : [];
+  const row = (value: unknown): Record<string, unknown> => (value && typeof value === "object" ? (value as Record<string, unknown>) : {});
+  return {
+    id: trip.id,
+    route_name: trip.route_name,
+    aliases: Array.isArray(trip.extra?.aliases) ? trip.extra.aliases : [],
+    status: trip.status,
+    duration_text: trip.duration_text,
+    adult_price: trip.adult_price,
+    child_price: trip.child_price,
+    infant_price: trip.infant_price,
+    currency: trip.currency,
+    departure_dates: trip.departure_dates,
+    departure_days: knownDepartureDays(trip, now).map((day) => ({ date: day.date, state: day.state ?? "not_on_website" })),
+    price_rows: groups.slice(0, 24).map((group) => {
+      const value = row(group);
+      return { label: value.label, dates: value.dates, adult_price: value.adult_price, child_price: value.child_price, infant_price: value.infant_price,
+        passengers: Array.isArray(value.passenger_prices) ? value.passenger_prices.map((tier) => { const t = row(tier); return { label: t.label, age_range: t.age_range, price: t.price }; }) : [] };
+    }),
+    seats_total: trip.seats_total,
+    seats_left: trip.seats_left,
+    has_food: trip.has_food,
+    hotel: trip.hotel,
+    transport_type: trip.extra?.transport_type ?? null,
+    notes: String(trip.notes || "").slice(0, 600),
+  };
+}
+
+/**
+ * The change request's id as a number. The column is BIGSERIAL and the driver returns
+ * bigints as strings, so the admin page (which checks `typeof === "number"`) saw no id at
+ * all: every proposal was applied as a one-off copy, a pending row was left behind each
+ * time, and the Буцаах (rollback) button never appeared (live run, 2026-11-05).
+ */
+export function changeRequestId(row: { id?: unknown } | null | undefined): number | null {
+  const id = Number(row?.id);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * Saves a proposal built in code (the brain, a quick action) as a change request, so it
+ * can be applied, revised and rolled back like a model proposal.
+ */
+export async function persistProposal(instruction: string, proposal: AIChangeProposal): Promise<number | null> {
+  try {
+    const inserted = await queryNeon<{ id: number }>(
+      `INSERT INTO travel_ai_change_requests (instruction, proposal_json, conflicts, needs_confirmation, status)
+       VALUES ($1, $2::jsonb, $3::text[], $4, 'pending') RETURNING id`,
+      [instruction, JSON.stringify(proposal), proposal.conflicts || [], proposal.needs_confirmation],
+    );
+    return changeRequestId(inserted?.rows?.[0]);
+  } catch (error) {
+    logError("travel.ai.proposal_insert_failed", { source: "assistant.brain", message: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
 async function createProposal(opts: {
   instruction: string;
   source: string;
@@ -772,18 +806,28 @@ async function createProposal(opts: {
   maxRetries?: number;
   repairTimeoutMs?: number;
   buildProposal?: (condensedTrips: unknown) => Promise<AIChangeProposal>;
+  /** The catalogue as already read by the caller (saves a second read). */
+  trips?: TravelTrip[];
+  /** A typed instruction: which trips it most likely concerns, for the model's guide. */
+  focusTrips?: TravelTrip[];
+  /** Runs on the validated proposal, before it is stored. */
+  afterValidation?: (proposal: AIChangeProposal, trips: TravelTrip[]) => AIChangeProposal;
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) {
     return { proposal: normalizeProposal(null), request_id: null };
   }
 
-  const trips = await listTrips({ limit: 250 });
+  const trips = opts.trips ?? await listTrips({ limit: 250, includeArchived: true });
   const tripsInCreatedOrder = [...trips].sort((a, b) =>
     a.created_at.localeCompare(b.created_at),
   );
   let unnamedOrder = 0;
-  const condensedTrips = tripsInCreatedOrder.map((trip) => ({
+  const instructionMode = opts.focusTrips !== undefined;
+  const condensedTrips = instructionMode
+    // The guide carries the likely trips in full; the rest of the catalogue only has to be findable by name.
+    ? tripsInCreatedOrder.map((trip) => ({ id: trip.id, route_name: trip.route_name, status: trip.status, next_departure: trip.departure_dates[0] ?? null }))
+    : tripsInCreatedOrder.map((trip) => ({
     id: trip.id,
     category: trip.category,
     operator_name: trip.operator_name,
@@ -818,9 +862,14 @@ async function createProposal(opts: {
           timeoutMs: opts.timeoutMs,
           maxRetries: opts.maxRetries,
           repairTimeoutMs: opts.repairTimeoutMs,
+          ...(instructionMode ? { instruction: { focusTrips: (opts.focusTrips || []).map((trip) => focusTripDetail(trip)) } } : {}),
         }),
       );
     }
+    // An action that names its trip instead of identifying it is resolved the way the admin's
+    // own words are: one clear trip binds it, several become a question with choices.
+    bindActionTargets(proposal, trips);
+    stampTripVersions(proposal, trips);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const classification = classifyError(error);
@@ -829,17 +878,24 @@ async function createProposal(opts: {
       classification,
       message,
     });
-    // Surface the real reason instead of a misleading "couldn't parse JSON".
-    const rateLimited = classification.category === "rate_limited";
+    // Surface the real reason instead of a misleading "couldn't parse JSON". An empty
+    // balance and a rejected key are not "temporarily rate limited": nothing will work
+    // until the owner acts, and the admin must be told that (2026-11-04).
+    const failureKind = aiCallFailureKind(error);
+    const rateLimited = classification.category === "rate_limited" || failureKind === "quota";
     const timedOut = classification.category === "timeout";
     const circuitOpen = classification.category === "circuit_open";
-    const failureSummary = rateLimited
-      ? "AI service is temporarily rate limited."
-      : timedOut
-        ? "AI service took too long to answer."
-        : circuitOpen
-          ? "AI service is temporarily unavailable."
-          : "AI service could not generate a proposal.";
+    const failureSummary = failureKind === "credits_exhausted"
+      ? AI_BILLING_FAILURE_SUMMARY
+      : failureKind === "unauthorized"
+        ? AI_KEY_FAILURE_SUMMARY
+        : rateLimited
+          ? "AI service is temporarily rate limited."
+          : timedOut
+            ? "AI service took too long to answer."
+            : circuitOpen
+              ? "AI service is temporarily unavailable."
+              : "AI service could not generate a proposal.";
     proposal = {
       summary: failureSummary,
       needs_confirmation: true,
@@ -852,6 +908,17 @@ async function createProposal(opts: {
   proposal = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(opts.instruction),
   }).proposal;
+  if (opts.afterValidation) proposal = opts.afterValidation(proposal, trips);
+  // A file or page reading never renames an existing trip, empties its dates, or changes it from a
+  // part of a file that makes a new trip (fileProposalGuards.ts; a real save on 2026-11-14).
+  if (!instructionMode) guardFileProposal(proposal, trips);
+  // After validation (which rewrites dates and rows): every priced day on the calendar and each
+  // day's seat state held per day for the review (tripDayStates.ts).
+  for (const action of newTripActions(proposal)) {
+    const fields = action.fields as Record<string, unknown>;
+    const scheduled = liftDayStates(withPricedDaysOnCalendar(withRowYearsOfCalendar(settleRowInfantFares(unsetZeroFares(cleanRowHotels(cleanTripTitle(fields)))))));
+    if (scheduled !== fields) Object.assign(fields, { route_name: scheduled.route_name, departure_dates: scheduled.departure_dates, infant_price: scheduled.infant_price, extra: scheduled.extra });
+  }
 
   let inserted: Awaited<ReturnType<typeof queryNeon<{ id: number }>>> = null;
   try {
@@ -884,7 +951,7 @@ async function createProposal(opts: {
 
   return {
     proposal,
-    request_id: inserted?.rows?.[0]?.id ?? null,
+    request_id: changeRequestId(inserted?.rows?.[0]),
   };
 }
 
@@ -905,7 +972,7 @@ function looksLikeBulkPaste(instruction: string): boolean {
   return priceCues >= 8;
 }
 
-export async function generateAIProposal(instruction: string, options?: { context?: string }) {
+export async function generateAIProposal(instruction: string, options?: { context?: string; trips?: TravelTrip[]; focusTrips?: TravelTrip[] }) {
   // Big pasted price lists go through the batched (chunk + merge) pipeline so a
   // single oversized prompt can't time out or get rate-limited. Normal short
   // commands keep the fast, direct single-request path.
@@ -921,6 +988,8 @@ export async function generateAIProposal(instruction: string, options?: { contex
 
   return createProposal({
     instruction,
+    trips: options?.trips,
+    focusTrips: options?.focusTrips ?? [],
     userParts: [{ text: options?.context
       ? `Өмнөх яриа (зөвхөн ойлгоход; одоогийн хүсэлтийг биелүүл):
 ${options.context}
@@ -931,108 +1000,6 @@ ${options.context}
     timeoutMs: AI_CHANGE_OPENAI_TIMEOUT_MS,
     maxRetries: AI_CHANGE_OPENAI_MAX_RETRIES,
     repairTimeoutMs: AI_CHANGE_REPAIR_TIMEOUT_MS,
-  });
-}
-
-export async function generateAIProposalFromContent(input: {
-  label?: string;
-  note?: string;
-  contentText?: string;
-  inline?: { mimeType: string; data: string } | null;
-  sources?: Array<{
-    label: string;
-    contentText?: string;
-    inline?: { mimeType: string; data: string } | null;
-  }>;
-}) {
-  const parts: OpenAIPart[] = [];
-  const sources =
-    input.sources && input.sources.length > 0
-      ? input.sources
-      : [
-          {
-            label: input.label || "upload",
-            contentText: input.contentText,
-            inline: input.inline,
-          },
-        ];
-
-  const sourceLabels = sources.map((source) => source.label).join(", ");
-  const guidance = [
-    `Sources: ${sourceLabels}`,
-    input.note ? `Admin note: ${input.note}` : "",
-    "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
-    "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
-    "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
-    "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
-    "TRIP VARIANT RULE: the same destination with a different transport mode (flight, ground/bus, rail, combined), duration, itinerary, or package type is a DIFFERENT trip and must stay in a separate action. Different departure dates alone remain one trip with date groups.",
-    "PHOTO SOURCE RULE: write the exact source label shown in Sources into fields.extra.source_file_name for every extracted action. When one ZIP contains trip-named folders, use each image's full folder path to decide which trip it belongs to; never assign a generic numbered image by list order.",
-    "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 1,111,111 write 1111111, not 1111000.",
-    "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
-    "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
-    "Ignore logos, agency headers, footers, contact details, and page decorations UNLESS they contain trip-specific data (price, date, seats) attached to a real trip row.",
-    "The route_name must be the DESTINATION or TRIP TITLE — a single city name, a hyphenated multi-city route, or a '+'-combined route, exactly as the source writes it. NEVER use the agency name as the route_name.",
-    "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
-    "CANCELLATION RULE: Never use action='cancel', never set status='cancelled', and never write a cancellation warning UNLESS the document contains explicit cancellation language such as: цуцлагдсан, цуцлагдлаа, цуцлах, canceled, cancelled, trip cancelled, no longer available, зогсоосон, худалдаалагдахгүй. Normal itinerary end-phrases such as 'аялал өндөрлөнө', 'буцна', 'ниссэнээр аялал өндөрлөнө', 'чөлөөт өдөр', 'аялал дуусна' do NOT mean cancellation — they are normal tour program language. If the PDF has a title, price, dates, duration, and itinerary, classify it as an active tour (status='active').",
-    "SOLD-OUT RULE: Never set status='sold_out' or seats_left=0 or seats_total=0 UNLESS the document explicitly says: суудал дууссан, суудал дүүрсэн, sold out, fully booked, no seats left, бүрэн захиалагдсан. Booking-intent phrases such as 'суудал авах', 'суудал нөөцлөх', 'захиалга хийх', 'холбогдоорой', 'утасдана уу' mean the tour IS AVAILABLE and open for booking — these are the OPPOSITE of sold out. If the PDF has prices and future departure dates, always default to status='active'.",
-    "STALE RECORD RULE: If an existing database record has departure dates from a different year (e.g. 2023, 2024) and the uploaded PDF clearly has NEW departure dates for 2025 or 2026, do NOT use action='patch' on the old record. Create a NEW action='upsert' with the new dates instead. Only match and patch an existing record when the trip title, destination, duration, AND year/season all clearly refer to the same product run.",
-    "Do not treat normal adult/child price differences as conflicts. An adult price HIGHER than the child price is normal and expected — NEVER flag it, never ask about it. Only flag the child/adult price if the CHILD price is higher than the adult price, or the source is genuinely unreadable.",
-    "If a departure date IS written in the source (e.g. '06/10, 06/19, 06/22' or '06 сарын 17-21'), put it in departure_dates and treat it as known. NEVER list dates you found and then say the date is 'unclear' or 'тодорхойгүй' — that is a contradiction and is forbidden. Only flag a missing date if there is genuinely NO date anywhere in the source for that trip.",
-    "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
-    "Recurring schedules such as 'Пүрэв гараг бүр' are valid departure_dates; do not report them as missing dates.",
-    "If meals are generally included but specific days/meals are self-paid or unavailable, set has_food=true and write the exceptions in notes/source_description instead of raising a meal conflict.",
-    "If a source lists хөтөлбөртэй and чөлөөт package prices for the same route, prefer separate actions with route names that include the variant instead of forcing one base price.",
-    "Do not infer the operator from the uploaded filename when the document content already has a brand/operator.",
-    "If possible, match against existing trips to update them; otherwise propose adding new trips.",
-    "",
-    "CRITICAL — count every distinct trip in the source and produce one action per trip:",
-    "A document may contain 10, 20, or 30+ numbered trips. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after the first few trips.",
-    "Numbered list rule: every numbered TRIP heading (1, 2, 3 … or #1, #2 introducing a distinct route/destination with its own price) marks a new trip. Count those first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
-    "NOT separate trips — never count these as trips: 'DAY 1/DAY 2', 'ӨДӨР 1', or date headings inside an itinerary (those are days WITHIN one trip); numbered activity/included-items lists; multiple uploaded images that are slices or pages of the SAME poster (same title/route across images = ONE trip, merge them into one action).",
-    "Table/free-form rule: trip boundaries = new price table + new route heading + new departure dates = new trip.",
-    "",
-    "YEAR RULE: If the source only lists month and day (e.g. '6 сарын 4', '07/16') WITHOUT a year, do NOT invent a year. Do not write 2023, 2024, or any year that is not stated. Store month-day only in extra.departure_date_groups with year: null. If there is no year anywhere in the source, set needs_confirmation=true with one single question 'Эдгээр аяллын жилийг тодруулна уу (2025 эсвэл 2026?)' — never silently assume a year.",
-    "",
-    "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
-    "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
-    "Correct behavior: create ONE trip action with ALL departure_dates combined, set adult_price to the LOWEST (base/earliest) price among all groups, set child_price to the corresponding lowest child price, and ALWAYS populate fields.extra.departure_date_groups with every group.",
-    "fields.extra.departure_date_groups format — you MUST fill this whenever prices differ by date:",
-    '  "departure_date_groups": [',
-    '    { "label": "A бүлэг", "dates": ["6 сарын 27"], "adult_price": 1111111, "child_price": 999999, "infant_price": null, "notes": "" },',
-    '    { "label": "B бүлэг", "dates": ["7 сарын 18", "8 сарын 8"], "adult_price": 2222222, "child_price": 999999, "infant_price": null, "notes": "" }',
-    "  ]",
-    "Also write ALL date-specific prices in notes/source_description in plain Mongolian (e.g. '6 сарын 27: Том хүн 1,111,111₮ / Хүүхэд 999,999₮; 7 сарын 18, 8 сарын 8: Том хүн 2,222,222₮ / Хүүхэд 999,999₮').",
-    "NEVER raise a conflict or ask the user when prices differ only because departure dates or months differ.",
-    "DATE-PRICE GROUP PATTERN: Many Mongolian travel programs show prices in grouped blocks: a date heading followed by adult and child prices for that specific date. These are NOT competing prices — they are separate departure options. Each group goes into departure_date_groups AND all dates go into departure_dates.",
-    "PASSENGER TYPE PRICES: adult_price > child_price > infant_price is always normal and expected. Never compare adult vs child vs infant prices as if they conflict.",
-    "A true price conflict is ONLY when: same trip name + same exact departure date + same passenger type + two different prices + no explanation. ALL four conditions must be true simultaneously.",
-    "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, passenger types, room types, or packages? If ANY of those differ → store all in notes, no conflict.",
-    "SEATS RULE: If the source does NOT state a seat count, set seats_total=null and seats_left=null. NEVER output seats_total=0 unless the source explicitly says '0 суудал' or 'sold out'. A 0 value means the tour is full, which is dangerous if invented.",
-    "FLEXIBLE DEPARTURE RULE: If a tour says 'хүссэн өдрөө сонгоно', '15+ хүнтэй групп өдрөө сонгоно', 'group may choose date', or similar — the departure date is NOT fixed. In this case: leave departure_dates empty/null, store the rule text in notes and in extra.recurring_schedule. NEVER invent example dates like '2025-07-15' for a flexible tour.",
-    "BOOKING TERMS RULE: if the source states any of deposit/prepayment (урьдчилгаа), payment method or timing (төлбөр), required documents (бүрдүүлэх бичиг баримт, паспорт, гэрэл зураг), visa (виз), or cancellation/refund policy (цуцлалт, буцаан олголт), put them in fields.extra.booking_terms as { deposit, payment, documents, visa, cancellation } — short Mongolian strings copied from the source. Leave any field that is NOT stated as an empty string; NEVER invent a deposit amount, document list, visa rule, or cancellation policy.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  parts.push({ text: guidance });
-
-  for (const source of sources) {
-    if (source.contentText && source.contentText.trim()) {
-      parts.push({
-        text: `File contents (${source.label}) (HTML/text):\n${source.contentText.trim()}`,
-      });
-    }
-    if (source.inline) {
-      parts.push({ text: `Attached binary file: ${source.label}` });
-      parts.push({ inlineData: source.inline });
-    }
-  }
-
-  return createProposal({
-    instruction: input.note
-      ? `[File] ${sourceLabels} - ${input.note}`
-      : `[File] ${sourceLabels}`,
-    userParts: parts,
-    source: "travel.ops.file_parse",
   });
 }
 
@@ -1416,7 +1383,7 @@ export function attachPhotoUrlsToActions(
     if (!action.fields) (action as { fields?: Record<string, unknown> }).fields = {};
     (action.fields as Record<string, unknown>).photo_urls = Array.from(
       new Set([...existing, ...urls]),
-    ).slice(0, 20);
+    ).slice(0, MAX_TRIP_PHOTOS);
   };
 
   const actionTokens = actions.map((action) => {
@@ -1528,7 +1495,7 @@ export function attachPhotoUrlsToActions(
   }
 }
 
-function attachPersistedPhotoSources(proposal: AIChangeProposal): void {
+export function attachPersistedPhotoSources(proposal: AIChangeProposal): void {
   const sources = proposal.photo_sources || [];
   if (sources.length === 0 || proposal.actions.length === 0) return;
   attachPhotoUrlsToActions(
@@ -1550,6 +1517,14 @@ export async function generateAIProposalFromContentBatched(input: {
     fbAttachmentId?: string;
     photoUrls?: string[];
   }>;
+  /**
+   * The sources are one trip seen from several sides: a Word program and the picture of
+   * its departure and price table. They are read in one model call, as one trip, and what
+   * is read from the picture is not checked against the document's text.
+   */
+  sameTrip?: boolean;
+  /** Runs on the validated proposal before it is stored (a web page's reading may only add trips). */
+  afterValidation?: (proposal: AIChangeProposal, trips: TravelTrip[]) => AIChangeProposal;
 }) {
   const rawSources: ProposalSource[] =
     input.sources && input.sources.length > 0
@@ -1592,16 +1567,24 @@ export async function generateAIProposalFromContentBatched(input: {
   for (const s of sources) addPhotoUrls(s.label, s.photoUrls);
 
   const sourceLabels = rawSources.map((source) => source.label).join(", ");
-  const batches = chunkProposalSources(sources);
+  const sameTrip = Boolean(input.sameTrip) && sources.length > 1 && sources.length <= SAME_TRIP_MAX_SOURCES;
+  const batches = sameTrip ? [sources] : chunkProposalSources(sources);
+  const batchNote = sameTrip ? [input.note, SAME_TRIP_NOTE].filter(Boolean).join("\n") : input.note;
 
   return createProposal({
     instruction: input.note
       ? `[File] ${sourceLabels} - ${input.note}`
       : `[File] ${sourceLabels}`,
     source: "travel.ops.file_parse",
+    afterValidation: input.afterValidation,
     buildProposal: async (condensedTrips) => {
       const proposals: AIChangeProposal[] = [];
       const startedAt = Date.now();
+      // The price picture beside a program is read on its own, row by row, while the
+      // program is being read (tripPriceTable.ts).
+      const tableReads = sameTrip
+        ? Promise.all(sources.filter((source) => source.inline?.mimeType.startsWith("image/")).map((source) => readPriceTable(source.inline!)))
+        : null;
 
       for (let index = 0; index < batches.length; index += 1) {
         if (index > 0) {
@@ -1633,7 +1616,7 @@ export async function generateAIProposalFromContentBatched(input: {
         }
         const batch = batches[index];
         const { parts, sourceLabels: batchLabels } = buildBatchSourceParts({
-          note: input.note,
+          note: batchNote,
           sources: batch,
         });
         const batchTimeoutMs = Math.min(
@@ -1676,11 +1659,16 @@ export async function generateAIProposalFromContentBatched(input: {
             classification,
             message,
           });
-          const rateLimited = classification.category === "rate_limited";
+          const failureKind = aiCallFailureKind(error);
+          const rateLimited = classification.category === "rate_limited" || failureKind === "quota";
           proposals.push({
-            summary: rateLimited
-              ? `AI service is temporarily rate limited (429): ${batchLabels}`
-              : `Could not finish reading batch: ${batchLabels}`,
+            summary: failureKind === "credits_exhausted"
+              ? `${AI_BILLING_FAILURE_SUMMARY} (${batchLabels})`
+              : failureKind === "unauthorized"
+                ? `${AI_KEY_FAILURE_SUMMARY} (${batchLabels})`
+                : rateLimited
+                  ? `AI service is temporarily rate limited (429): ${batchLabels}`
+                  : `Could not finish reading batch: ${batchLabels}`,
             needs_confirmation: true,
             important_reason: rateLimited
               ? message
@@ -1698,9 +1686,22 @@ export async function generateAIProposalFromContentBatched(input: {
 
       const merged = mergeBatchProposals(proposals, batches.length);
 
+      keepFileProgramsNew(merged);
+      // Pieces of one file under one name are one trip, whatever length each guessed (fileProposalGuards.ts).
+      mergeSameFileNewTrips(merged);
       // One trip = one action, even when it arrived as several poster slices.
       mergeDuplicateTripActions(merged);
-      enforceTextSourceEvidence(merged, sources);
+      // A price or a year read from the picture is not in the document's text; the guard
+      // would delete it as invented (it did, on a real program + price table, 2026-11-05).
+      if (!sameTrip) enforceTextSourceEvidence(merged, sources);
+      if (tableReads) {
+        const tables = (await tableReads).filter((table): table is PriceTable => Boolean(table));
+        const created = newTripActions(merged);
+        if (tables.length && created.length === 1) {
+          const table: PriceTable = { year: tables.find((entry) => entry.year)?.year ?? null, rows: tables.flatMap((entry) => entry.rows) };
+          applyPriceTable(created[0].fields as Record<string, unknown>, table);
+        }
+      }
 
       // Code-side completeness check: count numbered trip markers in source text
       // and warn if the model returned far fewer actions than expected.
@@ -1761,6 +1762,11 @@ export async function generateAIProposalFromContentBatched(input: {
           urls,
         }));
       }
+      // Standard Ulaanbaatar days, transport tags, the transport choice and the
+      // missing photos — what makes a file-created trip equal to one added on the web.
+      // The photo search only gets the time the batches left of the route's budget.
+      const remainingMs = FILE_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt);
+      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined, sourceText: allSourceText });
 
       return merged;
     },
@@ -1807,7 +1813,7 @@ function buildProposalRevisionGuide(input: {
     '  "important_reason": "why confirmation is still needed",',
     '  "conflicts": ["remaining conflict"],',
     '  "actions": [',
-    '    { "action": "upsert|patch|cancel", "trip_id": "", "match": { "operator_name": "", "route_name": "" }, "fields": {} }',
+    '    { "action": "upsert|patch|cancel|delete|set_date_state", "trip_id": "", "match": { "operator_name": "", "route_name": "" }, "fields": {}, "date": "YYYY-MM-DD (set_date_state)", "state": "open|low|full|paused (set_date_state)", "expected_updated_at": "keep as given" }',
     "  ]",
     "}",
     "",
@@ -1850,7 +1856,22 @@ export async function reviseAIRequest(
   }
 
   const currentProposal = normalizeProposal(row.proposal_json);
-  const trips = await listTrips({ limit: 250 });
+  const trips = await listTrips({ limit: 250, includeArchived: true });
+
+  // A tapped trip answers its question in code. When nothing else is open, the proposal is
+  // complete as it stands and the model is not asked to "revise" what it never got wrong.
+  if (applyTripChoice(clarification, currentProposal, trips) && !hasOpenQuestions(currentProposal)) {
+    const settled = validateAIChangeProposal(currentProposal, trips, {
+      forbidCreate: instructionForbidsTripCreation(row.instruction),
+    }).proposal;
+    settled.photo_sources = currentProposal.photo_sources;
+    await queryNeon(
+      `UPDATE travel_ai_change_requests SET proposal_json = $2::jsonb, conflicts = $3::text[], needs_confirmation = $4 WHERE id = $1`,
+      [requestId, JSON.stringify(settled), settled.conflicts, settled.needs_confirmation],
+    );
+    return { ok: true, proposal: settled, request_id: requestId, requires_confirmation: Boolean(settled.needs_confirmation) };
+  }
+
   const condensedTrips = trips.map((trip) => ({
     id: trip.id,
     category: trip.category,
@@ -1899,6 +1920,20 @@ export async function reviseAIRequest(
     // Keep the inventory alive for the next clarification round.
     revisedProposal.photo_sources = photoSources;
   }
+  // A clicked transport type rebuilds the standard days; found photos and their
+  // credits are kept, never searched for a second time.
+  applyTransportChoice(clarification, revisedProposal);
+  // The tugrug price the admin typed into the price question wins over the model's reading.
+  applyPriceAnswer(clarification, revisedProposal);
+  carryOverPhotoExtras(currentProposal, revisedProposal);
+  await finalizeNewTripActions(revisedProposal);
+  // A revised proposal is checked like a new one (B9): names bound to real trips, versions
+  // stamped, validated — never stored as the model wrote it.
+  bindActionTargets(revisedProposal, trips);
+  stampTripVersions(revisedProposal, trips);
+  const checked = validateAIChangeProposal(revisedProposal, trips, { forbidCreate: instructionForbidsTripCreation(row.instruction) }).proposal;
+  if (revisedProposal.photo_sources) checked.photo_sources = revisedProposal.photo_sources;
+  Object.assign(revisedProposal, checked);
 
   await queryNeon(
     `
@@ -1925,403 +1960,17 @@ export async function reviseAIRequest(
   };
 }
 
-function fieldsWithMergedPhotoUrls(
-  fields: AITripAction["fields"] | undefined,
-  before: TravelTrip | null,
-): AITripAction["fields"] {
-  const next = { ...(fields || {}) };
-  if (!Array.isArray(next.photo_urls) || next.photo_urls.length === 0) return next;
-  const existing = Array.isArray(before?.photo_urls) ? before.photo_urls : [];
-  next.photo_urls = Array.from(
-    new Set(
-      [...existing, ...next.photo_urls]
-        .filter((url): url is string => typeof url === "string")
-        .map((url) => url.trim())
-        .filter((url) => url.startsWith("https://")),
-    ),
-  ).slice(0, 20);
-  return next;
-}
 
-async function applyAIAction(action: AITripAction) {
-  if (!action || typeof action !== "object") {
-    return { ok: false, message: "Invalid action payload." };
+/**
+ * A model action on an existing trip remembers the trip version the prompt was built from, as
+ * the brain's own actions do, so apply can refuse it once the trip has moved on.
+ */
+function stampTripVersions(proposal: AIChangeProposal, trips: TravelTrip[]): void {
+  const versions = new Map(trips.map((trip) => [trip.id, trip.updated_at]));
+  for (const action of proposal.actions) {
+    const verb = String(action.action || "").toLowerCase();
+    if (!action.trip_id || action.expected_updated_at || (verb !== "patch" && verb !== "cancel" && verb !== "delete")) continue;
+    const version = versions.get(action.trip_id);
+    if (version) action.expected_updated_at = version;
   }
-
-  const verb = String(action.action || "").trim().toLowerCase();
-  if (!verb) return { ok: false, message: "Missing action verb." };
-
-  if (verb === "upsert") {
-    let targetId = action.trip_id?.trim() || "";
-    if (!targetId && action.match) {
-      const match = await resolveTripIdByMatch(action.match);
-      if (
-        match.conflict &&
-        !/matching trip not found|таарах аялал олдсонгүй/i.test(match.conflict)
-      ) {
-        return { ok: false, message: match.conflict };
-      }
-      targetId = match.id || "";
-    }
-    const before = targetId ? await getTripById(targetId) : null;
-    if (before) {
-      const updated = await patchTrip(
-        targetId,
-        fieldsWithMergedPhotoUrls(action.fields, before) || {},
-      );
-      if (!updated) return { ok: false, message: "Existing trip update failed." };
-      return {
-        ok: true,
-        message: `Шинэчилсэн: "${updated.route_name}"`,
-        snapshot: {
-          action: { ...action, action: "patch" },
-          trip_id: updated.id,
-          before,
-          after: updated,
-        } satisfies AIActionSnapshot,
-      };
-    }
-    const updated = await upsertTrip({
-      id: targetId || undefined,
-      fields: action.fields || {},
-    });
-    if (!updated) return { ok: false, message: "Upsert failed." };
-    return {
-      ok: true,
-      message: `Нэмсэн: "${updated.route_name}"`,
-      snapshot: {
-        action,
-        trip_id: updated.id,
-        before,
-        after: updated,
-      } satisfies AIActionSnapshot,
-    };
-  }
-
-  let targetId = action.trip_id?.trim() || "";
-  if (!targetId) {
-    const match = await resolveTripIdByMatch(action.match);
-    if (match.conflict) return { ok: false, message: match.conflict };
-    targetId = match.id || "";
-  }
-  if (!targetId) return { ok: false, message: "Target trip not found." };
-
-  if (verb === "cancel") {
-    const before = await getTripById(targetId);
-    const updated = await patchTrip(targetId, {
-      status: "cancelled",
-      ...(action.fields || {}),
-    });
-    if (!updated) return { ok: false, message: "Cancel update failed." };
-    return {
-      ok: true,
-      message: `Цуцалсан: "${updated.route_name}"`,
-      snapshot: {
-        action,
-        trip_id: updated.id,
-        before,
-        after: updated,
-      } satisfies AIActionSnapshot,
-    };
-  }
-
-  if (verb === "patch") {
-    const before = await getTripById(targetId);
-    const updated = await patchTrip(
-      targetId,
-      fieldsWithMergedPhotoUrls(action.fields, before) || {},
-    );
-    if (!updated) return { ok: false, message: "Patch update failed." };
-    return {
-      ok: true,
-      message: `Шинэчилсэн: "${updated.route_name}"`,
-      snapshot: {
-        action,
-        trip_id: updated.id,
-        before,
-        after: updated,
-      } satisfies AIActionSnapshot,
-    };
-  }
-
-  return { ok: false, message: `Unsupported action: ${verb}` };
-}
-
-export async function applyAIRequest(requestId: number) {
-  const ready = await ensureTravelSchema();
-  if (!ready) {
-    return { ok: false, message: "Database is not configured." };
-  }
-
-  const reqResult = await queryNeon<{
-    id: number;
-    instruction: string;
-    proposal_json: AIChangeProposal;
-    needs_confirmation: boolean;
-    status: string;
-  }>(
-    `
-      SELECT id, instruction, proposal_json, needs_confirmation, status
-      FROM travel_ai_change_requests
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [requestId],
-  );
-  const row = reqResult?.rows?.[0];
-  if (!row) return { ok: false, message: "Change request not found." };
-  if (row.status === "applied") {
-    return {
-      ok: true,
-      message: "Request already applied.",
-      results: [] as string[],
-      request_id: requestId,
-    };
-  }
-
-  const proposal = normalizeProposal(row.proposal_json);
-  attachPersistedPhotoSources(proposal);
-  const trips = await listTrips({ limit: 250 });
-  const validation = validateAIChangeProposal(proposal, trips, {
-    forbidCreate: instructionForbidsTripCreation(row.instruction),
-  });
-  if (validation.blocking_conflicts.length > 0) {
-    await queryNeon(
-      `
-        UPDATE travel_ai_change_requests
-        SET
-          proposal_json = $2::jsonb,
-          conflicts = $3::text[],
-          needs_confirmation = TRUE,
-          status = 'error'
-        WHERE id = $1
-      `,
-      [
-        requestId,
-        JSON.stringify(validation.proposal),
-        validation.proposal.conflicts,
-      ],
-    );
-    return {
-      ok: false,
-      message: "Proposal failed validation before saving.",
-      results: validation.blocking_conflicts,
-      proposal: validation.proposal,
-    };
-  }
-
-  const results: string[] = [];
-  const snapshots: AIActionSnapshot[] = [];
-  let failed = false;
-
-  for (const action of validation.proposal.actions) {
-    const result = await applyAIAction(action);
-    results.push(result.message);
-    if (result.ok && result.snapshot) snapshots.push(result.snapshot);
-    if (!result.ok) failed = true;
-  }
-
-  const status = failed ? "error" : "applied";
-  await queryNeon(
-    `
-      UPDATE travel_ai_change_requests
-      SET
-        status = $2,
-        rollback_json = $3::jsonb,
-        applied_at = CASE WHEN $2 = 'applied' THEN NOW() ELSE NULL END,
-        reverted_at = NULL
-      WHERE id = $1
-    `,
-    [requestId, status, JSON.stringify(snapshots)],
-  );
-
-  return {
-    ok: !failed,
-    message: failed
-      ? "Some actions failed. Review results."
-      : "All actions applied successfully.",
-    results,
-    proposal: validation.proposal,
-    request_id: requestId,
-  };
-}
-
-export async function applyAIProposalDirect(
-  proposal: AIChangeProposal,
-  instruction: string,
-) {
-  const ready = await ensureTravelSchema();
-  if (!ready) {
-    return { ok: false, message: "Database is not configured.", results: [] as string[] };
-  }
-
-  const trips = await listTrips({ limit: 250 });
-  attachPersistedPhotoSources(proposal);
-  const validation = validateAIChangeProposal(proposal, trips, {
-    forbidCreate: instructionForbidsTripCreation(instruction),
-  });
-  const normalised = validation.proposal;
-  if (validation.blocking_conflicts.length > 0) {
-    return {
-      ok: false,
-      message: "Proposal failed validation before saving.",
-      results: validation.blocking_conflicts,
-      proposal: normalised,
-    };
-  }
-  const results: string[] = [];
-  const snapshots: AIActionSnapshot[] = [];
-  let failed = false;
-
-  for (const action of normalised.actions) {
-    const result = await applyAIAction(action);
-    results.push(result.message);
-    if (result.ok && result.snapshot) snapshots.push(result.snapshot);
-    if (!result.ok) failed = true;
-  }
-
-  const status = failed ? "error" : "applied";
-  let insertedRequestId: number | null = null;
-  try {
-    const inserted = await queryNeon<{ id: number }>(
-      `
-        INSERT INTO travel_ai_change_requests (
-          instruction, proposal_json, conflicts, needs_confirmation, status, applied_at, rollback_json
-        )
-        VALUES ($1, $2::jsonb, $3::text[], $4, $5, CASE WHEN $5 = 'applied' THEN NOW() ELSE NULL END, $6::jsonb)
-        RETURNING id
-      `,
-      [
-        instruction,
-        JSON.stringify(normalised),
-        normalised.conflicts,
-        normalised.needs_confirmation,
-        status,
-        JSON.stringify(snapshots),
-      ],
-    );
-    insertedRequestId = inserted?.rows?.[0]?.id ?? null;
-  } catch (insertError) {
-    logError("travel.ai.direct_apply_insert_failed", {
-      message:
-        insertError instanceof Error ? insertError.message : String(insertError),
-    });
-  }
-
-  return {
-    ok: !failed,
-    message: failed
-      ? "Some actions failed. Review results."
-      : "All actions applied successfully.",
-    results,
-    proposal: normalised,
-    request_id: insertedRequestId,
-  };
-}
-
-function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const entry = item as Partial<AIActionSnapshot>;
-      const tripId = String(entry.trip_id || "").trim();
-      if (!tripId) return null;
-      return {
-        action:
-          entry.action && typeof entry.action === "object"
-            ? (entry.action as AITripAction)
-            : { action: "unknown" },
-        trip_id: tripId,
-        before: entry.before
-          ? mapTripRow(entry.before as unknown as Record<string, unknown>)
-          : null,
-        after: entry.after
-          ? mapTripRow(entry.after as unknown as Record<string, unknown>)
-          : null,
-      };
-    })
-    .filter((item): item is AIActionSnapshot => Boolean(item));
-}
-
-export async function rollbackAIRequest(requestId: number) {
-  const ready = await ensureTravelSchema();
-  if (!ready) {
-    return { ok: false, message: "Database is not configured.", results: [] as string[] };
-  }
-
-  const reqResult = await queryNeon<{
-    id: number;
-    status: string;
-    rollback_json: unknown;
-  }>(
-    `
-      SELECT id, status, rollback_json
-      FROM travel_ai_change_requests
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [requestId],
-  );
-  const row = reqResult?.rows?.[0];
-  if (!row) {
-    return { ok: false, message: "Change request not found.", results: [] as string[] };
-  }
-  if (row.status === "reverted") {
-    return { ok: true, message: "Request is already rolled back.", results: [] as string[] };
-  }
-
-  const snapshots = normalizeActionSnapshots(row.rollback_json);
-  if (snapshots.length === 0) {
-    return {
-      ok: false,
-      message: "No rollback snapshot is available for this request.",
-      results: [] as string[],
-    };
-  }
-
-  const results: string[] = [];
-  let failed = false;
-
-  for (const snapshot of [...snapshots].reverse()) {
-    if (snapshot.before) {
-      const restored = await upsertTrip({
-        id: snapshot.trip_id,
-        fields: snapshot.before,
-      });
-      if (restored) {
-        results.push(`Restored ${snapshot.trip_id}`);
-      } else {
-        failed = true;
-        results.push(`Failed to restore ${snapshot.trip_id}`);
-      }
-      continue;
-    }
-
-    const deleted = await deleteTrip(snapshot.trip_id);
-    if (deleted) {
-      results.push(`Removed AI-created trip ${snapshot.trip_id}`);
-    } else {
-      results.push(`AI-created trip ${snapshot.trip_id} was already absent`);
-    }
-  }
-
-  if (!failed) {
-    await queryNeon(
-      `
-        UPDATE travel_ai_change_requests
-        SET status = 'reverted', reverted_at = NOW()
-        WHERE id = $1
-      `,
-      [requestId],
-    );
-  }
-
-  return {
-    ok: !failed,
-    message: failed
-      ? "Rollback finished with errors. Review results."
-      : "Rollback completed successfully.",
-    results,
-  };
 }

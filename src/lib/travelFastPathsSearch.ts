@@ -4,13 +4,16 @@
  * scores trips against a query, and resolves which trip(s) a message is about.
  */
 
-import { filterFutureDepartureDates, requestedDepartureScope, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
+import { commaMonthDays, filterFutureDepartureDates, requestedDepartureScope, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
+import { isAttributeWord } from "./travelModeWords";
 import { withBookableDepartureDates } from "./departureAvailability";
 import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
 import { isNoTripText } from "./customerTurn";
+import { withoutHolidayNames } from "./holidayCalendar";
 import { publishedTripWebsiteLink, storedWebsiteTripSlug, tripsForWebsiteReference, websiteTripLinksInText } from "./bookingWebsite";
+import { aliasOccursInQuery } from "./aliasMatch";
 
 /**
  * Returns a copy of the trip with past departure dates stripped, so every
@@ -309,13 +312,33 @@ export function getTripSearchHaystack(trip: TravelTrip): string {
  * haystack, so comparing "<аялал А> болон <аялал Б>" pulled in a third tour whose only
  * connection to the question was the word "and".
  */
+/**
+ * The part of a trip title that names the trip. Staff sometimes write an instruction into the title
+ * ("<places> - ХАМТ ОЛНЫ ЗАХИАЛГА - 2026-12-15-с өмнөх өдрүүдэд хамт олны захиалга авна", live 2026-11-11):
+ * a dash-separated segment with a date, a sentence verb or a booking label is a note, not the trip's
+ * identity, and its everyday words ("хамт", "өдрүүд", "авна") must not make the trip match "Хоёулаа явна".
+ * The customer still sees the full title; only matching ignores the note.
+ */
+const TITLE_NOTE_SEGMENT = /\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s*(?:сарын|-?р\s+сарын)\s*\d{1,2}|захиалг|booking|(?:^|\s)\p{L}*(?:авна|авахгүй|болно|байна|явна|өгнө)(?=\s|$)/iu;
+export function tripIdentityName(routeName: string): string {
+  const name = String(routeName || "");
+  // Pieces alternate: segment, separator, segment, ... (the separators are kept as typed).
+  const pieces = name.split(/(\s+[-–—]\s+)/u);
+  if (pieces.length < 3) return name;
+  let out = pieces[0];
+  for (let index = 2; index < pieces.length; index += 2) {
+    if (!TITLE_NOTE_SEGMENT.test(pieces[index])) out += pieces[index - 1] + pieces[index];
+  }
+  return out;
+}
+
 export function getTripNameHaystack(trip: TravelTrip): string {
-  return normText([trip.route_name, ...getAliases(trip)].join(" "));
+  return normText([tripIdentityName(trip.route_name), ...getAliases(trip)].join(" "));
 }
 
 function tripSearchTokens(trip: TravelTrip): string[] {
   return unique([
-    ...keywordTokens(trip.route_name),
+    ...keywordTokens(tripIdentityName(trip.route_name)),
     ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
     ...keywordTokens(trip.category || ""),
     ...keywordTokens(trip.source_description || ""),
@@ -381,6 +404,24 @@ type TripMatchOptions = {
   includeArchived?: boolean;
 };
 
+/**
+ * A trip staff hid from customers (the admin's "Харагдах эсэх" off, extra.customer_visible ===
+ * false): it is never offered, matched or quoted to a customer, whatever its status. The
+ * knowledge text already left it out; the fast-path lists did not (2026-11-06).
+ */
+export function isHiddenFromCustomers(trip: TravelTrip): boolean {
+  return trip.extra?.customer_visible === false;
+}
+
+/**
+ * The trips a customer may be offered: every trip but the ones staff hid. Applied where the
+ * customer catalogue is loaded (webhook), not in the matcher: the admin assistant finds trips
+ * with the same matcher, and it must still find a hidden one (to show it again).
+ */
+export function withoutHiddenTrips<T extends TravelTrip>(trips: T[]): T[] {
+  return trips.filter((trip) => !isHiddenFromCustomers(trip));
+}
+
 function canMatchTripStatus(trip: TravelTrip, options?: TripMatchOptions): boolean {
   if (trip.status === "active") return true;
   if (options?.includeArchived === true && trip.status === "archived") return true;
@@ -411,6 +452,9 @@ function extractQueryMonthDays(text: string): MonthDay[] {
   for (const match of text.toLowerCase().matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
     push(Number(match[1]), Number(match[2]));
   }
+  // "11,19": the comma format is shared with the date parser (travelDates.ts). Only this format: reading every
+  // format the parser knows would turn the two ends of a range into two dates.
+  for (const { month, day } of commaMonthDays(text)) push(month, day);
 
   return uniqueMonthDays(values);
 }
@@ -755,8 +799,9 @@ function queryPlaceWords(queryWords: string[], vocabulary: CatalogVocabulary): s
 /** Catalog words a message names, split into places and occasions. */
 export function queryNamedPlaces(text: string, trips: TravelTrip[]): { places: string[]; occasions: string[] } {
   const vocabulary = catalogVocabulary(trips);
+  // A holiday or "шинэ" (new) in a trip title is not a place the customer named.
   const named = queryPlaceWords(
-    snapMisspelledWords(unique(keywordTokens(text)), [], vocabulary).words,
+    snapMisspelledWords(unique(keywordTokens(withoutHolidayNames(text))), [], vocabulary).words,
     vocabulary,
   );
   return {
@@ -844,10 +889,11 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     if (wantsSeaBeach && !tripHasSeaBeach(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;
 
-    const routeNorm = normText(trip.route_name);
-    const routePhonetic = phoneticLatinText(trip.route_name);
-    const routeKeywords = unique(keywordTokens(trip.route_name));
-    const routePhoneticKeywords = unique(phoneticKeywordTokens(trip.route_name));
+    const identityName = tripIdentityName(trip.route_name);
+    const routeNorm = normText(identityName);
+    const routePhonetic = phoneticLatinText(identityName);
+    const routeKeywords = unique(keywordTokens(identityName));
+    const routePhoneticKeywords = unique(phoneticKeywordTokens(identityName));
     if (!routeKeywords.length && !routePhoneticKeywords.length) continue;
 
     // Check aliases — full string OR token-level overlap.
@@ -875,16 +921,14 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     const distinctQuery = queryWords.some((word) => word.length >= 3 && !DESCRIPTIVE_NOUN_RE.test(word));
     for (const alias of aliases) {
       const aliasNorm = normText(alias);
-      if (query.includes(aliasNorm) || (distinctQuery && aliasNorm.includes(query))) {
+      // An alias counts as a WORD of the message (aliasMatch.ts): inside a longer word it named
+      // trips by accident ("санал" held a four-letter alias and a thanks got a trip list).
+      if (aliasOccursInQuery(alias, query, queryPhonetic) || (distinctQuery && aliasNorm.includes(query))) {
         aliasHit = 1;
         break;
       }
       const aliasPhonetic = phoneticLatinText(alias);
-      if (
-        aliasPhonetic &&
-        queryPhonetic &&
-        (queryPhonetic.includes(aliasPhonetic) || (distinctQuery && aliasPhonetic.includes(queryPhonetic)))
-      ) {
+      if (aliasPhonetic && queryPhonetic && distinctQuery && aliasPhonetic.includes(queryPhonetic)) {
         aliasHit = 1;
         break;
       }
@@ -1023,8 +1067,9 @@ export function resolveTripFromUserMessage(
       ? { status: "verified", trip: linkedTrips[0], candidates: [] }
       : { status: "ambiguous", trip: null, candidates: linkedTrips.slice(0, MAX_ROUTE_CANDIDATES) };
   }
-  // "Амралтын өдрүүдээр" means "at the weekend", not a school-holiday trip.
-  const text = website.textWithoutUrls.replace(/амралтын\s+өдр\S*/giu, " ");
+  // "Амралтын өдрүүдээр" means "at the weekend", not a school-holiday trip. A holiday
+  // ("шинэ жилийн", "цагаан сарын") is a time: the date paths read it, it names no trip.
+  const text = withoutHolidayNames(website.textWithoutUrls.replace(/амралтын\s+өдр\S*/giu, " "));
   const allowLooseFallback = options.allowLooseFallback === true;
   const matches = findTripMatches(text, trips, options);
   if (!matches.length) {
@@ -1136,7 +1181,36 @@ export function resolveTripFromUserMessage(
   // it ships a wrong price, programme AND poster at full confidence, which is
   // how a customer ends up holding a poster for the tour they did not ask
   // about. Ask the question a human agent would ask instead.
-  const queryRouteTokens = routeContentTokens(text);
+  //
+  // Only a word some trip's name or alias holds can tell the trips apart. Any other word
+  // ("гарах", "явмаар", a bare number, a typo, a word nobody put on a stopword list) says
+  // nothing about WHICH trip, yet it used to count as a route word: no name covered it, so the
+  // shared-city test above failed and the top score was returned as "verified" (live
+  // 2026-11-13: "<date> гарах <хот>" got the one flight trip of a city with six ground trips).
+  const typedRouteTokens = routeContentTokens(text);
+  // A bare number is never a place: it matched digits inside some trip's text and picked that trip.
+  // A travel-mode word ("нисэх", "газраар") does say something about WHICH trip, so it stays.
+  //
+  // "Some trip's name holds the word" is judged word by word, never by substring: a short filler such as
+  // "гэр", "бүл" or "том" sits inside longer name words, and counted as a place it made a long family message
+  // name one trip (found by replaying 2,121 real messages old against new).
+  const nameWords = allBookable.map((trip) => {
+    const identity = tripIdentityText(trip);
+    return { words: identity.split(/\s+/).filter(Boolean), latin: phoneticLatinText(identity).split(/\s+/).filter(Boolean) };
+  });
+  const sameWord = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)));
+  const namesSomeTrip = (token: string) => {
+    const latin = phoneticLatinText(token);
+    return nameWords.some(({ words, latin: latinWords }) => words.some((word) => sameWord(word, token))
+      || (latin.length >= 4 && latinWords.some((word) => phoneticTokenMatches(latin, word))));
+  };
+  // A case-inflected generic word ("аялалд", "аялалаар", "аялалыг": "on / by / about the trip") is the generic
+  // word, never a place; without this it matched the one name that held "аялал" and a shared city collapsed to
+  // that trip (found by independent review: "<city> аялалд явна" got one trip's card instead of the question).
+  const isGenericInflection = (token: string) => !isAttributeWord(token) && token.length >= 5
+    && [...GENERIC_ROUTE_WORDS].some((word) => word.length >= 5 && token !== word && token.startsWith(word));
+  const catalogueRouteTokens = typedRouteTokens.filter((token) => !/^\d+$/.test(token) && !isGenericInflection(token) && (isAttributeWord(token) || namesSomeTrip(token)));
+  const queryRouteTokens = catalogueRouteTokens.length ? catalogueRouteTokens : typedRouteTokens;
   const indistinguishable = hasSpecificTripPreference
     ? []
     : matches.filter((match) => tripNameCoversQuery(match.trip, queryRouteTokens));
@@ -1212,14 +1286,10 @@ function hasLooseAliasMatch(
   queryPhoneticKeywords: string[] = [],
 ): boolean {
   const aliasNorm = normText(alias);
-  if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
+  if (aliasOccursInQuery(alias, query, queryPhonetic) || aliasNorm.includes(query)) return true;
 
   const aliasPhonetic = phoneticLatinText(alias);
-  if (
-    aliasPhonetic &&
-    queryPhonetic &&
-    (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
-  ) {
+  if (aliasPhonetic && queryPhonetic && aliasPhonetic.includes(queryPhonetic)) {
     return true;
   }
 
@@ -1475,7 +1545,7 @@ function examFeeIntentScore(query: string, trip: TravelTrip): number {
  * name match for the city the customer asked about.
  */
 function tripIdentityText(trip: TravelTrip): string {
-  return normText([trip.route_name, ...getAliases(trip)].join(" "));
+  return normText([tripIdentityName(trip.route_name), ...getAliases(trip)].join(" "));
 }
 
 /**
@@ -1589,6 +1659,12 @@ function routeContentTokens(query: string): string[] {
     "орсон",
     "хоол",
     "хооллолт",
+    // "<хот> руу" / "<хот> рүү явах" ("to <city>"): a postposition. Fuzzy-matched against trip names it picked
+    // a trip whose title merely held a similar sound ("<city> руу" chose one of six trips of that city).
+    "руу",
+    "рүү",
+    "ruu",
+    "ruugaa",
   ]);
   return unique(keywordTokens(query).filter((token) => !filler.has(token)));
 }
@@ -1744,11 +1820,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
     const matchedWordCount = routeKeywords.filter((word) => queryKeywords.includes(word)).length;
     const phoneticMatchedWordCount = routePhoneticKeywords.filter((word) => queryPhoneticKeywords.includes(word)).length;
     const aliases = getAliases(trip);
-    const aliasExactHit = aliases.some((alias) => {
-      const aliasNorm = normText(alias);
-      const aliasPhonetic = phoneticLatinText(alias);
-      return query.includes(aliasNorm) || (aliasPhonetic.length > 0 && queryPhonetic.includes(aliasPhonetic));
-    }) ? 1 : 0;
+    const aliasExactHit = aliases.some((alias) => aliasOccursInQuery(alias, query, queryPhonetic)) ? 1 : 0;
     const aliasTokenHit = aliases.some((alias) =>
       hasLooseAliasMatch(query, queryKeywords, alias, queryPhonetic, queryPhoneticKeywords),
     ) ? 1 : 0;

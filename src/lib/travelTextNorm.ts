@@ -44,6 +44,32 @@ export const GENERIC_ROUTE_WORDS = new Set([
   "program",
   "pdf",
   "хөтөлбөр",
+  "хөтөлбөртэй",
+  "хөтөлбөрийн",
+  // "Possibility" and "more" are never a destination, but a trip title can hold them ("<хот> хөтөлбөртэй илүү
+  // боломжын үнэтэй аялал"): "11 нд боломжгүй байна аа" ("the 11th is not possible") then matched that one title and
+  // was answered about that trip (found by the decision gate on 2026-11-13).
+  "боломж",
+  "боломжтой",
+  "боломжгүй",
+  "боломжийн",
+  "боломжын",
+  "bolomj",
+  "bolomjtoi",
+  "bolomjgui",
+  "bolomjiin",
+  "bolomjin",
+  "илүү",
+  "ilvv",
+  "ilvu",
+  // The greeting "Өглөөний / Өдрийн / Оройн мэнд" and "бүтэн" ("full", "whole") are never a destination, but they sit
+  // in checkup-trip titles ("эрүүл мэндийн", "бүтэн биеийн"): a good-morning message and "send the full programme"
+  // were each answered with one checkup trip. Those trips keep their own words (эрүүл, биеийн, шинжилгээ).
+  "мэнд",
+  "mend",
+  "бүтэн",
+  "butun",
+  "buten",
   // Request verbs from the "Хөтөлбөр үзэх" / "Зураг үзэх" buttons and everyday
   // phrasing. They are never part of a destination. Without this,
   // "Хөтөлбөр үзэх" matched the trip "<хот> -намрын тахилга үзэх аялал" on the
@@ -116,7 +142,39 @@ export const GENERIC_ROUTE_WORDS = new Set([
   "онгоцны",
   "онгоцоор",
   "онгоцтой",
+  // The home city, abbreviated. Every trip leaves from and returns to it, so it tells no
+  // trip apart (the full word and its case endings are caught by isHomeCityWord below).
+  "уб",
+  "ub",
+  // "The two / three / four of us" ("2 уулаа", "хоёулаа", "гурвуулаа"): a head count, never a
+  // place. Typed in Latin, "uulaa" is one letter from the phonetic form of a red-named stop
+  // in a trip title and picked that trip once nothing else competed (gate replay, 2026-11-04).
+  "уулаа",
+  "uulaa",
+  "хоёулаа",
+  "хоюулаа",
+  "hoyuulaa",
+  "hoyulaa",
+  "гурвуулаа",
+  "guruvuulaa",
+  "guravuulaa",
+  "дөрвүүлээ",
+  "durvuulee",
+  "тавуулаа",
+  "tavuulaa",
 ]);
+
+/**
+ * The home city in any case ending or spelling: "Улаанбаатар", "Улаанбаатараас",
+ * "Ulaanbaatart". It appears in flight-trip titles ("<улс> – Улаанбаатар - <хот> нислэг")
+ * and in every itinerary's first and last day, so it never identifies a trip. A live
+ * customer asking for a one-way pick-up "…-аас Улаанбаатар орох…" (2026-11-04) was given
+ * the one flight trip whose title names the home city, with its Ulaanbaatar days as the
+ * answer.
+ */
+export function isHomeCityWord(word: string): boolean {
+  return /^(?:улаанбаатар|ulaanbaatar|ulanbaatar|ulaanbatar|ulanbatar)/.test(word);
+}
 
 /**
  * Words that make up a price / programme / information request without naming
@@ -403,14 +461,14 @@ export function keywordTokens(text: string) {
   return normText(text)
     .split(/\s+/)
     .map((word) => word.trim())
-    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS.has(word));
+    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS.has(word) && !isHomeCityWord(word));
 }
 
 export function phoneticKeywordTokens(text: string) {
   return phoneticLatinText(text)
     .split(/\s+/)
     .map((word) => word.trim())
-    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS_PHONETIC.has(word));
+    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS_PHONETIC.has(word) && !isHomeCityWord(word));
 }
 
 export function unique<T>(values: T[]) {
@@ -457,7 +515,50 @@ function isOneEditApart(a: string, b: string): boolean {
  */
 function isCaseSuffixedForm(a: string, b: string): boolean {
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
-  return shorter.length >= 4 && longer.length > shorter.length && longer.startsWith(shorter);
+  if (shorter.length < 4 || longer.length <= shorter.length || !longer.startsWith(shorter)) return false;
+  // A four-letter token inside a longer word is a coincidence unless what follows is a case ending:
+  // a four-letter place token was the start of the everyday words "санал" (suggestion) and
+  // "санагдах" (to seem), and those messages resolved to that one trip.
+  if (shorter.length >= MIN_AFFIXED_WORD_LETTERS) return true;
+  // A lengthened final vowel ("sana" typed "sanaa", "sanaagiin") is the same word.
+  let rest = longer.slice(shorter.length);
+  const last = shorter.at(-1) || "";
+  if (/[aeiouy]/.test(last) && rest.startsWith(last)) rest = rest.slice(1);
+  return rest === "" || isMongolianCaseEnding(rest);
+}
+
+const CASE_ENDINGS_CYRILLIC = [
+  "ы", "ий", "ын", "ийн", "д", "т", "ыг", "ийг", "аас", "ээс", "оос", "өөс", "аар", "ээр", "оор", "өөр",
+  "тай", "тэй", "той", "төй", "ууд", "үүд", "ынх", "ийнх",
+];
+// The same endings as people type them in Latin letters.
+const CASE_ENDINGS_LATIN = ["yn", "iyn", "iin", "yg", "iyg", "iig", "tai", "tei", "toi", "uud", "uld",
+  "as", "aas", "es", "ees", "os", "oos", "us", "uus", "ar", "aar", "er", "eer", "or", "oor", "ur", "uur"];
+const CASE_LINKERS = ["", "г", "н", "g", "n"];
+let caseEndings: ReadonlySet<string> | null = null;
+
+/** Below this many letters a word matches inside a longer word only before a case ending. */
+export const MIN_AFFIXED_WORD_LETTERS = 5;
+
+/**
+ * Is `suffix` one Mongolian case ending (genitive, dative, accusative, ablative, instrumental,
+ * comitative, plural) from a CLOSED list, with or without the linking consonant, in Cyrillic, typed
+ * Latin or the phonetic spelling the matchers compare?
+ */
+export function isMongolianCaseEnding(suffix: string): boolean {
+  if (!caseEndings) {
+    const raw = new Set<string>(["н", "г", "n", "g"]);
+    for (const linker of CASE_LINKERS) {
+      for (const ending of [...CASE_ENDINGS_CYRILLIC, ...CASE_ENDINGS_LATIN]) raw.add(linker + ending);
+    }
+    const all = new Set<string>(raw);
+    for (const ending of raw) {
+      const phonetic = phoneticLatinText(ending);
+      if (phonetic) all.add(phonetic);
+    }
+    caseEndings = all;
+  }
+  return caseEndings.has(suffix);
 }
 
 export function phoneticTokenMatches(queryToken: string, candidateToken: string): boolean {

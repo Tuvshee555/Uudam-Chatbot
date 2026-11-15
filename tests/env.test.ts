@@ -15,7 +15,9 @@ test("env validation accepts valid configuration", async () => {
   assert.equal(env.demoMaxTextChars, 1000);
   assert.equal(env.openaiMaxRetries, 1);
   assert.equal(env.webhookMaxBodyBytes, 1048576);
-  assert.equal(env.adminOpenAccess, false);
+  assert.equal("adminOpenAccess" in env, false, "there is no open-access switch any more");
+  assert.equal("adminSecret" in env, false, "ADMIN_SECRET is no longer read");
+  assert.equal(env.googleSignInEnabled, true);
   assert.equal(env.googleDriveSyncEnabled, false);
   assert.equal(env.googleDriveSyncIntervalMinutes, 30);
   assert.equal(env.googleDriveSyncFileLimit, 500);
@@ -103,16 +105,25 @@ test("env rejects a malformed FACEBOOK_PAGES entry", async () => {
   );
 });
 
-test("env validation rejects open admin access in production", async () => {
+test("the retired admin settings open nothing and are not required", async () => {
   applyTestEnv({
+    ADMIN_SECRET: undefined,
     ADMIN_OPEN_ACCESS: "true",
+    ALLOW_ADMIN_SECRET_QUERY: "true",
     NODE_ENV: "production",
   });
   const envModule = await loadEnvModule();
-  assert.throws(
-    () => envModule.getEnv(),
-    /ADMIN_OPEN_ACCESS cannot be true in production/i,
-  );
+  const env = envModule.getEnv();
+  assert.equal("adminOpenAccess" in env, false);
+  assert.equal("allowAdminSecretQuery" in env, false);
+  const { hasAdminAccess } = await import("../src/lib/adminAccess");
+  assert.equal(hasAdminAccess({ method: "GET", query: { secret: "x" }, cookies: {}, headers: {} } as never), false);
+});
+
+test("ADMIN_API_TOKEN is optional", async () => {
+  applyTestEnv({ ADMIN_API_TOKEN: undefined });
+  const envModule = await loadEnvModule();
+  assert.equal(envModule.getEnv().adminApiToken, null);
 });
 
 test("env validation allows Vercel production hardening to be reported by readiness", async () => {
@@ -212,12 +223,27 @@ test("env validation rejects negative/too-small values", async () => {
 });
 
 test("env validation rejects empty required secrets", async () => {
-  applyTestEnv({ ADMIN_SECRET: "   " });
+  applyTestEnv({ VERIFY_TOKEN: "   " });
   const envModule = await loadEnvModule();
   assert.throws(
     () => envModule.getEnv(),
-    /ADMIN_SECRET is required and must be a non-empty string/,
+    /VERIFY_TOKEN is required and must be a non-empty string/,
   );
+});
+
+// A missing ADMIN_SESSION_SECRET (Vercel still holding only the retired ADMIN_SECRET) must fail
+// closed for the admin ONLY: getEnv() keeps working, so the Messenger webhook, crons and the
+// website sync keep running, and the key reads as weak (no session, no customer-file link).
+test("a missing or blank ADMIN_SESSION_SECRET turns the admin off without breaking getEnv", async () => {
+  for (const value of [undefined, "   "]) {
+    applyTestEnv({ ADMIN_SESSION_SECRET: value, ADMIN_SECRET: "old-value-still-in-vercel" });
+    const envModule = await loadEnvModule();
+    const env = envModule.getEnv();
+    assert.equal(env.adminSessionSecret, "", `ADMIN_SESSION_SECRET=${JSON.stringify(value)}`);
+    assert.equal(env.verifyToken, "test-verify-token", "the customer bot's settings still load");
+    const { isWeakAdminKey } = await import("../src/lib/adminSession");
+    assert.equal(isWeakAdminKey(env.adminSessionSecret), true, "an unset key counts as weak (fail closed)");
+  }
 });
 
 test("env validation requires REDIS_URL when redis state flags are enabled", async () => {

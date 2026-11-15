@@ -158,8 +158,8 @@ export const devCases: EvalCase[] = [
   // ── Small talk ──
   c("small-01-greeting", "smalltalk", "cyrillic", [t("Сайн байна уу", { must: ["."], noLead: true })]),
   c("small-02-thanks", "smalltalk", "cyrillic", [t("Баярлалаа", { must: ["Зүгээр"], noLead: true })]),
-  c("small-03-ok-latin", "smalltalk", "latin", [t("Kaldor une", { must: ["2,890,000₮"] }), t("za ok", { noLead: true })]),
-  c("small-04-will-ask-tomorrow", "smalltalk", "latin", [t("Kaldor une", {}), t("margaash lavlah gesen yum", { noLead: true, mustNot: ["Аль аялал"] })]),
+  c("small-03-ok-latin", "smalltalk", "latin", [t("Kaldor une", { must: ["2,890,000₮"] }), t("za ok", { noLead: true, allowSilent: true })]),
+  c("small-04-will-ask-tomorrow", "smalltalk", "latin", [t("Kaldor une", {}), t("margaash lavlah gesen yum", { noLead: true, allowSilent: true, mustNot: ["Аль аялал"] })]),
 
   // ── Latin follow-ups ──
   c("latin-01-child-discount", "latin", "latin", [t("Lunaria park", {}), t("huuhded hungulult bga yu", { must: ["1,990,000₮|хямдрал"] })]),
@@ -174,8 +174,8 @@ export const devCases: EvalCase[] = [
   c("party-05-large-group", "passengers", "cyrillic", [t("Калдор 12 хүн явна", { must: ["зөвлөх|2,890,000₮"], mustNot: ["34,680,000₮"] })]),
   c("human-07-person-there", "handover", "cyrillic", [t("Хүн байна уу", { must: ["ажилтан|зөвлөх"], lead: true })]),
   c("human-08-head-count-is-not-handover", "handover", "cyrillic", [t("Калдор 2 хүн байна уу", { mustNot: ["ажилтан удахгүй"], noLead: true })]),
-  c("small-05-ack-cyrillic", "smalltalk", "cyrillic", [t("Kaldor une", {}), t("за ойлголоо", { noLead: true, mustNot: ["Аль аялал|₮"] })]),
-  c("small-06-think-about-it", "smalltalk", "cyrillic", [t("Kaldor une", {}), t("Бодож үзье", { noLead: true, mustNot: ["Аль аялал|дугаар"] })]),
+  c("small-05-ack-cyrillic", "smalltalk", "cyrillic", [t("Kaldor une", {}), t("за ойлголоо", { noLead: true, allowSilent: true, mustNot: ["Аль аялал|₮"] })]),
+  c("small-06-think-about-it", "smalltalk", "cyrillic", [t("Kaldor une", {}), t("Бодож үзье", { noLead: true, allowSilent: true, mustNot: ["Аль аялал|дугаар"] })]),
   c("contact-07-address-typed", "contact", "cyrillic", [t("Та нарын хаяг хаана вэ", { must: ["Энхтайваны"] })]),
   c("contact-08-phone-latin-tanai", "contact", "latin", [t("tanai utas hed ve", { must: ["7700 1234"] })]),
   c("date-12-sold-out-under-trip", "dates", "cyrillic", [t("Калдор", {}), t("2 сарын 15", { must: ["дүүрсэн"], mustNot: ["Тэр хугацаанд гарах аялал алга"] })]),

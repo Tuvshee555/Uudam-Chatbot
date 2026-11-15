@@ -71,7 +71,17 @@ test("Lunar listings show three by default and eight for explicit full requests"
   assert.equal(compact.listed.length, 3); assert.equal(compact.authoritative, true);
   assert.match(compact.reply, /Өөр 7 сонголт бий/);
   assert.equal(listing("бүх Сар шинийн аялал", trips).listed.length, 8);
-  assert.equal(listing("Сар шинийн аялал", [trip()]).listed.length, 0);
+  // Changed 2026-11-04: with no trip named for the holiday and none leaving around it, the answer
+  // used to be "no special lunar trip is registered, a consultant will clarify" — a no-data
+  // deflection the owner forbids. It now says the holiday's schedule is not out and shows the
+  // closest departures under their own heading, never as holiday trips.
+  const none = listing("Сар шинийн аялал", [trip()]);
+  assert.match(none.reply, /^Цагаан сарын үеэр \(2027 оны 2 сарын 6–9 орчим\) гарах аяллын хуваарь одоогоор гараагүй/);
+  // Changed 2026-11-11: a departure months from the holiday is no longer printed as "the closest"
+  // (it answered nothing about the holiday); further than ~6 weeks, only the website link is given.
+  assert.match(none.reply, /Шинэ хуваарийг эндээс харна уу: https:\/\/uudamtravel\.mn$/);
+  assert.doesNotMatch(none.reply, /Вэлмор0|хамгийн ойр гарах аяллууд|📅/);
+  assert.doesNotMatch(none.reply, /аялах боломжтой аяллууд/);
 });
 
 test("message-budget truncation returns only complete visible options, including grouped lists", () => {
@@ -264,4 +274,29 @@ test("a span of days or a Latin month gets the trips; a discount or a vague 'war
   // A single date (no span) and a price are other paths' questions.
   assert.equal(buildCatalogListingReply("11 сарын 25 аялал", trips, NOW), null);
   assert.equal(buildCatalogListingReply("2.890.000 гэсэн аялал", trips, NOW), null);
+});
+
+// Live 2026-11-04: the agency's post advertised company New Year trips; "шинэ жилийн аялал" is the
+// trips leaving between December 1 and January 10, with the website for the rest.
+test("a New Year trip question lists the New Year departures with the website, or the nearest ones", () => {
+  const trips = [trip(0, { departure_dates: ["2026-12-20"] }), trip(1, { departure_dates: ["2027-01-05"] }), trip(2, { departure_dates: ["2027-02-14"] })];
+  for (const text of ["шинэ жилийн аялал хаашаа вэ", "Sain bnuu ene shine jiliin ayalal haashaa be", "shin jilliin aylaliin medeelel awii", "шинэ оны аялал байна уу", "new year trip?"]) {
+    const result = listing(text, trips);
+    assert.equal(result.authoritative, true, text);
+    assert.deepEqual(result.listed.map((t) => t.route_name), [trips[0].route_name, trips[1].route_name], text);
+    assert.match(result.reply, /^🎄 Шинэ жилийн үеэр гарах аяллууд/, text);
+    assert.match(result.reply, /Бүх аяллыг эндээс харна уу: https:\/\/uudamtravel\.mn/, text);
+  }
+  // A greeting or a medical test is not a New Year trip question.
+  for (const text of ["Шинэ жилийн мэнд хүргэе", "ПСР шинжилгээ шаардлагатай юу", "шинжилгээ"]) {
+    assert.equal(buildCatalogListingReply(text, trips, NOW)?.reply.includes("Шинэ жилийн үеэр") ?? false, false, text);
+  }
+  // Nothing leaves over New Year: say so, point to the website, show the nearest departures.
+  const empty = buildCatalogListingReply("шинэ жилийн аялал байна уу", [trips[2]], NOW);
+  assert.ok(empty?.authoritative);
+  assert.match(empty.reply, /^Шинэ жилийн үеэр \(12 сар – 1 сарын эхээр\) гарах аялал одоогоор хуваарьт алга байна\. Бүх аяллыг эндээс харна уу: https:\/\/uudamtravel\.mn\n\nОйрын гарах аяллууд:/);
+  assert.deepEqual(empty.listed.map((t) => t.route_name), [trips[2].route_name]);
+  // Inside the window (early January) the current New Year is still the one asked about.
+  const january = buildCatalogListingReply("шинэ жилийн аялал", trips, new Date("2027-01-03T04:00:00Z"));
+  assert.deepEqual(january?.listed.map((t) => t.route_name), [trips[1].route_name]);
 });

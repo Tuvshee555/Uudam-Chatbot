@@ -1,4 +1,5 @@
 import type { ValidatedEnv } from "./env";
+import { isUsableAdminApiToken, isWeakAdminKey } from "./adminSession";
 
 export type ReadinessIssue = {
   key: string;
@@ -31,11 +32,39 @@ export function getReadinessReport(env: ValidatedEnv, operationalIssues: Readine
   if (!env.neonDatabaseUrl) {
     add("critical", "neon", "Database is not configured; admin changes cannot persist.");
   }
-  if (env.adminOpenAccess) {
-    add("critical", "admin_open_access", "Admin open access must never be enabled.");
+  // Admin sign-in is Google only. ADMIN_SESSION_SECRET signs the session cookie and the
+  // customer-file links: a guessable one lets anyone forge admin access, so while it is weak
+  // sign-in is refused outright (adminSession.ts) — this says why nobody can get in.
+  if (isWeakAdminKey(env.adminSessionSecret)) {
+    add(
+      "critical",
+      "admin_session_secret_weak",
+      "ADMIN_SESSION_SECRET тохируулаагүй эсвэл хэт богино байна. Энэ түлхүүр админы нэвтрэлтийн cookie-г баталгаажуулдаг — таамаглах боломжтой бол хэн ч админ эрх хуурамчаар үүсгэж чадна. Vercel дээр 48+ санамсаргүй тэмдэгттэй (Sensitive) утга тавиад redeploy хийнэ үү. Энэ утгыг хүн хэзээ ч гараар бичихгүй.",
+    );
   }
-  if (env.allowAdminSecretQuery) {
-    add("warning", "admin_secret_query", "Admin secret in query strings can leak via logs/history.");
+  // There is no password any more: without Google nobody can open the admin.
+  if (production && !env.googleSignInEnabled) {
+    add(
+      "critical",
+      "admin_google_sign_in_off",
+      "Google-ээр нэвтрэх тохиргоо дутуу (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / ADMIN_GOOGLE_EMAILS). Нууц үгээр нэвтрэх боломжгүй тул одоо хэн ч админд орж чадахгүй.",
+    );
+  }
+  if (env.googleSignInEnabled && env.adminGoogleEmails.length === 1) {
+    add(
+      "warning",
+      "admin_google_single_account",
+      "Зөвхөн 1 Google хаяг нэвтрэх эрхтэй. Тэр хаяг алдагдвал админд хэн ч орж чадахгүй — дор хаяж 2 хаяг (эзэн + ажилтан) нэмнэ үү.",
+    );
+  }
+  // The read-only machine token is optional; when set it must be as strong as the signing key
+  // (and never the same value). A weak one is refused, so scripts get 401 until it is fixed.
+  if (env.adminApiToken && !isUsableAdminApiToken(env.adminApiToken, env.adminSessionSecret)) {
+    add(
+      "critical",
+      "admin_api_token_weak",
+      "ADMIN_API_TOKEN хэт богино эсвэл ADMIN_SESSION_SECRET-тэй ижил байна. 48+ санамсаргүй тэмдэгттэй өөр утга тавина уу; тэр болтол скриптүүд админ мэдээлэл уншиж чадахгүй.",
+    );
   }
   // Only meaningful in production: local dev intentionally leaves the cron
   // endpoint open (see api/cron/reminder.ts), so a missing secret is fine there.

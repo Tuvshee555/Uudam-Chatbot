@@ -4,6 +4,7 @@
    ---------------------------------------------------------------- */
 
 import type { PriceRange } from "./priceRange";
+import type { SavedTripLink } from "./savedTripLinks";
 
 /**
  * "paused" = staff pulled bookings without cancelling the trip (schedule
@@ -52,6 +53,8 @@ export type PriceGroup = {
   infant_age: string;
   passenger_prices: PassengerPrice[];
   note: string;
+  /** Extra for a single room on this departure (it differs by hotel). */
+  single_price?: number | null;
 };
 
 export type DiscountGroup = {
@@ -89,10 +92,11 @@ export type RoomPrice = {
   note: string;
 };
 
+/** true = included, false = at the traveller's own cost, null = the source does not say. */
 export type ItineraryDayMeals = {
-  breakfast?: boolean;
-  lunch?: boolean;
-  dinner?: boolean;
+  breakfast?: boolean | null;
+  lunch?: boolean | null;
+  dinner?: boolean | null;
 };
 
 /**
@@ -108,6 +112,18 @@ export type ItineraryDay = {
   meals?: ItineraryDayMeals;
   /** Shown in the editor; added or changed only in the Poster tab. */
   photo?: string;
+  /** Where and what the meals are, as the source words it (a restaurant, a buffet). */
+  meal_note?: string;
+  /** The calendar day a file writes beside this program day. Review evidence only; never saved. */
+  date?: string;
+};
+
+/** A hotel the trip sells, as the website shows it (name, link, description, photos). */
+export type HotelProfile = {
+  name: string;
+  url: string;
+  description: string;
+  media: Array<{ url: string; caption: string }>;
 };
 
 /** Booking terms a customer asks before committing. Freeform Mongolian strings. */
@@ -248,6 +264,30 @@ export type AIAction = {
   trip_id?: string;
   match?: { operator_name?: string; route_name?: string };
   fields?: Record<string, unknown>;
+  /** set_date_state: the departure day (YYYY-MM-DD) and what it becomes. */
+  date?: string;
+  state?: "open" | "low" | "full";
+  /** What this change would break on the saved trip (src/lib/tripDamage.ts); shown in red, saved only once ticked. */
+  damage?: Array<{ kind: string; text: string }>;
+  acknowledged_damage?: string[];
+};
+
+export type ProposalQuestionOption = {
+  label: string;
+  answer: string;
+  recommended?: boolean;
+  hint?: string;
+};
+
+/** A question the server built with real options (which trip, which day, which amount). */
+export type ProposalQuestion = {
+  id: string;
+  prompt: string;
+  detail?: string;
+  options: ProposalQuestionOption[];
+  allow_custom?: boolean;
+  custom_placeholder?: string;
+  data?: Record<string, unknown>;
 };
 
 export type ConflictSeverity = "info" | "warning" | "blocker";
@@ -256,6 +296,8 @@ export type ConflictItem = {
   text: string;
   severity: ConflictSeverity;
   type?: string;
+  /** Structured facts behind the item (a transport choice's route and current type). */
+  data?: Record<string, unknown>;
 };
 
 export type AIProposal = {
@@ -266,10 +308,22 @@ export type AIProposal = {
   conflict_items?: ConflictItem[];
   actions: AIAction[];
   photo_sources?: Array<{ label: string; urls: string[] }>;
+  questions?: ProposalQuestion[];
+};
+
+/** The assistant needs one answer before it can propose anything: shown as a chat bubble with choices. */
+export type AssistantAsk = {
+  text: string;
+  options: ProposalQuestionOption[];
+  allow_custom?: boolean;
+  custom_placeholder?: string;
 };
 
 export type AIProposalResponse = {
   proposal?: AIProposal;
+  ask?: AssistantAsk;
+  /** Nothing to change (the value is already so): shown as a plain assistant line. */
+  note?: string;
   request_id?: number;
   error?: string;
   message?: string;
@@ -326,6 +380,14 @@ export type ProposalMsg = {
   status: "pending" | "applied" | "reverted" | "cancelled" | "error";
   confirmChecked: boolean;
   resultText?: string;
+  /** True once the admin went through the review: `proposal` is then what must be saved, not the stored first reading. */
+  reviewed?: boolean;
+  /** How a reviewed new trip was saved: a draft stays off the website and out of the bot. */
+  savedAs?: "draft" | "publish";
+  /** The public website page of each trip the save wrote (null for a draft or a hidden trip), from the server. */
+  savedLinks?: SavedTripLink[];
+  /** Why the last save was refused; the proposal stays open so it can be corrected and saved again. */
+  saveError?: string;
   clarifications: ClarificationQuestion[];
   clarificationAnswers: ClarificationAnswer[];
   answeredClarificationIds: string[];
@@ -340,7 +402,19 @@ export type NoteMsg = {
   tone: "info" | "error" | "success";
 };
 
-export type ChatMessage = AdminMsg | ProposalMsg | NoteMsg;
+export type AskMsg = {
+  id: string;
+  role: "assistant";
+  kind: "ask";
+  text: string;
+  options: ProposalQuestionOption[];
+  allowCustom?: boolean;
+  customPlaceholder?: string;
+  /** The option label the admin chose, once answered (the chips then read as history). */
+  answered?: string;
+};
+
+export type ChatMessage = AdminMsg | ProposalMsg | NoteMsg | AskMsg;
 
 export type AttachedFile = {
   id: string;
@@ -362,7 +436,13 @@ export type ParseUploadUnit = {
     filename: string;
     mimeType: string;
     dataUrl: string;
+    /** A photo for the trip's gallery only: uploaded and attached, never read as a document. */
+    photoOnly?: boolean;
+    /** An image read as evidence beside the document (a price table), never a gallery photo. */
+    evidenceOnly?: boolean;
   }>;
+  /** The unit's parts are one trip seen from several sides (a program and its price picture). */
+  sameTrip?: boolean;
 };
 
 export type TabKey =
@@ -381,6 +461,7 @@ export type TabKey =
   | "poster"
   | "documents"
   | "errors"
+  | "catalogue"
   | "json";
 
 export type FlowRule = {
@@ -408,9 +489,6 @@ export type TravelLead = {
   last_activity_at?: string | null;
   /** A consultant reply seen in the Messenger thread after the lead (operator_reply pause). */
   staff_replied_at?: string | null;
-  /** Staff ping for this lead: "sent", "failed", "no_channel" or "" (none yet). */
-  notify_status?: string;
-  notified_at?: string | null;
   /** The consultant who took the lead. */
   assigned_to?: string;
   /** The bot is stopped for this customer, and why ("manual", "operator_reply", "booked_customer", …). */

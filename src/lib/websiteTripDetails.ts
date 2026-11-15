@@ -67,6 +67,49 @@ export function applyWebsiteDetailsPatch(current: unknown, patch: unknown) {
   return { data, conflicts };
 }
 
+const isEmpty = (value: unknown) => value === undefined || value === null
+  || (typeof value === "string" && !value.trim()) || (Array.isArray(value) && value.length === 0);
+
+/**
+ * Website fields the chatbot fills from its own facts (booking terms,
+ * transport, destinations, solo supplement) but that staff can also type on
+ * the website, which never sends them back. The chatbot's value is written
+ * only where it cannot erase a website edit:
+ * - the website field still holds what this projection proposed last time
+ *   (`baseline`), so nobody edited it there; a value the chatbot no longer
+ *   has is then cleared, or
+ * - the website field is empty and the projection never had anything for it
+ *   (no baseline, or an empty one).
+ * Otherwise the website keeps its value — typed, changed or emptied there: a
+ * box staff emptied after the sync filled it stays empty (an empty
+ * cancellation box is how they get the site's default wording). A non-empty
+ * chatbot value it differs from is reported as a conflict (unless the field
+ * is `quiet`), so staff see the bot and the site disagree. `hold` (an edit
+ * still on its way from the website) and `skip` (a field an explicit
+ * website_details_patch sets) are left alone. `cleared` is what an emptied
+ * field is written as.
+ */
+export function fillWebsiteFields(current: Row | null | undefined, baseline: Row, incoming: Row, options?: {
+  hold?: ReadonlySet<string>; skip?: ReadonlySet<string>; quiet?: ReadonlySet<string>; cleared?: Row;
+}) {
+  const data: Row = {}, conflicts: Row[] = [];
+  for (const [key, value] of Object.entries(incoming)) {
+    if (options?.hold?.has(key) || options?.skip?.has(key)) continue;
+    if (!current) { if (!isEmpty(value)) data[key] = value; continue; }
+    const website = current[key];
+    if (sameParityValue(website, value)) continue;
+    const base = key in baseline ? baseline[key] : undefined;
+    const unedited = key in baseline && sameParityValue(website, base);
+    if (unedited || (isEmpty(website) && isEmpty(base))) {
+      if (!isEmpty(value)) data[key] = value;
+      else if (!isEmpty(website)) data[key] = options?.cleared && key in options.cleared ? options.cleared[key] : null;
+      continue;
+    }
+    if (!isEmpty(value) && !options?.quiet?.has(key)) conflicts.push({ field: key, website: website ?? null, chatbot: value, base: base ?? null });
+  }
+  return { data, conflicts };
+}
+
 /** Existing differences stay separate unless the caller has already made the
  * incoming canonical record authoritative (the normal website sync path). */
 /**

@@ -16,8 +16,9 @@ const env = getEnv();
 // Unlike the admin routes, an anonymous caller here is not an auth failure —
 // /api/ping is a public health check that simply returns less. So this uses
 // hasAdminAccess (no 401, no rate-limit counter) rather than
-// requireAdminAccess, but shares the one implementation instead of keeping a
-// second copy of the secret comparison.
+// requireAdminAccess. The full answer (readiness included) opens for a signed-in
+// admin or a GET with the read-only `Authorization: Bearer <ADMIN_API_TOKEN>`,
+// which is how a deploy is checked when nobody can sign in.
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
     route: "api.ping",

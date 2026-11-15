@@ -23,6 +23,7 @@ export const NAV_GROUPS: Array<{
       { key: "seasons", label: "Улирал", icon: <Icons.refresh size={16} /> },
       { key: "photos", label: "Зураг оруулах", icon: <Icons.upload size={16} /> },
       { key: "poster", label: "Постер үүсгэгч", icon: <Icons.image size={16} /> },
+      { key: "catalogue", label: "Аяллын каталог", icon: <Icons.file size={16} /> },
     ],
   },
   {

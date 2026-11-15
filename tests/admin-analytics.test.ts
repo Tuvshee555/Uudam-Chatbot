@@ -3,6 +3,7 @@ import test from "node:test";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { analyticsWindow, collectAdminAnalytics, type AnalyticsQuery, type WebsiteDetailsReader } from "../src/lib/adminAnalytics";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 
 const now = new Date("2098-01-01T17:00:00.000Z");
 const noWebsite: WebsiteDetailsReader = async (trips) => trips;
@@ -86,8 +87,8 @@ function fixtureQuery(fail?: "core" | "activity" | "faq" | "errors" | "overview"
     if (sql.includes("FROM travel_error_logs")) {
       if (fail === "errors") throw new Error("Fixture logs unavailable");
       return { rows: [
-        { event: "staff_alert.no_channel_configured", level: "error", count: "2", last_seen: now },
         { event: "webhook.staff_takeover_detected", level: "warn", count: "4", last_seen: now },
+        { event: "webhook.ai_refer_customer_silenced", level: "warn", count: "2", last_seen: now },
         { event: "openai.request_failed", level: "error", count: "1", last_seen: now },
       ] };
     }
@@ -109,7 +110,7 @@ test("overview aggregates actual schema counts and fills local calendar gaps wit
   assert.deepEqual(result.activity?.daily[0], { date: "2097-12-27", inboundMessages: 0, assistantMessages: 0 });
   assert.equal(result.attention?.pendingHandoffs, 4);
   assert.equal(result.attention?.newBookingRequests, 1);
-  assert.equal(result.attention?.errors24h, 1, "staff replying and the unused alert channel are not failures");
+  assert.equal(result.attention?.errors24h, 1, "staff replying and the bot's deliberate silences are not failures");
   assert.deepEqual(result.attention?.recentIssues.map((issue) => issue.event), ["openai.request_failed"]);
   assert.equal(result.attention?.oldestPendingHandoffAt, "2097-12-28T03:00:00.000Z");
   assert.deepEqual(result.warnings, []);
@@ -150,12 +151,12 @@ function response() {
 }
 
 test("analytics API protects access, rejects invalid periods and reports unavailable data honestly", async (context) => {
-  applyTestEnv({ ADMIN_SECRET: "analytics-fixture-secret", NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/analytics-fixture" });
+  applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/analytics-fixture" });
   const { Pool } = await import("pg");
   let reads = 0;
   context.mock.method(Pool.prototype, "query", async () => { reads++; throw new Error("Fixture DB failure"); });
   const { default: handler } = await import("../src/pages/api/admin/analytics");
-  const request = (days?: unknown, authorized = true, method = "GET") => ({ method, headers: authorized ? { "x-admin-secret": "analytics-fixture-secret" } : {}, query: days === undefined ? {} : { days }, socket: {} }) as NextApiRequest;
+  const request = (days?: unknown, authorized = true, method = "GET") => ({ method, headers: authorized ? adminCookieHeaders() : {}, query: days === undefined ? {} : { days }, socket: {} }) as NextApiRequest;
   const run = async (req: NextApiRequest) => { const res = response(); await handler(req, res as unknown as NextApiResponse); return res; };
   try {
     assert.equal((await run(request(undefined, false))).statusCode, 401);

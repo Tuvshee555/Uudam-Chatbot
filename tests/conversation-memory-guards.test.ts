@@ -70,7 +70,10 @@ test("buildPromptParts relies on recent history instead of duplicating the previ
     previousAssistantReply: "PREVIOUS-REPLY-MARKER",
     userText: "hi",
   });
-  assert.match(withPrev.system, /previous assistant turn/i);
+  // Per-conversation rules live in the "Rules for this conversation" block after the
+  // catalog (prompt caching), so the whole prompt is checked, not one channel.
+  const whole = (parts: { system: string; user: string }) => `${parts.system}\n${parts.user}`;
+  assert.match(whole(withPrev), /previous assistant turn/i);
   assert.doesNotMatch(withPrev.user, /Your previous reply/);
   assert.doesNotMatch(withPrev.user, /PREVIOUS-REPLY-MARKER/);
 
@@ -80,7 +83,7 @@ test("buildPromptParts relies on recent history instead of duplicating the previ
     history: [],
     userText: "hi",
   });
-  assert.doesNotMatch(without.system, /previous assistant turn/i);
+  assert.doesNotMatch(whole(without), /previous assistant turn/i);
   assert.doesNotMatch(without.user, /Your previous reply/);
 });
 

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { aiErrorCode, aiFailureKind, reportAiOutage } from "./aiHealth";
+import { aiErrorCode, aiFailureKind, reportAiOutage, type AiFailureKind } from "./aiHealth";
 import { aiEnvironment, recordAiUsage } from "./aiUsage";
 import { fixMojibake } from "./encoding";
 import { getEnv } from "./env";
@@ -10,7 +10,7 @@ import {
   logWarn,
   recordCounter,
 } from "./observability";
-import { fetchWithRetry } from "./resilience";
+import { fetchWithRetry, UpstreamHttpError } from "./resilience";
 import type { OpenAIPart, OpenAIResult } from "./openaiProvider";
 
 const OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions";
@@ -22,6 +22,13 @@ const env = getEnv();
  * The historical type names come from the old provider wrapper, but this
  * function intentionally calls OpenAI only.
  */
+let promptCacheRefused = false;
+/** "24h" unless switched off (OPENAI_PROMPT_CACHE_RETENTION=off) or refused by the provider in this process. */
+function promptCacheRetention(): string | null {
+  const configured = (process.env.OPENAI_PROMPT_CACHE_RETENTION || "24h").trim().toLowerCase();
+  return promptCacheRefused || configured === "off" || configured === "none" ? null : configured;
+}
+
 export async function askOpenAIChatParts(
   parts: OpenAIPart[],
   options?: {
@@ -36,10 +43,21 @@ export async function askOpenAIChatParts(
     model?: string;
     /** Rules/persona sent as an OpenAI system message. */
     systemText?: string;
+    /** OpenAI image detail for every image part; "low" costs about a third (judging small previews). */
+    imageDetail?: "low" | "high" | "auto";
     /** Internal recursion guard for the lower-cost alternate model. */
     alternateModelAttempted?: boolean;
+    /** Internal: the provider refused the prompt-cache parameters once; this retry goes without them. */
+    withoutPromptCache?: boolean;
     /** A reply cut off by maxOutputTokens is intended (a one-token liveness probe), not a failure. */
     truncationExpected?: boolean;
+    /** Attempts beyond the first for retryable failures; the env default when omitted. */
+    maxRetries?: number;
+    /**
+     * Told why the call failed (billing, key, rate limit, provider) when it returns null, so a
+     * caller that turns null into an error can say the real cause instead of "request failed".
+     */
+    onFailure?: (failure: { kind: AiFailureKind; code?: string; message: string }) => void;
   },
 ): Promise<OpenAIResult | null> {
   const key = env.openaiApiKey;
@@ -65,6 +83,7 @@ export async function askOpenAIChatParts(
         type: "image_url",
         image_url: {
           url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+          ...(options?.imageDetail ? { detail: options.imageDetail } : {}),
         },
       };
     }
@@ -89,6 +108,15 @@ export async function askOpenAIChatParts(
   if (typeof options?.maxOutputTokens === "number") {
     requestBody.max_completion_tokens = Math.trunc(options.maxOutputTokens);
   }
+  // Cost (2026-11-12): every call re-sends the same rules and catalogue. Cached input is billed at a
+  // quarter of the price, but the default cache lives only minutes and the bot's messages arrive
+  // further apart (34-52% of input was cached). 24 h retention keeps the shared prefix cached all day;
+  // the key routes calls of one kind to the same cache. Changes nothing in what the model reads or writes.
+  const retention = options?.withoutPromptCache ? null : promptCacheRetention();
+  if (retention) {
+    requestBody.prompt_cache_retention = retention;
+    requestBody.prompt_cache_key = ("uudam:" + source.split(".").slice(0, 2).join(".") + ":" + model).slice(0, 64);
+  }
 
   try {
     const { response } = await fetchWithRetry(
@@ -104,7 +132,7 @@ export async function askOpenAIChatParts(
       {
         upstream: "openai.chat",
         timeoutMs: options?.timeoutMs ?? env.openaiTimeoutMs,
-        maxRetries: env.openaiMaxRetries,
+        maxRetries: options?.maxRetries ?? env.openaiMaxRetries,
         retryBaseDelayMs: env.openaiRetryBaseDelayMs,
         // gpt-4o's 30k tokens/min fits two ~15k-token reply prompts. A 429 there
         // goes straight to gpt-4o-mini (its own, larger limit) below instead of
@@ -164,6 +192,13 @@ export async function askOpenAIChatParts(
       },
     };
   } catch (error) {
+    // A 400 on a request that carried the cache parameters: the provider may have stopped accepting
+    // them. Say so once and repeat the call without them (a 400 for any other reason fails again at once).
+    if (retention && error instanceof UpstreamHttpError && error.status === 400) {
+      if (/prompt_cache/i.test(error.bodySnippet || "")) promptCacheRefused = true;
+      logWarn("openai.prompt_cache_retry_without", { source, model, refused: promptCacheRefused });
+      return askOpenAIChatParts(parts, { ...options, withoutPromptCache: true });
+    }
     const classification = classifyError(error);
     const failureKind = aiFailureKind(error);
     recordCounter("openai.fallback_failures_total", 1, {
@@ -199,6 +234,11 @@ export async function askOpenAIChatParts(
       message: error instanceof Error ? error.message : String(error),
     });
     void reportAiOutage(failureKind);
+    options?.onFailure?.({
+      kind: failureKind,
+      code: aiErrorCode(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }

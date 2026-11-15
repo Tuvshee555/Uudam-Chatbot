@@ -6,28 +6,20 @@ import type { ReadinessIssue } from "./readiness";
 // importable without a validated server env.
 const queryNeon: typeof QueryNeon = async (...args) => (await import("./neonDb")).queryNeon(...args);
 
-/** `cached_tokens`: the part of `prompt_tokens` the provider served from its prompt cache. */
+/** `cached_tokens`: the part of prompt_tokens OpenAI served from its prompt cache. */
 export type AiUsage = { prompt_tokens: number; completion_tokens: number; total_tokens?: number; cached_tokens?: number };
 
 /**
- * Share of the input price charged for a cached input token (OpenAI automatic prompt caching):
- * gpt-4o family 50%, gpt-4.1 family 25%. Unknown models are charged in full.
+ * Estimated USD per million tokens [input, output, cached input]. An estimate for spend
+ * tracking and alerts, not billing: check the provider's pricing page when it changes.
+ * Unknown models are counted in tokens with no cost.
  */
-const CACHED_INPUT_SHARE: Record<string, number> = {
-  "gpt-4o": 0.5, "gpt-4o-mini": 0.5, "gpt-4.1": 0.25, "gpt-4.1-mini": 0.25, "gpt-4.1-nano": 0.25,
-};
-
-/**
- * Estimated USD per million tokens [input, output]. An estimate for spend tracking and alerts,
- * not billing: check the provider's pricing page when it changes. Unknown models are counted
- * in tokens with no cost.
- */
-const PRICE_PER_MILLION_USD: Record<string, [number, number]> = {
-  "gpt-4o": [2.5, 10],
-  "gpt-4o-mini": [0.15, 0.6],
-  "gpt-4.1": [2, 8],
-  "gpt-4.1-mini": [0.4, 1.6],
-  "gpt-4.1-nano": [0.1, 0.4],
+const PRICE_PER_MILLION_USD: Record<string, [number, number, number]> = {
+  "gpt-4o": [2.5, 10, 1.25],
+  "gpt-4o-mini": [0.15, 0.6, 0.075],
+  "gpt-4.1": [2, 8, 0.5],
+  "gpt-4.1-mini": [0.4, 1.6, 0.1],
+  "gpt-4.1-nano": [0.1, 0.4, 0.025],
 };
 
 export function estimateCostUsd(model: string, usage: AiUsage): number | null {
@@ -35,8 +27,7 @@ export function estimateCostUsd(model: string, usage: AiUsage): number | null {
   const price = PRICE_PER_MILLION_USD[model] ?? PRICE_PER_MILLION_USD[base];
   if (!price) return null;
   const cached = Math.min(Math.max(usage.cached_tokens ?? 0, 0), usage.prompt_tokens);
-  const share = CACHED_INPUT_SHARE[model] ?? CACHED_INPUT_SHARE[base] ?? 1;
-  return ((usage.prompt_tokens - cached + cached * share) * price[0] + usage.completion_tokens * price[1]) / 1_000_000;
+  return ((usage.prompt_tokens - cached) * price[0] + cached * price[2] + usage.completion_tokens * price[1]) / 1_000_000;
 }
 
 /**
@@ -70,15 +61,16 @@ export function recordAiUsage(input: { model: string; source: string; usage: AiU
   recordCounter("openai.usage_tokens_total", input.usage.prompt_tokens + input.usage.completion_tokens, { model: input.model, environment });
   if (environment === "test") return;
   void queryNeon(
-    `INSERT INTO travel_ai_usage (day, environment, model, source, calls, prompt_tokens, completion_tokens, est_cost_usd)
-     VALUES ((NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date, $1, $2, $3, 1, $4, $5, $6)
+    `INSERT INTO travel_ai_usage (day, environment, model, source, calls, prompt_tokens, completion_tokens, est_cost_usd, cached_tokens)
+     VALUES ((NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date, $1, $2, $3, 1, $4, $5, $6, $7)
      ON CONFLICT (day, environment, model, source) DO UPDATE SET
        calls = travel_ai_usage.calls + 1,
        prompt_tokens = travel_ai_usage.prompt_tokens + EXCLUDED.prompt_tokens,
        completion_tokens = travel_ai_usage.completion_tokens + EXCLUDED.completion_tokens,
        est_cost_usd = travel_ai_usage.est_cost_usd + EXCLUDED.est_cost_usd,
+       cached_tokens = travel_ai_usage.cached_tokens + EXCLUDED.cached_tokens,
        updated_at = NOW()`,
-    [environment, input.model, input.source.slice(0, 80), input.usage.prompt_tokens, input.usage.completion_tokens, costUsd],
+    [environment, input.model, input.source.slice(0, 80), input.usage.prompt_tokens, input.usage.completion_tokens, costUsd, input.usage.cached_tokens ?? 0],
   ).catch((error) => logError("ai_usage.record_failed", { message: error instanceof Error ? error.message : String(error) }));
 }
 
@@ -94,6 +86,38 @@ export async function getAiUsageSummary(days = 30): Promise<AiUsageRow[]> {
     [Math.min(Math.max(Math.trunc(days), 1), 90)],
   );
   return result?.rows ?? [];
+}
+
+export type AiBudgetState = { exceeded: boolean; spentUsd: number; budgetUsd: number; environment: string };
+
+/**
+ * Today's estimated spend of THIS environment against AI_DAILY_BUDGET_USD (default 20). The
+ * admin assistant and the file parser stop calling the model once it is reached (the
+ * deterministic edits keep working); a failed check never blocks anything.
+ */
+export async function aiBudgetState(budgetUsd = Number(process.env.AI_DAILY_BUDGET_USD || 20)): Promise<AiBudgetState> {
+  const environment = aiEnvironment();
+  const state: AiBudgetState = { exceeded: false, spentUsd: 0, budgetUsd, environment };
+  if (!Number.isFinite(budgetUsd) || budgetUsd <= 0 || environment === "test") return state;
+  try {
+    const spent = (await queryNeon<{ cost: number | null }>(
+      `SELECT SUM(est_cost_usd)::float AS cost FROM travel_ai_usage
+        WHERE environment = $1 AND day = (NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date`,
+      [environment],
+    ))?.rows[0]?.cost ?? 0;
+    state.spentUsd = Number(spent) || 0;
+    state.exceeded = state.spentUsd >= budgetUsd;
+    if (state.exceeded) logWarn("ai_usage.daily_budget_stop", { costUsd: state.spentUsd, budgetUsd, environment });
+  } catch (error) {
+    logError("ai_usage.budget_check_failed", { message: error instanceof Error ? error.message : String(error) });
+  }
+  return state;
+}
+
+/** What the admin reads when the model is not called because of the budget. */
+export function aiBudgetMessage(state: AiBudgetState): string {
+  return `Өнөөдрийн AI зардал ойролцоогоор $${state.spentUsd.toFixed(2)} — өдрийн хязгаар $${state.budgetUsd}-д хүрсэн тул AI-д дамжуулахгүй. `
+    + "Энгийн заавар (огноо дүүрсэн, үнэ, цуцлах, архивлах) код дээр ажиллана. Маргааш (Улаанбаатарын цагаар) үргэлжилнэ, эсвэл AI_DAILY_BUDGET_USD-г өсгөнө үү.";
 }
 
 /** Today's estimated production spend against AI_DAILY_BUDGET_USD (default 20): an admin warning when over. */

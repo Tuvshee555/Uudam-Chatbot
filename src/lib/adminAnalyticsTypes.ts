@@ -41,6 +41,8 @@ export type OverviewData = {
   coverage: { topic: CoverageTopic; trips: number; asked: number }[];
   activeTrips: number;
   aiOutages24h: number; lastAiOutageAt: string | null;
+  /** True once a production model call succeeded after the last outage. */
+  aiRecovered?: boolean;
   tripDemand: { trip: string; customers: number }[];
 };
 export type AnalyticsResponse = {
@@ -51,9 +53,6 @@ export type AnalyticsResponse = {
 };
 
 export const ADMIN_ISSUE_LABELS: Record<string, string> = {
-  "staff_alert.no_channel_configured": "Ажилтанд мэдэгдэх суваг тохируулаагүй",
-  "staff_alert.all_channels_failed": "Ажилтанд мэдэгдэл хүрсэнгүй",
-  "staff_alert.failed": "Ажилтны мэдэгдэл амжилтгүй",
   "webhook.ai_no_data_customer_silenced": "Баталгаагүй хариуг зогсоосон",
   "webhook.ai_incomplete_completion": "AI хариу дутуу ирсэн",
   "openai.incomplete_completion": "AI хариу дутуу ирсэн",

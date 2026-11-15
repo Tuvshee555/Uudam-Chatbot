@@ -4,6 +4,8 @@ import { normText } from "./travelTextNorm";
 import { queryNamedPlaces, resolveTripFromUserMessage, tripMentionsAllPlaces } from "./travelFastPathsSearch";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
+import { detectContrastCue } from "./tripContrast";
+import { verdictAgainstAnchor } from "./tripIdentity";
 
 export type GroundingContext = {
   /** The customer's message this turn. */
@@ -14,6 +16,16 @@ export type GroundingContext = {
   pendingTripIds?: string[];
   /** The trip the customer is on (picked earlier, or opened from an ad / the website). */
   selectionTripId?: string | null;
+  /**
+   * The trips the customer was on before the selected one (tripSelectionState.ts). They count as
+   * evidence only for a message that points BACK at one ("not that one, the other one").
+   */
+  recentTripIds?: string[];
+  /**
+   * Trips the customer ruled out this turn ("<нэр> биш", "<нэр> хэрэггүй", negatedTrip.ts). Ruling one out
+   * points away from it as "not that one" does, so the earlier trips count as evidence the same way.
+   */
+  ruledOutTripIds?: string[];
   /** Legacy caller field. A router's newly selected IDs cannot authorize themselves. */
   routedTripIds?: string[];
   /** Explicit alternatives produced by a deterministic catalog/clarification builder. */
@@ -40,7 +52,8 @@ export function tripsNamedIn(text: string, trips: TravelTrip[]): TravelTrip[] {
 function tripsFromWords(text: string, trips: TravelTrip[]): TravelTrip[] {
   if (!text.trim()) return [];
   const website = websiteTripLinksInText(text);
-  const resolution = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
+  // A fully booked trip the customer names is still the trip their words point to.
+  const resolution = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false, includeSoldOut: true });
   const resolved = resolution.status === "verified" && resolution.trip ? [resolution.trip]
     : resolution.status === "ambiguous" ? resolution.candidates : [];
   if (website.slugs.length > 0) return resolved;
@@ -79,13 +92,21 @@ export function groundedTripIds(context: GroundingContext): Set<string> {
     // selection. An unknown page gives no permission to answer about an old trip.
     return new Set(current);
   }
-  if (current.length) return new Set([...current, ...catalog]);
+  if (current.length) {
+    // "<town>-оос нисэх юм уу" on a land trip that visits that town: the words also fit a sibling's
+    // title, but they do not leave the trip the customer is on (tripIdentity.ts), so it stays grounded.
+    const selected = context.selectionTripId ? context.trips.find((trip) => trip.id === context.selectionTripId) : undefined;
+    const stays = Boolean(selected && !current.includes(selected.id) && verdictAgainstAnchor(context.customerText,
+      context.trips.filter((trip) => current.includes(trip.id)), [selected!], context.trips).kind === "stay");
+    return new Set([...current, ...(stays ? [selected!.id] : []), ...catalog]);
+  }
   if (tripMenuQuestionIndex(context.customerText) !== null) {
     const trip = tripFromRecentMenu(context.customerText, context.history, context.trips);
     return new Set(trip ? [trip.id] : []);
   }
-  if (context.pendingTripIds?.length) return new Set([...context.pendingTripIds, ...catalog]);
-  if (context.selectionTripId) return new Set([context.selectionTripId, ...catalog]);
+  const back = detectContrastCue(context.customerText) || context.ruledOutTripIds?.length ? context.recentTripIds || [] : [];
+  if (context.pendingTripIds?.length) return new Set([...context.pendingTripIds, ...back, ...catalog]);
+  if (context.selectionTripId) return new Set([context.selectionTripId, ...back, ...catalog]);
   const recent = context.history.slice(-RECENT_TURNS).reverse();
   for (const role of ["user", "assistant"] as const) {
     for (const message of recent) {

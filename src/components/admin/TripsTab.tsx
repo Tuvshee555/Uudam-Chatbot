@@ -7,6 +7,7 @@ import { STATUS_TONE, formatTime } from "@/lib/adminUtils";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, findTripGaps, tripCompletenessInput, type TripGap } from "@/lib/tripCompleteness";
 import { WebsiteSyncStatus } from "./WebsiteSyncStatus";
+import { RecentlyOffSiteBanner } from "./RecentlyOffSiteBanner";
 import { publishedTripWebsiteLink } from "@/lib/bookingWebsite";
 
 /** Typed to confirm a bulk archive, so it cannot happen from one stray click. */
@@ -293,6 +294,7 @@ export function TripsTab({
           toast.error("Аяллын мэдээллийг нээж чадсангүй. Дахин ачаалаад оролдоорой.");
         }
       }} />
+      <RecentlyOffSiteBanner trips={trips} onEdit={onEdit} />
       <IncompleteTripsBanner trips={trips} onEdit={onEdit} onFixPhotosOnPoster={onFixPhotosOnPoster} />
       <Card className="p-3.5">
         <div className="flex flex-col gap-2">
@@ -547,6 +549,9 @@ function archivedReasonHint(trip: TravelTrip): string | null {
   }
   if (reason === "all_departure_dates_passed") {
     return "Бүх гарах өдөр өнгөрсөн тул автоматаар архивлагдсан — шинэ огноо нэмбэл дахин идэвхжинэ.";
+  }
+  if (reason === "request_window_passed") {
+    return "Захиалга авах эцсийн өдөр өнгөрсөн тул автоматаар архивлагдсан — шинэ огноо, хугацаа оруулж идэвхжүүлнэ.";
   }
   return null;
 }

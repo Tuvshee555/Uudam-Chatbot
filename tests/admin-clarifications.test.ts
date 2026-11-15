@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 
 type TestResponse = NextApiResponse & {
   statusCode: number;
@@ -41,7 +42,7 @@ function createAdminJsonRequest(
     method: "POST",
     url: path,
     headers: {
-      "x-admin-secret": "test-admin-secret",
+      ...adminCookieHeaders(),
       "x-forwarded-for": ip,
     },
     query: {},

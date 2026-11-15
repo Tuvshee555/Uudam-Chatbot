@@ -18,12 +18,14 @@ import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
+import { buildScopedNotScheduledReply } from "../../lib/dateNotScheduled";
 import { hasUnsupportedOriginRequest, routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { soldOutNamedReply } from "../../lib/soldOutNamed";
 import { decideTripAnswer } from "../../lib/tripAnswerDecision";
-import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
+import { getRecentTripIds, getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
 import { recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
@@ -32,16 +34,18 @@ import type { TravelTrip } from "../../lib/travelTypes";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
+import { withoutHiddenTrips } from "../../lib/travelFastPathsSearch";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceOrBudgetReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
 import { CONTACT_OPERATOR_LABEL, isContactOperatorTap, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
+import { planReplyQuestion } from "../../lib/replyQuestion";
 import { getEnv } from "../../lib/env";
 import { replyModel } from "../../lib/modelConfig";
 import {
@@ -243,8 +247,8 @@ export default async function handler(
         return sendJson(body);
       };
       const history = await getHistory(sessionId);
-      const [groundingSelection, groundingClarification] = await Promise.all([
-        getTripSelection(sessionId), getClarificationState(sessionId),
+      const [groundingSelection, groundingClarification, groundingRecent] = await Promise.all([
+        getTripSelection(sessionId), getClarificationState(sessionId), getRecentTripIds(sessionId),
       ]);
       const detectedPhone = extractPhoneNumber(normalizedText);
       const phoneCollected =
@@ -387,7 +391,8 @@ export default async function handler(
       let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
       const getTrips = async () => {
         if (cachedTrips) return cachedTrips;
-        cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+        // The same customer list as the webhook: a trip staff hid is never offered (2026-11-06).
+        cachedTrips = withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
         return cachedTrips;
       };
       // Only fetched on the miss path (nothing in the active catalogue
@@ -395,7 +400,7 @@ export default async function handler(
       let cachedArchivedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
       const getArchivedTrips = async () => {
         if (cachedArchivedTrips) return cachedArchivedTrips;
-        cachedArchivedTrips = await listTrips({ status: "archived", limit: 500 });
+        cachedArchivedTrips = withoutHiddenTrips(await listTrips({ status: "archived", limit: 500 }));
         return cachedArchivedTrips;
       };
       let routedCache: FastPathRoute | null = null;
@@ -408,8 +413,8 @@ export default async function handler(
           history,
           trips: await getTrips(),
           understand: tripUnderstandingEnabled()
-            ? async (pendingTripIds, selection) =>
-                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, ask: understandingModel(trace) })
+            ? async (pendingTripIds, selection, recentTripIds) =>
+                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, recentTripIds, ask: understandingModel(trace) })
             : undefined,
         });
         currentSelection = routedCache.selection || null;
@@ -494,15 +499,39 @@ export default async function handler(
           await appendMessage(sessionId, "user", normalizedText);
           return returnHandoff();
         }
+        // Mirrors the webhook: "that date doesn't suit me" gets the nearest other departures (dateRejection.ts).
+        if (route.dateAlternatives?.reply === "REFER") {
+          await appendMessage(sessionId, "user", normalizedText);
+          return returnHandoff();
+        }
+        if (route.dateAlternatives) {
+          const safeReply = sanitizeAssistantReply(route.dateAlternatives.reply);
+          factualScope = tripsNamedIn(safeReply, await getTrips());
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+        // Mirrors the webhook: a trip the customer named that is sold out or paused is announced
+        // as such before an answer plan prices it or a list of its siblings stands in for it.
+        const soldOutNamed = soldOutNamedReply({ routed: route, text: normalizedText, trips: await getTrips() });
+        if (soldOutNamed) {
+          const safeReply = appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(soldOutNamed)), phoneAlreadyRequested);
+          factualScope = tripsNamedIn(safeReply, await getTrips());
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
         const plan = await buildTripAnswerRuntime({ text: normalizedText, trips: await getTrips(), route });
         if (plan) {
           const decision = decideTripAnswer(plan, { userText: normalizedText,
             hasPriorReply: history.some((message) => message.role === "assistant"), phoneAlreadyRequested });
-          const reply = decision.reply;
+          let reply = decision.reply;
           // A short answer may omit the trip name; validate its hidden identity
           // against customer evidence captured before the router selected it.
           const allowed = groundedTripIds({ customerText: normalizedText, history,
-            selectionTripId: groundingSelection?.tripId,
+            selectionTripId: groundingSelection?.tripId, recentTripIds: groundingRecent,
             pendingTripIds: groundingClarification?.candidateTripIds,
             trips: await getTrips() });
           currentSelection = plan.selection;
@@ -510,6 +539,9 @@ export default async function handler(
           recordCounter("demo.answer_plan_total", 1, { status: decision.outcome });
           if (decision.outcome === "handoff" || !allowed.has(plan.tripId)) return returnHandoff();
           await setTripSelection(sessionId, plan.selection);
+          // The same next question Messenger adds to an answer that asks nothing (replyQuestion.ts); never followed up here.
+          reply = (await planReplyQuestion({ senderId: sessionId, platform: "website", failTag: "answer_plan", reply, decisionOutcome: decision.outcome,
+            customerText: normalizedText, history, trips: getTrips, isExistingCustomer: async () => false })).reply;
           const media = buildDemoMedia({ reply, userText: normalizedText, trips: factualScope || [], explicitMediaUrls: plan.mediaUrls, brochureUrl: plan.brochureUrl });
           await appendConversationMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
           await rememberTurn();
@@ -606,6 +638,8 @@ export default async function handler(
             await setClarificationState(sessionId, listing!.listed.map((trip) => trip.id));
           }
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply || listing!.reply));
+          // A place no trip goes to is silence plus a staff lead here too (the webhook's rule).
+          if (listingApplies && isReferReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
@@ -625,6 +659,7 @@ export default async function handler(
           const archivedNotice = buildArchivedTripNotice(
             fastPathText,
             await getArchivedTrips(),
+            await getTrips(),
           );
           if (archivedNotice) {
             const safeReply = appendLeadCaptureCta(
@@ -694,7 +729,10 @@ export default async function handler(
       if (wantsDateAvailability) {
         const trips = await getTrips();
         const routed = await getRouted();
-        const dateReply = routed.unavailableDateWithinScope ? "REFER"
+        // Mirrors the webhook: a date none of the trips in scope departs on is answered with the real departures
+        // nearest to it (dateAlternatives.ts); only when there are none is it a hand-off.
+        const dateReply = routed.unavailableDateWithinScope
+          ? (routed.scopedClarify?.length ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText, new Date(), trips) : null) ?? "REFER"
           : buildDateQuestionReply(intentText, await getFastPathText(), routed.scopedClarify || trips);
         if (dateReply) {
           // Mirror the webhook: a booking-intent date question gets nudged for
@@ -707,7 +745,7 @@ export default async function handler(
             enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(`${dateReply}${bookingNudge}`))),
             phoneAlreadyRequested,
           );
-          factualScope = tripsNamedIn(safeReply, routed.scopedClarify || trips);
+          factualScope = tripsNamedIn(safeReply, routed.unavailableDateWithinScope ? trips : routed.scopedClarify || trips);
           await appendMessage(sessionId, "user", normalizedText);
           if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
@@ -805,7 +843,7 @@ export default async function handler(
       // A message that is only a price pasted from an advert: same as the webhook.
       if (isBarePriceMessage(normalizedText)) {
         const trips = await getTrips();
-        const barePriceReply = buildBarePriceReply(normalizedText, trips);
+        const barePriceReply = buildBarePriceOrBudgetReply(normalizedText, trips);
         if (barePriceReply) {
           const safeReply = appendLeadCaptureCta(
             enforceWebsiteForPayment(sanitizeAssistantReply(barePriceReply)),
@@ -902,6 +940,7 @@ export default async function handler(
         const archivedNotice = buildArchivedTripNotice(
           programFastPathText,
           await getArchivedTrips(),
+          await getTrips(),
         );
         if (archivedNotice) {
           const safeReply = appendLeadCaptureCta(

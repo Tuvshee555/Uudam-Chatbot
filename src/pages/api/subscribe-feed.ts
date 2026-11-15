@@ -1,14 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getClientKey, rateLimitAsync } from "../../lib/rateLimit";
+import { getClientKey } from "../../lib/rateLimit";
 import { getEnv } from "../../lib/env";
-import { pickFirst, safeSecretCompare } from "../../lib/adminAuth";
+import { requireAdminAccess } from "../../lib/adminAccess";
 import {
   beginRequestTrace,
   classifyError,
   finishRequestTrace,
   hashIdentifier,
   logError,
-  recordCounter,
 } from "../../lib/observability";
 import { GRAPH_API_BASE } from "../../lib/metaGraph";
 
@@ -26,27 +25,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const clientKey = getClientKey(req);
 
   try {
-    const headerSecret = pickFirst(req.headers["x-admin-secret"]);
-    const querySecret = env.allowAdminSecretQuery ? pickFirst(req.query.secret) : "";
-    const providedSecret = headerSecret || querySecret;
-
-    if (!safeSecretCompare(env.adminSecret, providedSecret)) {
-      const limit = await rateLimitAsync(
-        `admin-auth:${clientKey}`,
-        env.adminAuthRateLimit,
-        60 * 1000,
-      );
-      if (!limit.allowed) {
-        recordCounter("abuse.admin_auth_blocked_total", 1, {
-          route: "api.subscribe_feed",
-        });
-        return res.status(429).json({ error: "too_many_attempts", reset: limit.reset });
-      }
-      recordCounter("abuse.admin_auth_failed_total", 1, {
-        route: "api.subscribe_feed",
-      });
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+    // A signed-in admin only (Google session). Never the read-only ADMIN_API_TOKEN: even a
+    // GET here re-subscribes the pages at Meta.
+    if (!(await requireAdminAccess(req, res, "api.subscribe_feed", { allowApiToken: false }))) return;
 
     // "message_echoes" (not "messaging_echoes", which Meta rejects and which
     // failed the whole request) is what tells the bot a staff member replied

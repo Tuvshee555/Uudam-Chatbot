@@ -1,15 +1,12 @@
 ﻿import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Icons, Logo, Modal, useToast } from "@/components/ui";
-import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
-import { buildProposalClarifications } from "@/lib/adminProposalUtils";
+import { Alert, Badge, Button, Icons, Logo, cx, useToast } from "@/components/ui";
+import { useAssistantChat } from "@/components/admin/useAssistantChat";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
-import { AdminLoginGate } from "@/components/admin/AdminLoginGate";
+import { NewVersionBanner } from "@/components/admin/NewVersionBanner";
+import { AdminLoginGate, GOOGLE_LOGIN_ERRORS } from "@/components/admin/AdminLoginGate";
 import { AdminNavigation } from "@/components/admin/AdminNavigation";
 import { NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
-import { websiteDetailsPatch } from "@/lib/websiteTripDetails";
-import { sameParityValue } from "@/lib/tripWebsiteParityValue";
-import { isTripListProjection } from "@/lib/tripListProjection";
 import { AssistantTab } from "@/components/admin/AssistantTab";
 import { AnalyticsTab } from "@/components/admin/AnalyticsTab";
 import { BotTab } from "@/components/admin/BotTab";
@@ -24,20 +21,15 @@ import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
 import { TripCalendarTab } from "@/components/admin/TripCalendarTab";
 import { TripEditModal } from "@/components/admin/TripEditModal";
+import { useTripEditor } from "@/components/admin/tripEditor/useTripEditor";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
+import { CatalogueTab } from "@/components/admin/CatalogueTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
-import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ClarificationAnswer, ClarificationQuestion, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
-import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
-import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
-import { documentedFreeFare } from "@/lib/tripCompleteness";
-import { resolveAgeRules } from "@/lib/ageRules";
+import type { ControlState, DriveSyncDiagnostics, LeadCrmStatus, LeadStats, PageControlState, PauseRow, ReadinessReport, RecentRow, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import type { LeadAttentionSummary } from "@/lib/leadAttention";
 import { changedSettingsFields } from "@/lib/adminPageUtils";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
-const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
-const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, SECRET_KEY, SECRET_TS_KEY, getSecretStorage, isEditableElement, settingsToForm } from "@/lib/adminPageUtils";
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
 const SYSTEM_CHECK_INTERVAL_MS = 5 * 60_000;
 /** Matches the leads API page (LEAD_PAGE_SIZE in /api/admin/leads). */
@@ -55,9 +47,8 @@ export default function AdminPage() {
   // knows whether it is signed in. Nothing loads until it is.
   const [authState, setAuthState] = useState<"checking" | "signed_in" | "signed_out">("checking");
   const authRef = useRef(authState);
-  const [secretDraft, setSecretDraft] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
+  const [googleSignIn, setGoogleSignIn] = useState(false);
   const [dbInfo, setDbInfo] = useState<{
     configured: boolean;
     schemaReady: boolean;
@@ -88,52 +79,10 @@ export default function AdminPage() {
   const [settings, setSettings] = useState<TravelBotSettings | null>(null);
   const [settingsForm, setSettingsForm] = useState<SettingsForm | null>(null);
   const settingsBaselineRef = useRef<TravelBotSettings | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    {
-      id: "intro",
-      role: "assistant",
-      kind: "note",
-      tone: "info",
-      text:
-        "Сайн байна уу! Аяллын мэдээллээ энд шуурхай өөрчилнө. Бичгээр зааварчилж болно (ж: «<Аяллын нэр> аяллыг цуцал»), эсвэл прайс жагсаалт (Excel, PDF, зураг) хавсаргаарай. Би уншаад өөрчлөлтийг санал болгоно — та зөвшөөрвөл шууд хадгална.",
-    },
-  ]);
-  const [aiInput, setAiInput] = useState("");
-  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [aiBusyLabel, setAiBusyLabel] = useState("");
-  const [aiBusyProgress, setAiBusyProgress] = useState<number | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
-  const [editingTrip, setEditingTrip] = useState<TravelTrip | null>(null);
-  const [openingTripId, setOpeningTripId] = useState("");
-  const [isNewTrip, setIsNewTrip] = useState(false);
-  const [tripDraft, setTripDraft] = useState<Record<string, string>>(
-    BLANK_TRIP_DRAFT,
-  );
-  const [tripPhotoUrls, setTripPhotoUrls] = useState<string[]>([]);
-  const [tripPhotoInput, setTripPhotoInput] = useState("");
-  const [photoDragging, setPhotoDragging] = useState(false);
-  const [photoUploading, setPhotoUploading] = useState<string[]>([]); // track uploading file names
-  const [tripAliases, setTripAliases] = useState<string[]>([]);
-  const [tripPriceGroups, setTripPriceGroups] = useState<PriceGroup[]>([]);
-  const [tripDiscounts, setTripDiscounts] = useState<DiscountGroup[]>([]);
-  const [tripExtraFees, setTripExtraFees] = useState<ExtraFee[]>([]);
-  const [tripDepartureRule, setTripDepartureRule] = useState("");
-  const [tripIncludedItems, setTripIncludedItems] = useState<string[]>([]);
-  const [tripExcludedItems, setTripExcludedItems] = useState<string[]>([]);
-  const [tripRoomPrices, setTripRoomPrices] = useState<RoomPrice[]>([]);
-  const [tripItineraryDays, setTripItineraryDays] = useState<ItineraryDay[]>([]);
-  const [tripImportantNotes, setTripImportantNotes] = useState<string[]>([]);
-  const [tripBookingTerms, setTripBookingTerms] = useState<BookingTerms>(emptyBookingTerms());
-  const [tripCustomerVisible, setTripCustomerVisible] = useState<boolean>(true);
-  const [tripNeedsHumanReview, setTripNeedsHumanReview] = useState<boolean>(false);
-  const [tripReviewReasons, setTripReviewReasons] = useState<string[]>([]);
-  const [tripSourceProvenance, setTripSourceProvenance] = useState<import("@/lib/adminTypes").SourceProvenance[]>([]);
-  const [tripAnswerHints, setTripAnswerHints] = useState<import("@/lib/adminTypes").AnswerHint[]>([]);
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [photoReplaceConfirm, setPhotoReplaceConfirm] = useState<{ files: File[] } | null>(null);
   const [leads, setLeads] = useState<TravelLead[]>([]);
   const leadsRef = useRef<TravelLead[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
@@ -149,11 +98,6 @@ export default function AdminPage() {
   const [broadcastSending, setBroadcastSending] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<{ sent: number; failed: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // One id per page load: the server keeps this admin's assistant conversation (never shown here) and reads follow-ups against it.
-  const assistantSession = useRef(uid());
-  const photoFileInputRef = useRef<HTMLInputElement>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef(search);
   const tripLoadRevision = useRef(0);
   const statusFilterRef = useRef(statusFilter);
@@ -236,6 +180,12 @@ export default function AdminPage() {
     },
     [fetchWithAdmin, markAdminLocked, toast],
   );
+  // The trip editor: its state and open / save / photo-upload handlers (tripEditor/useTripEditor.tsx).
+  const tripEditor = useTripEditor({
+    apiFetch: fetchWithAdmin, readJsonSafe, onLocked: markAdminLocked, trips, setBusyKey,
+    onSaved: () => loadTrips(searchRef.current, statusFilterRef.current, { showLoading: true }),
+  });
+  const { editingTrip, isNewTrip, openingTripId, beginCreateTrip, beginEditTrip, openTripEditorForDraft, closeTripModal } = tripEditor;
   /** Every trip, unfiltered and unpaginated — for the full-catalogue export.
    *  Deliberately ignores search/status so the downloaded file is the whole
    *  catalogue regardless of what the screen is filtered to. */
@@ -406,6 +356,10 @@ export default function AdminPage() {
     markAdminLocked,
     toast,
   ]);
+  // The AI туслах conversation: send / answer / save / undo, files and photos, the thread kept
+  // across a reload (components/admin/useAssistantChat.ts).
+  const assistant = useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll, busyKey, setBusyKey, trips });
+  const { aiInput, setAiInput, attachedFiles, dragOver, inputRef } = assistant;
   const syncDriveNow = useCallback(async () => {
     setBusyKey("drive-sync");
     try {
@@ -432,26 +386,30 @@ export default function AdminPage() {
       setBusyKey("");
     }
   }, [fetchWithAdmin, loadAll, readJsonSafe, toast]);
-  // Sign-in check on load. A browser signed in before sessions existed still holds the
-  // secret in localStorage: it is traded for a session once and then forgotten.
+  // Sign-in check on load (Google is the only way in). A browser from before sessions may
+  // still hold the old admin password in localStorage: it is forgotten, never sent.
+  // TODO(2026-12): drop these two removeItem calls one release after Google-only sign-in.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const storage = getSecretStorage();
-      const legacySecret = storage?.getItem(SECRET_KEY) || "";
-      const legacyAge = Date.now() - Number(storage?.getItem(SECRET_TS_KEY) || "0");
       storage?.removeItem(SECRET_KEY);
       storage?.removeItem(SECRET_TS_KEY);
-      if (legacySecret && legacyAge < SESSION_TTL_MS) {
-        await fetch("/api/admin/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ secret: legacySecret }),
-        }).catch(() => null);
-      }
       const res = await fetch("/api/admin/session", { cache: "no-store" }).catch(() => null);
-      const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean } | null : null;
+      const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean; google_sign_in?: boolean } | null : null;
       if (cancelled) return;
+      // A refused Google sign-in comes back as ?login_error=<code>; show it once, drop it from the URL.
+      const url = new URL(window.location.href);
+      const googleError = url.searchParams.get("login_error");
+      if (googleError) {
+        setLoginError(GOOGLE_LOGIN_ERRORS[googleError] || "Нэвтэрч чадсангүй. Дахин оролдоно уу.");
+        url.searchParams.delete("login_error");
+        window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+      }
+      // No answer at all: whether Google is set up is unknown, so keep the button and say why,
+      // rather than claiming sign-in is not set up.
+      setGoogleSignIn(json ? Boolean(json.google_sign_in) : true);
+      if (!json && !googleError) setLoginError("Сервертэй холбогдож чадсангүй. Интернэтээ шалгаад хуудсаа дахин ачаална уу.");
       const next = json?.authorized ? "signed_in" : "signed_out";
       authRef.current = next;
       setAuthState(next);
@@ -571,9 +529,6 @@ export default function AdminPage() {
     const poll = setInterval(() => void check(), LEAD_POLL_MS);
     return () => { stopped = true; clearInterval(poll); };
   }, [authState, fetchWithAdmin, loadLeadsState, toast]);
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
   const pausedIds = useMemo(
     () => new Set(pausedRows.map((row) => row.sender_id)),
     [pausedRows],
@@ -582,805 +537,10 @@ export default function AdminPage() {
     () => pausedRows.filter((row) => row.reason === "handoff"),
     [pausedRows],
   );
-  /** Exchanges the typed secret for a session cookie; the secret itself is never stored. */
-  async function signIn() {
-    const typed = secretDraft.trim();
-    if (!typed || loginBusy) return;
-    setLoginBusy(true);
-    setLoginError("");
-    try {
-      const res = await fetch("/api/admin/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secret: typed }),
-      });
-      if (res.ok) {
-        setSecretDraft("");
-        lastSystemCheckRef.current = 0;
-        authRef.current = "signed_in";
-        setAuthState("signed_in");
-        return;
-      }
-      setLoginError(res.status === 401
-        ? "Нууц үг буруу байна."
-        : res.status === 429
-          ? "Хэт олон удаа буруу оруулсан байна. 1 минутын дараа дахин оролдоно уу."
-          : "Нэвтэрч чадсангүй. Дахин оролдоно уу.");
-    } catch {
-      setLoginError("Сервертэй холбогдож чадсангүй. Интернэтээ шалгаад дахин оролдоно уу.");
-    } finally {
-      setLoginBusy(false);
-    }
-  }
   async function signOut() {
     await fetch("/api/admin/session", { method: "DELETE" }).catch(() => null);
     setMobileNavOpen(false);
     markAdminLocked();
-  }
-  function pushMessage(message: ChatMessage) {
-    setChatMessages((prev) => [...prev, message]);
-  }
-  async function readAttachedFile(file: File): Promise<AttachedFile> {
-    return {
-      id: `${file.name}:${file.size}:${file.lastModified}`,
-      name: file.name,
-      mimeType: file.type || "",
-      sizeBytes: file.size,
-      file,
-    };
-  }
-  async function attachFiles(files: FileList | File[]) {
-    const inputFiles = Array.from(files);
-    if (inputFiles.length === 0) return;
-    const limitedFiles = inputFiles;
-    try {
-      const nextFiles = await Promise.all(
-        limitedFiles.map((file) => readAttachedFile(file)),
-      );
-      setAttachedFiles((prev) => {
-        const existing = new Set(prev.map((file) => file.id));
-        const deduped = nextFiles.filter((file) => !existing.has(file.id));
-        return [...prev, ...deduped];
-      });
-    } catch {
-      toast.error("Нэг буюу хэд хэдэн файлыг уншиж чадсангүй.");
-    }
-  }
-  async function parseUploadUnitWithRetry(
-    unit: ParseUploadUnit,
-    note: string,
-    progressLabel: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
-    const MAX_HARD_FAILURES = 6; // consecutive non-rate-limit failures
-    const MAX_TRANSIENT_RETRIES = 1;
-    let hardFailures = 0;
-    let transientRetries = 0;
-    let waitAttempt = 0;
-    while (true) {
-      let res: Response;
-      try {
-        res = await fetchWithAdmin("/api/admin/parse-file", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            uploads: [
-              {
-                filename: unit.filename,
-                mimeType: unit.mimeType,
-                dataBase64: unit.dataUrl,
-              },
-              ...(unit.companions || []).map((companion) => ({
-                filename: companion.filename,
-                mimeType: companion.mimeType,
-                dataBase64: companion.dataUrl,
-              })),
-            ],
-            note,
-          }),
-        });
-      } catch {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName);
-        }
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      const json = (await readJsonSafe(res)) as AIProposalResponse;
-      const rateLimited = res.status === 429;
-      const transientOk =
-        res.ok &&
-        isTransientAiFailure(json.proposal) &&
-        !json.proposal?.actions?.length;
-      if (rateLimited || transientOk) {
-        if (transientRetries >= MAX_TRANSIENT_RETRIES) {
-          return emptyChunkResult(unit.displayName);
-        }
-        transientRetries += 1;
-        const waitMs =
-          typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
-            ? json.retry_after_ms
-            : Math.min(60_000, 20_000 + waitAttempt * 10_000);
-        await waitWithCountdown(progressLabel, waitMs, ++waitAttempt);
-        continue;
-      }
-      if (!res.ok) {
-        if (res.status === 413) {
-          return emptyChunkResult(unit.displayName);
-        }
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName);
-        }
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName);
-        }
-        await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
-        continue;
-      }
-      return {
-        proposal: json.proposal,
-        requestId: typeof json.request_id === "number" ? json.request_id : null,
-      };
-    }
-  }
-  async function waitWithCountdown(
-    progressLabel: string,
-    totalMs: number,
-    attempt: number,
-  ) {
-    const stepMs = 1_000;
-    let remaining = Math.max(stepMs, Math.round(totalMs));
-    while (remaining > 0) {
-      const secs = Math.ceil(remaining / 1000);
-      setAiBusyLabel(
-        `${progressLabel} — AI түр завгүй байна, ${secs}с дараа үргэлжилнэ` +
-          (attempt > 3 ? ` (оролдлого ${attempt})` : ""),
-      );
-      await delayMs(Math.min(stepMs, remaining));
-      remaining -= stepMs;
-    }
-  }
-  async function parseDriveFileWithRetry(
-    fileId: string,
-    note: string,
-    progressLabel: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
-    const MAX_HARD_FAILURES = 6;
-    const MAX_TRANSIENT_RETRIES = 1;
-    let hardFailures = 0;
-    let transientRetries = 0;
-    let waitAttempt = 0;
-    const label = `Google Drive ${shortId(fileId)}`;
-    while (true) {
-      let res: Response;
-      try {
-        res = await fetchWithAdmin("/api/admin/parse-file", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ driveFileIds: [fileId], note }),
-        });
-      } catch {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      const json = (await readJsonSafe(res)) as AIProposalResponse;
-      const rateLimited = res.status === 429;
-      const transientOk =
-        res.ok &&
-        isTransientAiFailure(json.proposal) &&
-        !json.proposal?.actions?.length;
-      if (rateLimited || transientOk) {
-        if (transientRetries >= MAX_TRANSIENT_RETRIES) {
-          return emptyChunkResult(label);
-        }
-        transientRetries += 1;
-        const waitMs =
-          typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
-            ? json.retry_after_ms
-            : Math.min(60_000, 20_000 + waitAttempt * 10_000);
-        await waitWithCountdown(progressLabel, waitMs, ++waitAttempt);
-        continue;
-      }
-      if (!res.ok) {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
-        await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
-        continue;
-      }
-      return {
-        proposal: json.proposal,
-        requestId: typeof json.request_id === "number" ? json.request_id : null,
-      };
-    }
-  }
-  async function parseAttachedFiles(
-    files: AttachedFile[],
-    note: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null; sourceText: string }> {
-    const proposals: AIProposal[] = [];
-    setAiBusyProgress((current) => Math.max(current ?? 0, 8));
-    let singleRequestId: number | null = null;
-    const uploadUnits: ParseUploadUnit[] = [];
-    const skippedFiles: string[] = [];
-    for (const file of files) {
-      try {
-        if (isPdfFile(file.file)) {
-          uploadUnits.push(...(await buildPdfUploadUnits(file.file)));
-        } else if (isOfficeDocFile(file.file)) {
-          uploadUnits.push(...(await buildOfficeUploadUnits(file.file)));
-        } else if (isTextLikeFile(file.file)) {
-          uploadUnits.push(...(await buildTextUploadUnits(file.file)));
-        } else if (isImageFile(file.file)) {
-          uploadUnits.push(await buildImageUploadUnit(file.file));
-        } else if (isZipFile(file.file)) {
-          uploadUnits.push(...(await buildZipImageUploadUnits(file.file)));
-        } else {
-          if (file.file.size > MAX_PARSE_UPLOAD_BYTES) {
-            skippedFiles.push(file.name);
-            continue;
-          }
-          uploadUnits.push({
-            displayName: file.name,
-            filename: file.name,
-            mimeType: file.mimeType,
-            dataUrl: await fileToDataUrl(file.file),
-          });
-        }
-      } catch {
-        skippedFiles.push(file.name);
-      }
-    }
-    if (skippedFiles.length > 0) {
-      toast.info(
-        `${skippedFiles.length} файлыг уншиж чадсангүй тул алгаслаа: ${skippedFiles
-          .slice(0, 3)
-          .join(", ")}${skippedFiles.length > 3 ? "…" : ""}`,
-      );
-    }
-    const sourceParts: string[] = [];
-    if (note.trim()) sourceParts.push(`Админы тэмдэглэл: ${note.trim()}`);
-    for (const unit of uploadUnits) {
-      if (unit.mimeType === "text/plain" || unit.filename.endsWith(".txt")) {
-        const text = dataUrlToText(unit.dataUrl).trim();
-        if (text) sourceParts.push(`[${unit.displayName}]\n${text}`);
-      }
-    }
-    const sourceText = sourceParts.join("\n\n").slice(0, MAX_AI_SOURCE_TEXT_CHARS);
-    if (uploadUnits.length === 0) {
-      return {
-        proposal: {
-          summary: "Уншигдах файл олдсонгүй.",
-          needs_confirmation: false,
-          important_reason: "",
-          conflicts: [],
-          actions: [],
-        },
-        requestId: null,
-        sourceText,
-      };
-    }
-    setAiBusyProgress((current) => Math.max(current ?? 0, 15));
-    const doneIndexes = new Set<number>();
-    const results = await Promise.all(
-      uploadUnits.map((unit, index) =>
-        delayMs(index * 400).then(() =>
-          parseUploadUnitWithRetry(
-            unit,
-            note,
-            `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
-          ).then((result) => {
-            setAiBusyProgress(() => {
-              doneIndexes.add(index);
-              const completed = doneIndexes.size;
-              return Math.min(90, 15 + Math.round((completed / uploadUnits.length) * 75));
-            });
-            return result;
-          }),
-        ),
-      ),
-    );
-    for (const parsed of results) {
-      proposals.push(parsed.proposal);
-    }
-    if (uploadUnits.length === 1) {
-      singleRequestId = results[0]?.requestId ?? null;
-    }
-    return {
-      proposal:
-        proposals.length === 1
-          ? proposals[0]
-          : mergeAIProposals(
-              proposals,
-              files.map((file) => file.name),
-            ),
-      requestId: singleRequestId,
-      sourceText,
-    };
-  }
-  async function parseDriveFileIds(
-    fileIds: string[],
-    note: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null; sourceText: string }> {
-    const proposals: AIProposal[] = [];
-    let singleRequestId: number | null = null;
-    for (let index = 0; index < fileIds.length; index += 1) {
-      const fileId = fileIds[index];
-      const progressLabel = `${fileIds.length} Google Drive файл уншиж байна… ${index + 1}/${fileIds.length}`;
-      setAiBusyLabel(progressLabel);
-      const parsed = await parseDriveFileWithRetry(fileId, note, progressLabel);
-      proposals.push(parsed.proposal);
-      setAiBusyProgress(
-        Math.min(90, 15 + Math.round(((index + 1) / fileIds.length) * 75)),
-      );
-      if (fileIds.length === 1) {
-        singleRequestId = parsed.requestId;
-      }
-    }
-    return {
-      proposal:
-        proposals.length === 1
-          ? proposals[0]
-          : mergeAIProposals(
-              proposals,
-              fileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
-            ),
-      requestId: singleRequestId,
-      sourceText: "",
-    };
-  }
-  function removeAttachedFile(fileId: string) {
-    setAttachedFiles((prev) => prev.filter((file) => file.id !== fileId));
-  }
-  async function sendQuickAction(kind: "cancel" | "seats" | "food", trip: TravelTrip, value?: number | boolean) {
-    if (busyKey === "ai-send") return;
-    const label =
-      kind === "cancel"
-        ? "цуцлах"
-        : kind === "seats"
-          ? `үлдсэн суудал ${value}`
-          : value
-            ? "хоол багтсан"
-            : "хоол багтаагүй";
-    pushMessage({ id: uid(), role: "admin", text: `«${trip.route_name}» — ${label}` });
-    setBusyKey("ai-send");
-    setAiBusyProgress(null);
-    setAiBusyLabel("Санал бэлдэж байна…");
-    try {
-      const res = await fetchWithAdmin("/api/admin/ai-change", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ quick: { kind, trip_id: trip.id, value }, session_id: assistantSession.current }),
-      });
-      const data = (await readJsonSafe(res)) as AIProposalResponse;
-      if (!res.ok || !data.proposal) throw new Error(apiErrorMessage(data, "Санал үүсгэж чадсангүй."));
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "proposal",
-        proposal: data.proposal,
-        requestId: typeof data.request_id === "number" ? data.request_id : null,
-        instruction: `${trip.route_name} — ${label}`,
-        sourceNames: [],
-        sourceText: "",
-        status: "pending",
-        confirmChecked: false,
-        clarifications: [],
-        clarificationAnswers: [],
-        answeredClarificationIds: [],
-        customReply: "",
-      });
-    } catch (err) {
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "note",
-        tone: "error",
-        text: err instanceof Error ? err.message : "Алдаа гарлаа.",
-      });
-    } finally {
-      setBusyKey("");
-    }
-  }
-  async function sendAssistant() {
-    const text = aiInput.trim();
-    const files = attachedFiles;
-    const driveFileIds = extractGoogleDriveFileIds(text);
-    if (!text && files.length === 0 && driveFileIds.length === 0) return;
-    if (busyKey === "ai-send") return;
-    if (text.length > MAX_AI_INPUT_CHARS) {
-      toast.error(
-        `AI заавар хэт урт байна. ${MAX_AI_INPUT_CHARS} тэмдэгтээс богино бичнэ үү.`,
-      );
-      return;
-    }
-    const sourceNames = [
-      ...files.map((file) => file.name),
-      ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
-    ];
-    pushMessage({
-      id: uid(),
-      role: "admin",
-      text: text || "Файл орууллаа",
-      fileNames: sourceNames,
-    });
-    setAiInput("");
-    setAttachedFiles([]);
-    setBusyKey("ai-send");
-    setAiBusyProgress(
-      files.length > 0 || driveFileIds.length > 0 ? 3 : null,
-    );
-    setAiBusyLabel(
-      files.length > 0 || driveFileIds.length > 0
-        ? `${Math.max(1, sourceNames.length)} файл уншиж байна… (хэдэн секунд)`
-        : "AI хариу бэлдэж байна…",
-    );
-    try {
-      let proposal: AIProposal | undefined;
-      let requestId: number | null = null;
-      let sourceText = "";
-      if (files.length > 0 || driveFileIds.length > 0) {
-        const parsedProposals: AIProposal[] = [];
-        const parsedSourceNames: string[] = [];
-        if (files.length > 0) {
-          const parsed = await parseAttachedFiles(files, text);
-          parsedProposals.push(parsed.proposal);
-          parsedSourceNames.push(...files.map((file) => file.name));
-          requestId = parsed.requestId;
-          sourceText = parsed.sourceText;
-        }
-        if (driveFileIds.length > 0) {
-          const parsedDrive = await parseDriveFileIds(driveFileIds, text);
-          parsedProposals.push(parsedDrive.proposal);
-          parsedSourceNames.push(
-            ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
-          );
-          requestId = files.length === 0 ? parsedDrive.requestId : null;
-          sourceText = sourceText
-            ? `${sourceText}\n\n${parsedDrive.sourceText}`.slice(0, MAX_AI_SOURCE_TEXT_CHARS)
-            : parsedDrive.sourceText;
-        }
-        proposal =
-          parsedProposals.length === 1
-            ? parsedProposals[0]
-            : mergeAIProposals(parsedProposals, parsedSourceNames);
-        setAiBusyLabel("Олдсон мэдээллийг нэгтгэж, шалгаж байна…");
-        setAiBusyProgress(96);
-      } else {
-        const res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instruction: text, session_id: assistantSession.current }),
-        });
-        const json = await readJsonSafe(res);
-        const data = json as AIProposalResponse;
-        if (!res.ok) {
-          throw new Error(apiErrorMessage(data, "AI санал үүсгэж чадсангүй."));
-        }
-        proposal = data.proposal;
-        requestId = typeof data.request_id === "number" ? data.request_id : null;
-      }
-      if (!proposal || !Array.isArray(proposal.actions)) {
-        throw new Error(
-          "AI хэрэгжих санал буцааж чадсангүй. Илүү тодорхой зааварчилгаар дахин оролдоно уу.",
-        );
-      }
-      if (proposal.actions.length === 0) {
-        pushMessage({
-          id: uid(),
-          role: "assistant",
-          kind: "note",
-          tone: "info",
-          text:
-            proposal.conflicts?.[0] ||
-            proposal.important_reason ||
-            proposal.summary ||
-            "Өөрчлөх зүйл олдсонгүй. Илүү дэлгэрэнгүй зааварчилга эсвэл өөр файл оруулна уу.",
-        });
-        return;
-      }
-      const fileInstruction =
-        sourceNames.length > 0
-          ? text
-            ? `[File] ${sourceNames.join(", ")} - ${text}`
-            : `[File] ${sourceNames.join(", ")}`
-          : text;
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "proposal",
-        proposal,
-        requestId,
-        instruction: fileInstruction,
-        sourceNames,
-        sourceText,
-        status: "pending",
-        confirmChecked: false,
-        clarifications: buildProposalClarifications(proposal, [], sourceNames),
-        clarificationAnswers: [],
-        answeredClarificationIds: [],
-        customReply: "",
-      });
-      setAiBusyProgress(100);
-    } catch (err) {
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "note",
-        tone: "error",
-        text:
-          err instanceof TypeError
-            ? "Сервер хариу өгөхөөс өмнө байршуулалт амжилтгүй болсон. Сүлжээ, браузер эсвэл платформын бодит request limit-д хүрсэн байж магадгүй."
-            : err instanceof Error
-              ? err.message
-              : "Алдаа гарлаа.",
-      });
-    } finally {
-      setBusyKey("");
-      setAiBusyProgress(null);
-    }
-  }
-  function setProposalMessage(id: string, patch: Partial<ProposalMsg>) {
-    setChatMessages((prev) =>
-      prev.map((message) =>
-        message.id === id && "kind" in message && message.kind === "proposal"
-          ? { ...message, ...patch }
-          : message,
-      ),
-    );
-  }
-  async function answerClarification(
-    message: ProposalMsg,
-    question: ClarificationQuestion,
-    answer: string,
-    markAnsweredIds?: string[],
-    extraAnswers?: ClarificationAnswer[],
-  ) {
-    const trimmed = answer.trim();
-    if (!trimmed) return;
-    setBusyKey(`clarify-${message.id}`);
-    try {
-      let proposal: AIProposal | undefined;
-      let newRequestId: number | null = message.requestId;
-      if (message.requestId != null) {
-        const res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            request_id: message.requestId,
-            clarification: trimmed,
-            session_id: assistantSession.current,
-          }),
-        });
-        const json = await readJsonSafe(res);
-        if (!res.ok) {
-          throw new Error(
-            apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
-          );
-        }
-        proposal = json?.proposal as AIProposal | undefined;
-      } else {
-        const contextParts: string[] = [];
-        if (message.sourceText) {
-          contextParts.push(`Source text from uploaded files:\n${message.sourceText}`);
-        }
-        if (message.instruction) contextParts.push(message.instruction);
-        if (message.clarificationAnswers.length > 0) {
-          contextParts.push(
-            "Previous clarification answers:\n" +
-              message.clarificationAnswers
-                .map((qa) => `${qa.prompt}: ${qa.answer}`)
-                .join("\n"),
-          );
-        }
-        contextParts.push(`${question.prompt}: ${trimmed}`);
-        const instruction = contextParts.join("\n\n").slice(0, MAX_AI_INPUT_CHARS);
-        const res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instruction }),
-        });
-        const json = await readJsonSafe(res);
-        if (!res.ok) {
-          throw new Error(
-            apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
-          );
-        }
-        proposal = json?.proposal as AIProposal | undefined;
-        if (typeof json?.request_id === "number") {
-          newRequestId = json.request_id as number;
-        }
-      }
-      if (!proposal || !Array.isArray(proposal.actions)) {
-        throw new Error("AI засварласан санал буцааж чадсангүй.");
-      }
-      if (!proposal.photo_sources?.length && message.proposal.photo_sources?.length) {
-        proposal.photo_sources = message.proposal.photo_sources;
-      }
-      const nextAnsweredIds = markAnsweredIds ?? [
-        ...message.answeredClarificationIds,
-        question.id,
-      ];
-      const nextAnswers = [
-        ...message.clarificationAnswers,
-        ...(extraAnswers ?? [
-          {
-            questionId: question.id,
-            prompt: question.prompt,
-            answer: trimmed,
-          },
-        ]),
-      ];
-      setProposalMessage(message.id, {
-        proposal,
-        requestId: newRequestId,
-        clarifications: buildProposalClarifications(proposal, nextAnsweredIds, message.sourceNames ?? []),
-        clarificationAnswers: nextAnswers,
-        answeredClarificationIds: nextAnsweredIds,
-        customReply: "",
-        confirmChecked: false,
-      });
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Саналыг засаж чадсангүй.",
-      );
-    } finally {
-      setBusyKey("");
-    }
-  }
-  async function applyProposal(message: ProposalMsg) {
-    setBusyKey(`apply-${message.id}`);
-    try {
-      const body =
-        message.requestId != null
-          ? { request_id: message.requestId, apply: true, confirm: true, session_id: assistantSession.current }
-          : {
-              session_id: assistantSession.current,
-              apply: true,
-              confirm: true,
-              proposal_direct: message.proposal,
-              instruction: message.instruction,
-            };
-      // Bounded so a stuck DB connection reads as a clear error the admin can
-      // retry, instead of the "Save" button spinning forever with no signal.
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 45_000);
-      let res: Response;
-      try {
-        res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          throw new Error(
-            "Хадгалахад удаж байна — сүлжээ/сервер удаан хариулж байна. Дахин оролдоно уу.",
-          );
-        }
-        throw err;
-      } finally {
-        clearTimeout(timeout);
-      }
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.message || json?.error || "Хэрэгжүүлж чадсангүй.");
-      }
-      setProposalMessage(message.id, {
-        status: "applied",
-        requestId:
-          typeof json?.request_id === "number"
-            ? (json.request_id as number)
-            : message.requestId,
-        resultText: Array.isArray(json?.results)
-          ? json.results.join(" • ")
-          : json?.message || "Амжилттай.",
-      });
-      toast.success("Өөрчлөлт хадгалагдлаа. Бот шинэ мэдээллээр хариулна.");
-      await loadAll();
-    } catch (err) {
-      setProposalMessage(message.id, {
-        status: "error",
-        resultText: err instanceof Error ? err.message : "Алдаа гарлаа.",
-      });
-      toast.error("Хэрэгжүүлэхэд алдаа гарлаа.");
-    } finally {
-      setBusyKey("");
-    }
-  }
-  async function rollbackProposal(message: ProposalMsg) {
-    if (message.requestId == null) {
-      toast.error("Буцаах хадгалсан хүсэлтийн дугаар олдсонгүй.");
-      return;
-    }
-    if (
-      !window.confirm(
-        "Сүүлд хадгалсан AI өөрчлөлтийг буцаах уу? Энэ үйлдэл тухайн өөрчлөлтийн өмнөх аяллын мэдээллийг сэргээнэ.",
-      )
-    ) {
-      return;
-    }
-    setBusyKey(`rollback-${message.id}`);
-    try {
-      const res = await fetchWithAdmin("/api/admin/ai-change", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          request_id: message.requestId,
-          rollback: true,
-          confirm: true,
-          session_id: assistantSession.current,
-        }),
-      });
-      const json = await readJsonSafe(res);
-      if (!res.ok) {
-        throw new Error(
-          String(json?.message || json?.error || "Буцааж чадсангүй."),
-        );
-      }
-      setProposalMessage(message.id, {
-        status: "reverted",
-        resultText: Array.isArray(json?.results)
-          ? json.results.join(" • ")
-          : String(json?.message || "Буцаагдлаа."),
-      });
-      toast.success("AI өөрчлөлтийг буцаалаа.");
-      await loadAll();
-    } catch (err) {
-      setProposalMessage(message.id, {
-        status: "error",
-        resultText: err instanceof Error ? err.message : "Буцаахад алдаа гарлаа.",
-      });
-      toast.error("Буцаахад алдаа гарлаа.");
-    } finally {
-      setBusyKey("");
-    }
-  }
-  async function submitClarificationForm(
-    message: ProposalMsg,
-    answers: Record<string, string>,
-  ) {
-    const combined = message.clarifications
-      .map((q) => {
-        const answer = (answers[q.id] ?? "").trim();
-        if (!answer) return "";
-        const context = q.detail ? ` [Зөрчил: ${q.detail}]` : "";
-        return `${q.prompt}${context} → ${answer}`;
-      })
-      .filter(Boolean)
-      .join("\n");
-    if (!combined.trim()) return;
-    const allAnsweredIds = message.clarifications.map((q) => q.id);
-    const newAnswers = message.clarifications
-      .map((q) => {
-        const answer = (answers[q.id] ?? "").trim();
-        if (!answer) return null;
-        return { questionId: q.id, prompt: q.prompt, answer };
-      })
-      .filter(Boolean) as ClarificationAnswer[];
-    const firstQ = message.clarifications[0];
-    if (!firstQ) return;
-    await answerClarification(
-      message,
-      firstQ,
-      combined,
-      [...message.answeredClarificationIds, ...allAnsweredIds],
-      newAnswers,
-    );
   }
   async function runPauseAction(
     action:
@@ -1416,340 +576,6 @@ export default function AdminPage() {
       await loadAll();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Үйлдэл амжилтгүй.");
-    } finally {
-      setBusyKey("");
-    }
-  }
-  function beginCreateTrip() {
-    setIsNewTrip(true);
-    setEditingTrip(null);
-    setTripDraft({ ...BLANK_TRIP_DRAFT });
-    setTripPhotoUrls([]);
-    setTripPhotoInput("");
-    setTripAliases([]);
-    setTripPriceGroups([]);
-    setTripDiscounts([]);
-    setTripExtraFees([]);
-    setTripDepartureRule("");
-    setTripIncludedItems([]);
-    setTripExcludedItems([]);
-    setTripRoomPrices([]);
-    setTripItineraryDays([]);
-    setTripImportantNotes([]);
-    setTripBookingTerms(emptyBookingTerms());
-    setTripCustomerVisible(true);
-    setTripNeedsHumanReview(false);
-    setTripReviewReasons([]);
-    setTripSourceProvenance([]);
-    setTripAnswerHints([]);
-  }
-  /**
-   * Opens the editor on the trip as saved now. The list holds slim rows (no website copy,
-   * itinerary text or conflict history) that may also be a refresh old; editing from them
-   * would show empty fields and lead to avoidable "changed elsewhere" conflicts.
-   */
-  async function beginEditTrip(trip: TravelTrip) {
-    if (openingTripId) return;
-    setOpeningTripId(trip.id);
-    try {
-      const res = await fetchWithAdmin(`/api/admin/trips?id=${encodeURIComponent(trip.id)}`);
-      if (res.status === 401) {
-        markAdminLocked();
-        return;
-      }
-      const json = await readJsonSafe(res) as { trip?: TravelTrip; message?: string };
-      if (!res.ok || !json.trip) throw new Error(json.message || "Аяллыг нээж чадсангүй. Дахин оролдоно уу.");
-      openTripEditor(json.trip);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Аяллыг нээж чадсангүй. Дахин оролдоно уу.");
-    } finally {
-      setOpeningTripId("");
-    }
-  }
-  function openTripEditor(trip: TravelTrip) {
-    setIsNewTrip(false);
-    setEditingTrip(trip);
-    setTripDraft({
-      category: trip.category || "",
-      operator_name: trip.operator_name || "",
-      route_name: trip.route_name || "",
-      duration_text: trip.duration_text || "",
-      adult_price: trip.adult_price == null ? "" : String(trip.adult_price),
-      child_price: trip.child_price == null ? "" : String(trip.child_price),
-      infant_price: trip.infant_price == null ? "" : String(trip.infant_price),
-      child_price_free: documentedFreeFare((trip.extra || {}) as Record<string, unknown>, "child") ? "true" : "",
-      infant_price_free: documentedFreeFare((trip.extra || {}) as Record<string, unknown>, "infant") ? "true" : "",
-      age_infant: resolveAgeRules(trip.extra).infant,
-      age_child: resolveAgeRules(trip.extra).child,
-      age_adult: resolveAgeRules(trip.extra).adult,
-      currency: trip.currency || "MNT",
-      seats_total: trip.seats_total == null ? "" : String(trip.seats_total),
-      seats_left: trip.seats_left == null ? "" : String(trip.seats_left),
-      seats_percent_left:
-        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.seats_percent_left === "number"
-          ? String((trip.extra.marketing_badge as Record<string, unknown>).seats_percent_left)
-          : "",
-      sale_badge_enabled:
-        (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_enabled === true ? "true" : "false",
-      sale_badge_label:
-        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_label === "string"
-          ? String((trip.extra.marketing_badge as Record<string, unknown>).sale_label)
-          : "ХЯМДРАЛ",
-      sale_badge_ends:
-        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_ends_at === "string"
-          ? String((trip.extra.marketing_badge as Record<string, unknown>).sale_ends_at)
-          : "",
-      departure_dates: (trip.departure_dates || []).join(", "),
-      status: trip.status || "active",
-      has_food:
-        trip.has_food == null ? "unknown" : trip.has_food ? "true" : "false",
-      notes: trip.notes || "",
-      hotel: trip.hotel || "",
-      source_description: trip.source_description || "",
-    });
-    setTripPhotoUrls(trip.photo_urls || []);
-    setTripPhotoInput("");
-    setTripAliases(Array.isArray(trip.extra?.aliases) ? (trip.extra.aliases as string[]) : []);
-    setTripPriceGroups(Array.isArray(trip.extra?.price_groups) ? (trip.extra.price_groups as PriceGroup[]) : []);
-    setTripDiscounts(Array.isArray(trip.extra?.discounts) ? (trip.extra.discounts as DiscountGroup[]) : []);
-    setTripExtraFees(Array.isArray(trip.extra?.extra_fees) ? (trip.extra.extra_fees as ExtraFee[]) : []);
-    setTripDepartureRule(typeof trip.extra?.departure_rule === "string" ? trip.extra.departure_rule : "");
-    setTripIncludedItems(Array.isArray(trip.extra?.included_items) ? (trip.extra.included_items as string[]) : []);
-    setTripExcludedItems(Array.isArray(trip.extra?.excluded_items) ? (trip.extra.excluded_items as string[]) : []);
-    setTripRoomPrices(Array.isArray(trip.extra?.room_prices) ? (trip.extra.room_prices as RoomPrice[]) : []);
-    setTripItineraryDays(Array.isArray(trip.extra?.itinerary_days) ? (trip.extra.itinerary_days as ItineraryDay[]) : []);
-    setTripImportantNotes(Array.isArray(trip.extra?.important_notes) ? (trip.extra.important_notes as string[]) : []);
-    setTripBookingTerms(toBookingTermsForm(trip.extra?.booking_terms));
-    setTripCustomerVisible(typeof trip.extra?.customer_visible === "boolean" ? trip.extra.customer_visible : true);
-    setTripNeedsHumanReview(typeof trip.extra?.needs_human_review === "boolean" ? trip.extra.needs_human_review : false);
-    setTripReviewReasons(Array.isArray(trip.extra?.review_reasons) ? (trip.extra.review_reasons as string[]) : []);
-    setTripSourceProvenance(Array.isArray(trip.extra?.source_provenance) ? (trip.extra.source_provenance as import("@/lib/adminTypes").SourceProvenance[]) : []);
-    setTripAnswerHints(Array.isArray(trip.extra?.answer_hints) ? (trip.extra.answer_hints as import("@/lib/adminTypes").AnswerHint[]) : []);
-  }
-  const tripModalOpen = isNewTrip || editingTrip != null;
-  async function doUploadPhotoFiles(files: File[], replace: boolean) {
-    if (replace) setTripPhotoUrls([]);
-
-    const baseCount = replace ? 0 : tripPhotoUrls.length;
-    const availableSlots = Math.max(0, MAX_PHOTOS_PER_TRIP - baseCount);
-    if (availableSlots === 0) {
-      toast.error(`Нэг аялалд хамгийн ихдээ ${MAX_PHOTOS_PER_TRIP} зураг хадгална.`);
-      return;
-    }
-
-    const fileArray = files.slice(0, availableSlots);
-    if (fileArray.length < files.length) {
-      toast.error(`Зургийн дээд тоо ${MAX_PHOTOS_PER_TRIP} тул үлдсэн файлуудыг алгаслаа.`);
-    }
-    if (fileArray.length === 0) return;
-
-    const newNames = fileArray.map((file) => file.name);
-    setPhotoUploading((prev) => [...prev, ...newNames]);
-
-    const removeUploadingName = (names: string[], target: string) => {
-      const index = names.indexOf(target);
-      if (index === -1) return names;
-      return [...names.slice(0, index), ...names.slice(index + 1)];
-    };
-
-    const uploadedUrls = (
-      await Promise.all(
-        fileArray.map(async (file) => {
-          try {
-            const sigRes = await fetchWithAdmin("/api/admin/upload-image", { method: "POST" });
-            if (!sigRes.ok) {
-              const sigJson = (await sigRes.json().catch(() => ({}))) as { error?: string };
-              throw new Error(sigJson?.error ?? "Зураг оруулах тохиргоо олдсонгүй.");
-            }
-            const sigData = (await sigRes.json()) as {
-              signature: string;
-              timestamp: number;
-              cloudName: string;
-              apiKey: string;
-              folder: string;
-            };
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("api_key", sigData.apiKey);
-            formData.append("timestamp", String(sigData.timestamp));
-            formData.append("signature", sigData.signature);
-            formData.append("folder", sigData.folder);
-            const uploadRes = await fetch(
-              `https://api.cloudinary.com/v1_1/${sigData.cloudName}/image/upload`,
-              { method: "POST", body: formData },
-            );
-            const uploadJson = (await uploadRes.json()) as {
-              secure_url?: string;
-              error?: { message?: string };
-            };
-            if (!uploadRes.ok || !uploadJson.secure_url) {
-              throw new Error(uploadJson?.error?.message ?? "Cloudinary upload амжилтгүй.");
-            }
-            return uploadJson.secure_url;
-          } catch (err) {
-            toast.error(
-              `"${file.name}" зураг оруулж чадсангүй: ${err instanceof Error ? err.message : "алдаа"}`,
-            );
-            return null;
-          } finally {
-            setPhotoUploading((prev) => removeUploadingName(prev, file.name));
-          }
-        }),
-      )
-    ).filter((url): url is string => Boolean(url));
-
-    if (uploadedUrls.length > 0) {
-      setTripPhotoUrls((prev) => {
-        const base = replace ? [] : prev;
-        return [...base, ...uploadedUrls].slice(0, MAX_PHOTOS_PER_TRIP);
-      });
-    }
-  }
-  function handlePhotoFiles(files: FileList | File[]) {
-    const validFiles = Array.from(files).filter((file) => file.size <= 10 * 1024 * 1024);
-    if (validFiles.length < Array.from(files).length) {
-      toast.error("10MB-ээс том зураг оруулах боломжгүй.");
-    }
-    if (validFiles.length === 0) return;
-    if (tripPhotoUrls.length > 0) {
-      setPhotoReplaceConfirm({ files: validFiles });
-    } else {
-      void doUploadPhotoFiles(validFiles, false);
-    }
-  }
-  function closeTripModal() {
-    setEditingTrip(null);
-    setIsNewTrip(false);
-  }
-  /** confirmIncomplete is set once the editor's "save anyway" prompt is accepted. */
-  async function saveTrip(confirmIncomplete = false) {
-    if (photoUploading.length > 0) {
-      toast.error("Зураг байршуулж дуусаагүй байна. Дууссаны дараа хадгална уу.");
-      return;
-    }
-    // Defensive: the editor only ever opens on a full trip (beginEditTrip).
-    if (editingTrip && isTripListProjection(editingTrip)) {
-      toast.error("Аяллын бүрэн мэдээлэл ачаалагдаагүй байна. Цонхыг хаагаад дахин нээнэ үү.");
-      return;
-    }
-
-    const fields = {
-      category: tripDraft.category || "Аялал",
-      operator_name: tripDraft.operator_name || "UUDAM TRAVEL AGENCY",
-      route_name: tripDraft.route_name || "",
-      duration_text: tripDraft.duration_text || "",
-      adult_price: asInt(tripDraft.adult_price || ""),
-      child_price: asInt(tripDraft.child_price || ""),
-      infant_price: asInt(tripDraft.infant_price || ""),
-      currency: tripDraft.currency || "MNT",
-      seats_total: asInt(tripDraft.seats_total || ""),
-      seats_left: asInt(tripDraft.seats_left || ""),
-      status: tripDraft.status || "active",
-      has_food:
-        tripDraft.has_food === "unknown"
-          ? null
-          : tripDraft.has_food === "true",
-      notes: tripDraft.notes || "",
-      hotel: tripDraft.hotel || "",
-      departure_dates: (tripDraft.departure_dates || "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
-      source_description: tripDraft.source_description || "",
-      photo_urls: tripPhotoUrls,
-      extra: {
-        ...(tripDraft.websiteDetails && editingTrip ? { website_details_patch: websiteDetailsPatch(editingTrip.extra.website_details, JSON.parse(tripDraft.websiteDetails)) } : {}),
-        aliases: tripAliases.filter(Boolean),
-        price_groups: tripPriceGroups.map(withDerivedSummaryFields),
-        discounts: tripDiscounts,
-        child_rules: deriveChildRules(tripPriceGroups, {
-          child: tripDraft.child_price_free === "true",
-          infant: tripDraft.infant_price_free === "true",
-        }),
-        extra_fees: tripExtraFees,
-        departure_rule: tripDepartureRule.trim(),
-        included_items: tripIncludedItems.filter(Boolean),
-        excluded_items: tripExcludedItems.filter(Boolean),
-        room_prices: tripRoomPrices,
-        itinerary_days: tripItineraryDays,
-        important_notes: tripImportantNotes.filter(Boolean),
-        booking_terms: tripBookingTerms,
-        customer_visible: tripCustomerVisible,
-        needs_human_review: tripNeedsHumanReview,
-        review_reasons: tripReviewReasons.filter(Boolean),
-        source_provenance: tripSourceProvenance,
-        answer_hints: tripAnswerHints,
-        age_rules: {
-          infant: (tripDraft.age_infant || "").trim(),
-          child: (tripDraft.age_child || "").trim(),
-          adult: (tripDraft.age_adult || "").trim(),
-        },
-        marketing_badge: {
-          sale_enabled: tripDraft.sale_badge_enabled === "true",
-          sale_label: (tripDraft.sale_badge_label || "ХЯМДРАЛ").trim(),
-          sale_ends_at: /^\d{4}-\d{2}-\d{2}$/.test(tripDraft.sale_badge_ends || "") ? tripDraft.sale_badge_ends : null,
-          seats_percent_left: (() => {
-            const value = asInt(tripDraft.seats_percent_left || "");
-            return value == null ? null : Math.max(0, Math.min(100, value));
-          })(),
-        },
-      },
-    };
-    if (!fields.route_name.trim()) {
-      toast.error("Аяллын нэр оруулна уу.");
-      return;
-    }
-    if (isNewTrip) {
-      const duplicate = trips.find(
-        (t) =>
-          t.operator_name.trim().toLowerCase() ===
-            fields.operator_name.trim().toLowerCase() &&
-          t.route_name.trim().toLowerCase() ===
-            fields.route_name.trim().toLowerCase(),
-      );
-      if (duplicate) {
-        toast.error(
-          `"${fields.operator_name} — ${fields.route_name}" нэртэй аялал аль хэдийн байна. Засах товч дарж шинэчилнэ үү.`,
-        );
-        return;
-      }
-    }
-    setBusyKey("save-trip");
-    try {
-      const changedExtra = editingTrip ? Object.fromEntries(Object.entries(fields.extra).filter(([key, value]) => {
-        const before = key === "price_groups" && Array.isArray(editingTrip.extra.price_groups)
-          ? (editingTrip.extra.price_groups as PriceGroup[]).map(withDerivedSummaryFields) : editingTrip.extra[key];
-        return !sameParityValue(before, value);
-      })) : fields.extra;
-      if (editingTrip && !("price_groups" in changedExtra)
-        && tripDraft.child_price_free !== "true" && tripDraft.infant_price_free !== "true") delete changedExtra.child_rules;
-      const patchFields = editingTrip ? {
-        ...Object.fromEntries(Object.entries(fields).filter(([key, value]) => key !== "extra" && !sameParityValue(editingTrip[key as keyof TravelTrip], value))),
-        ...(Object.keys(changedExtra).length ? { extra: changedExtra } : {}),
-      } : fields;
-      if (!Object.keys(patchFields).length) {
-        toast.success("Өөрчлөлт ороогүй байна.");
-        closeTripModal();
-        return;
-      }
-      const res = await fetchWithAdmin("/api/admin/trips", {
-        method: isNewTrip ? "POST" : "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          isNewTrip
-            ? { fields, confirmIncomplete }
-            : { id: editingTrip?.id, fields: patchFields, confirmIncomplete, expectedUpdatedAt: editingTrip?.updated_at },
-        ),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || json?.error || "Хадгалж чадсангүй.");
-      toast.success(isNewTrip ? "Шинэ аялал нэмэгдлээ." : "Аялал шинэчлэгдлээ.");
-      closeTripModal();
-      await loadTrips(searchRef.current, statusFilterRef.current, {
-        showLoading: true,
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Хадгалж чадсангүй.");
     } finally {
       setBusyKey("");
     }
@@ -1836,7 +662,11 @@ export default function AdminPage() {
    * flow is the save path, this only gets them to a pre-filled box faster.
    */
   function askAiAboutTrip(tripName: string) {
-    setAiInput(`"${tripName}" аяллыг `);
+    askAiWith(`"${tripName}" аяллыг `);
+  }
+  /** The AI туслах tab with this instruction in the box, ready to review and send (the «Тойм» partner-page card). */
+  function askAiWith(instruction: string) {
+    setAiInput(instruction);
     selectAdminTab("assistant");
     requestAnimationFrame(() => {
       const el = inputRef.current;
@@ -1997,14 +827,12 @@ export default function AdminPage() {
       window.location.hash = nextTab;
     }
   }
+  const fullBleed = tab === "assistant";
   if (authState !== "signed_in") {
     return (
       <AdminLoginGate
         checking={authState === "checking"}
-        secretDraft={secretDraft}
-        onSecretDraftChange={(value) => { setSecretDraft(value); setLoginError(""); }}
-        onSubmit={() => void signIn()}
-        busy={loginBusy}
+        googleSignIn={googleSignIn}
         error={loginError}
       />
     );
@@ -2079,8 +907,11 @@ export default function AdminPage() {
         </div>
       </header>
         {/* Content */}
-        <main id="admin-content" tabIndex={-1} className="scroll-area min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-          <div className="mx-auto w-full max-w-6xl">
+        {/* The assistant fills the content area edge to edge and scrolls inside itself (one scrollbar);
+            every other tab is a centered page that scrolls here. */}
+        <main id="admin-content" tabIndex={-1} className={cx("min-w-0 flex-1", fullBleed ? "flex min-h-0 flex-col overflow-hidden" : "scroll-area overflow-y-auto p-4 sm:p-6 lg:p-8")}>
+          <div className={cx("w-full", fullBleed ? "flex min-h-0 flex-1 flex-col" : "mx-auto max-w-6xl")}>
+          <div className={cx(fullBleed && "shrink-0 px-4 pt-4 empty:hidden sm:px-6")}>
           {botPaused && (
             <div className="mb-4 rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -2124,20 +955,23 @@ export default function AdminPage() {
               </Alert>
             </details>
           )}
-          <div key={tab} className="animate-fade-up">
+          </div>
+          <div key={tab} className={cx("animate-fade-up", fullBleed && "flex min-h-0 flex-1 flex-col")}>
           {tab === "assistant" && (
             <AssistantTab
-              messages={chatMessages}
+              messages={assistant.messages}
               existingTrips={trips}
+              tripDetails={assistant.tripDetails}
               aiInput={aiInput}
               setAiInput={setAiInput}
               attachedFiles={attachedFiles}
-              onRemoveAttachedFile={removeAttachedFile}
+              onRemoveAttachedFile={assistant.removeAttachedFile}
               dragOver={dragOver}
-              setDragOver={setDragOver}
+              setDragOver={assistant.setDragOver}
               busy={busyKey === "ai-send"}
-              busyLabel={aiBusyLabel}
-              busyProgress={aiBusyProgress}
+              busyLabel={assistant.busyLabel}
+              busyProgress={assistant.busyProgress}
+              busyStages={assistant.busyStages}
               applyBusyId={
                 busyKey.startsWith("apply-")
                   ? busyKey.slice(6)
@@ -2148,21 +982,25 @@ export default function AdminPage() {
               clarifyBusyId={
                 busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
               }
-              onSend={() => void sendAssistant()}
-              onQuickAction={(kind, trip, value) => void sendQuickAction(kind, trip, value)}
+              onSend={() => void assistant.sendAssistant()}
+              onChooseOption={assistant.chooseAskOption}
+              onQuickAction={(kind, trip, value) => void assistant.sendQuickAction(kind, trip, value)}
               onEditTripPrice={(trip) => beginEditTrip(trip)}
               onNewTrip={() => beginCreateTrip()}
-              onApply={(message) => void applyProposal(message)}
-              onRollback={(message) => void rollbackProposal(message)}
+              onEditDraftTrip={openTripEditorForDraft}
+              onApply={(message) => void assistant.applyProposal(message)}
+              onRollback={(message) => void assistant.rollbackProposal(message)}
               onSubmitClarificationForm={(message, answers) =>
-                void submitClarificationForm(message, answers)
+                void assistant.submitClarificationForm(message, answers)
               }
               onCancelProposal={(id) =>
-                setProposalMessage(id, { status: "cancelled" })
+                assistant.setProposalMessage(id, { status: "cancelled" })
               }
+              onResendInstruction={assistant.resendInstruction}
+              onNewConversation={assistant.newConversation}
               onPickFile={() => fileInputRef.current?.click()}
-              onDropFiles={(files) => void attachFiles(files)}
-              chatEndRef={chatEndRef}
+              onDropFiles={(files) => void assistant.attachFiles(files)}
+              chatEndRef={assistant.chatEndRef}
               inputRef={inputRef}
             />
           )}
@@ -2262,7 +1100,7 @@ export default function AdminPage() {
             />
           )}
           {tab === "analytics" && (
-            <AnalyticsTab apiFetch={fetchWithAdmin} onNavigate={selectAdminTab} onUnauthorized={markAdminLocked} />
+            <AnalyticsTab apiFetch={fetchWithAdmin} onNavigate={selectAdminTab} onUnauthorized={markAdminLocked} onAskAssistant={askAiWith} />
           )}
           {tab === "flow" && (
             <FlowBuilderTab
@@ -2306,6 +1144,7 @@ export default function AdminPage() {
               onAskAi={askAiAboutTrip}
             />
           )}
+          {tab === "catalogue" && <CatalogueTab apiFetch={fetchWithAdmin} />}
           {tab === "json" && (
             <JsonEditorTab
               apiFetch={fetchWithAdmin}
@@ -2325,67 +1164,21 @@ export default function AdminPage() {
         className="hidden"
         onChange={(e) => {
           const files = e.target.files;
-          if (files?.length) void attachFiles(files);
+          if (files?.length) void assistant.attachFiles(files);
           e.target.value = "";
         }}
       />
       {/* Trip edit / create modal */}
       <TripEditModal
-        open={tripModalOpen}
-        isNewTrip={isNewTrip}
-        editingTrip={editingTrip}
-        tripDraft={tripDraft}
-        setTripDraft={setTripDraft}
-        tripPhotoUrls={tripPhotoUrls}
-        setTripPhotoUrls={setTripPhotoUrls}
-        tripPhotoInput={tripPhotoInput}
-        setTripPhotoInput={setTripPhotoInput}
-        photoDragging={photoDragging}
-        setPhotoDragging={setPhotoDragging}
-        photoUploading={photoUploading}
-        photoFileInputRef={photoFileInputRef}
-        saveDisabled={photoUploading.length > 0}
+        {...tripEditor.modalProps}
         busyKey={busyKey}
-        handlePhotoFiles={handlePhotoFiles}
         apiFetch={fetchWithAdmin}
-        onClose={closeTripModal}
-        onSave={(confirmIncomplete) => void saveTrip(confirmIncomplete)}
-        tripAliases={tripAliases}
-        setTripAliases={setTripAliases}
-        tripPriceGroups={tripPriceGroups}
-        setTripPriceGroups={setTripPriceGroups}
-        tripDiscounts={tripDiscounts}
-        setTripDiscounts={setTripDiscounts}
-        tripExtraFees={tripExtraFees}
-        setTripExtraFees={setTripExtraFees}
-        tripDepartureRule={tripDepartureRule}
-        setTripDepartureRule={setTripDepartureRule}
-        tripIncludedItems={tripIncludedItems}
-        setTripIncludedItems={setTripIncludedItems}
-        tripExcludedItems={tripExcludedItems}
-        setTripExcludedItems={setTripExcludedItems}
-        tripRoomPrices={tripRoomPrices}
-        setTripRoomPrices={setTripRoomPrices}
-        tripItineraryDays={tripItineraryDays}
-        setTripItineraryDays={setTripItineraryDays}
-        tripImportantNotes={tripImportantNotes}
-        setTripImportantNotes={setTripImportantNotes}
-        tripBookingTerms={tripBookingTerms}
-        setTripBookingTerms={setTripBookingTerms}
-        tripCustomerVisible={tripCustomerVisible}
-        setTripCustomerVisible={setTripCustomerVisible}
-        tripNeedsHumanReview={tripNeedsHumanReview}
-        setTripNeedsHumanReview={setTripNeedsHumanReview}
-        tripReviewReasons={tripReviewReasons}
-        setTripReviewReasons={setTripReviewReasons}
-        tripSourceProvenance={tripSourceProvenance}
-        tripAnswerHints={tripAnswerHints}
-        setTripAnswerHints={setTripAnswerHints}
         onAskAi={(tripName) => {
           closeTripModal();
           askAiAboutTrip(tripName);
         }}
       />
+      <NewVersionBanner />
       <AdminConfirmModals
         deletingTrip={deletingTrip}
         deleteBusy={busyKey.startsWith("delete-trip-")}
@@ -2413,45 +1206,7 @@ export default function AdminPage() {
           );
         }}
       />
-      <Modal
-        open={photoReplaceConfirm != null}
-        onClose={() => setPhotoReplaceConfirm(null)}
-        title="Хуучин зургуудыг устгах уу?"
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-ink-muted">
-            Энэ аялалд <span className="font-semibold text-ink">{tripPhotoUrls.length}</span> зураг байна.
-            Шинэ {photoReplaceConfirm?.files.length ?? 0} зурган дээр нэмэх үү, эсвэл хуучныг устгаад солих уу?
-          </p>
-          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-            <Button variant="secondary" onClick={() => setPhotoReplaceConfirm(null)}>
-              Болих
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                const files = photoReplaceConfirm?.files ?? [];
-                setPhotoReplaceConfirm(null);
-                void doUploadPhotoFiles(files, false);
-              }}
-            >
-              <Icons.plus size={15} />
-              Нэмэх
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                const files = photoReplaceConfirm?.files ?? [];
-                setPhotoReplaceConfirm(null);
-                void doUploadPhotoFiles(files, true);
-              }}
-            >
-              <Icons.trash size={15} />
-              Хуучныг устгаад солих
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      {tripEditor.photoReplaceModal}
     </div>
   );
 }

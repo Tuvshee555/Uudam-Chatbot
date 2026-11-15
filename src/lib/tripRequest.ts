@@ -62,22 +62,46 @@ export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
 function parsePassengerText(text: string): { passengers: RequestedPassenger[]; unsupported: boolean } {
   const result: RequestedPassenger[] = [];
   let unsupported = false;
-  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?|(?:хүн|hun|hvn)(?!\p{L}))/giu)) {
+  // "2 om" is "2 tom" with its first letter lost (typed on a phone); only right after a count.
+  // "2 хүн явна" (two people): adult fares; ten or more is a group for staff (below).
+  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|tom(?![\p{L}])|om(?![\p{L}])|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?|(?:хүн|hun|hvn)(?!\p{L}))/giu)) {
     const kind = /нярай|nyarai|infant/i.test(match[2]) ? "infant" : /хүүхэд|huuhed|child/i.test(match[2]) ? "child" : "adult";
     const count = Number(match[1]);
     // "2 хүн явна" (two people): adult fares, as a consultant quotes them. Ten or more is a
     // group whose total and discount staff work out (the group reply), so it is left unread.
-    if (/^(?:хүн|hun|hvn)$/i.test(match[2]) && !(Number.isInteger(count) && count >= 1 && count < 10)) continue;
+    if (/^(?:хүн|hun|hvn)$/i.test(match[2]) && (!(Number.isInteger(count) && count >= 1 && count < 10)
+      // "5 хүн: 2 том хүн, 3 хүүхэд" states the party twice: "N хүн" counts only when nothing else is named.
+      || /том|adult|tom|хүүх|huuhe|child|нярай|nyarai|infant|нас|nas|сартай/iu.test(text.replace(match[0], "")))) continue;
     if (!Number.isInteger(count) || count < 1 || count > 100) unsupported = true;
     else result.push({ kind, count });
+  }
+  // "том хүн 2, хүүхэд 2": the count after the word. Never an age ("хүүхэд 5 настай", "huuhed 4 ba 7
+  // nastai"), a date ("хүүхэд 12 сарын 30") or the count of the next word ("том 2 хүүхэд").
+  for (const match of text.matchAll(/(?<![\p{L}])(том\s*хүн|tom\s*hun|хүүхэд|huuhed|нярай|nyarai)\s*[:-]?\s*(\d{1,2})(?![\d./:]|,\d|\s*-?\s*(?:р\s|нас|nas|сар|sar|өдөр|udur|хоног|honog|шөнө|shunu|цаг|tsag|хүүх|huuh|том|tom|нярай|nyarai|хүн|hun)|\s*(?:,|ба|ba|болон|bolon|and)\s*\d)/giu)) {
+    const kind = /том|tom/i.test(match[1]) ? "adult" : /нярай|nyarai/i.test(match[1]) ? "infant" : "child";
+    const count = Number(match[2]);
+    if (count >= 1 && !result.some((row) => row.kind === kind)) result.push({ kind, count });
+  }
+  // "2 хүн, 2 хүүхэдтэй": people counted beside the children are the adults ("4 хүн, 2 нь хүүхэд" is not this).
+  const peopleAndChildren = /(?<![\d.,-])(\d{1,2})\s*(?:хүн|hun)\s*,?\s*(?:(?:ба|ba|болон|bolon|and)\s*)?\d{1,2}\s*(?:хүүх|huuh|нярай|nyarai)/iu.exec(text);
+  if (peopleAndChildren && !result.some((row) => row.kind === "adult") && !/(?:том|tom)\s*$/iu.test(text.slice(0, peopleAndChildren.index))) {
+    result.unshift({ kind: "adult", count: Number(peopleAndChildren[1]) });
   }
   const ages: Array<{ age: number; ageUnit: "year" | "month" }> = [];
   // "6 болон 2 насны 2 хүүхэдтэй" (Oct 24 shape): ages joined by "болон" and given as "насны"
   // were not read, so the family's children lost their ages.
-  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:\s*(?:[,/]|болон|ба|bolon|and)\s*\d+(?:\.\d+)?)*)\s*(настай|насны|нас(?!\p{L})|nas(?:tai|nii|ny)?(?!\p{L})|years?\s*old|сартай|months?\s*old)/giu)) {
-    const parts = match[1].split(/\s*(?:[,/]|болон|ба|bolon|and)\s*/iu);
+  // A list may also be separated by spaces only ("2 хүүхэд 4 7 настай", "3 huuhed 4 7 10 nastai", live
+  // 2026-11-12: the ages were dropped and the bot asked how many adults, with no child fare). It is read as
+  // ages only when its length equals the stated number of children, the one reading that cannot be wrong;
+  // otherwise only the last number is the age, as before.
+  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:(?:\s*(?:[,/]|болон|ба|bolon|ba|and)\s*|\s+)\d+(?:\.\d+)?)*)\s*(настай|насны|нас(?!\p{L})|nas(?:tai|nii|ny)?(?!\p{L})|years?\s*old|сартай|months?\s*old)/giu)) {
+    let parts = match[1].split(/\s*(?:[,/]|болон|ба|bolon|ba|and)\s*|\s+/iu);
     // An unspaced comma may mean a decimal age. Do not guess without a count.
     const childCount = result.filter((row) => row.kind !== "adult").reduce((sum, row) => sum + row.count, 0);
+    // ...and every number must be a possible age: a phone number or a year typed just before the age word ("утас
+    // 99112233 5 настай", "2026 5 настай") is not part of the list.
+    if (parts.length > 1 && !/[,/]|болон|ба|bolon|ba|and/iu.test(match[1])
+      && (childCount !== parts.length || parts.some((part) => !(Number(part) >= 0 && Number(part) <= 120)))) parts = [parts[parts.length - 1]];
     const hasCountedAdults = result.some(row => row.kind === "adult");
     const beforeAge = text.slice(0, match.index);
     const afterAge = text.slice((match.index || 0) + match[0].length);
@@ -325,26 +349,33 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   };
 }
 
-export function mergeTripSelection(tripId: string, request: TripRequest, previous: TripSelection | null): TripSelection {
+/**
+ * `carry`: what the customer stated before this trip (constraintLedger.ts) — the party and the window
+ * belong to the customer, not to one trip, so a trip that is new to the selection starts from them.
+ * Absent or null, the merge is exactly the selection's own.
+ */
+export function mergeTripSelection(tripId: string, request: TripRequest, previous: TripSelection | null,
+  carry?: { passengers: RequestedPassenger[]; dateScope: TripDateScope | null } | null): TripSelection {
   const same = previous?.tripId === tripId ? previous : null;
+  const party = same ?? (carry ? { passengers: carry.passengers, ...(carry.dateScope ? { dateScope: carry.dateScope } : {}) } : null);
   const suppliedKinds = new Set(request.passengers.map((passenger) => passenger.kind));
   // Several groups ("2 том хүн 1 хүүхэд") or "зөвхөн" restate the party. Adults are kept
   // with the earlier children when they complete a party of minors (the answer to "Хэдэн
   // том хүн явах вэ?") or the message says it changes one count ("Одоо 3 том хүн"); both
   // used to drop the children (live replay 2026-10-30). Otherwise adults restate it.
-  const previousHasAdults = Boolean(same?.passengers.some((passenger) => passenger.kind === "adult"));
+  const previousHasAdults = Boolean(party?.passengers.some((passenger) => passenger.kind === "adult"));
   const keepsOthers = !request.passengersExclusive && (!suppliedKinds.has("adult")
     || (request.passengers.length === 1 && (Boolean(request.passengersUpdate) || !previousHasAdults)));
   // Routing and the answer plan both merge the same turn: a selection that already holds
   // this single update is that merge, not an earlier party to restate.
-  const alreadyMerged = request.passengers.length === 1 && !request.passengersExclusive && Boolean(same?.passengers.some((passenger) =>
+  const alreadyMerged = request.passengers.length === 1 && !request.passengersExclusive && Boolean(party?.passengers.some((passenger) =>
     passenger.kind === request.passengers[0].kind && passenger.count === request.passengers[0].count && passenger.age === request.passengers[0].age));
   let passengers = request.passengers.length
-    ? alreadyMerged ? same!.passengers
+    ? alreadyMerged ? party!.passengers
     : keepsOthers
-      ? [...(same?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
+      ? [...(party?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
       : request.passengers
-    : same?.passengers || [];
+    : party?.passengers || [];
   // An answer to the child-age question refines the existing people even if
   // the supplied age moves them into another fare category.
   if (same && request.passengerAgeFollowup && request.passengers.length && request.passengers.every(passenger => passenger.age !== undefined)) {
@@ -369,7 +400,7 @@ export function mergeTripSelection(tripId: string, request: TripRequest, previou
     }
   }
   const dateScope = request.date ? undefined : request.range || request.month || request.year || request.dates
-    ? { month: request.month, year: request.year, range: request.range || null, ...(request.dates ? { dates: request.dates } : {}) } : same?.dateScope;
+    ? { month: request.month, year: request.year, range: request.range || null, ...(request.dates ? { dates: request.dates } : {}) } : party?.dateScope;
   return {
     tripId, date: request.date || (request.range || request.dates && same?.date && !request.dates.includes(same.date) || request.month && same?.date
       && (Number(same.date.slice(5, 7)) !== request.month || request.year && Number(same.date.slice(0, 4)) !== request.year)

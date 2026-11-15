@@ -371,13 +371,6 @@ const CRM_STATUS_TONES: Record<LeadCrmStatus, "neutral" | "warning" | "success" 
   no_answer: "danger",
 };
 
-// Whether staff were pinged for the lead (Telegram), as recorded by staffAlerts.ts.
-const NOTIFY_BADGES: Record<string, { tone: "success" | "danger" | "warning"; label: string }> = {
-  sent: { tone: "success", label: "Ажилтанд мэдэгдсэн" },
-  failed: { tone: "danger", label: "Мэдэгдэл очоогүй" },
-  no_channel: { tone: "warning", label: "Мэдэгдэх суваг алга" },
-};
-
 // Who stopped the bot for this customer and when: a consultant's Messenger reply (phone app or
 // Business Suite on a computer) or "Би хариулна" here.
 const TAKEOVER_SOURCES: Record<string, string> = { staff_mobile: "утаснаас", staff_web: "компьютерээс" };
@@ -408,7 +401,6 @@ function LeadCard({
   // The bot's own marker after a booking request does not stop it; a person's pause does.
   const humanOwned = Boolean(lead.bot_paused) && lead.bot_pause_reason !== "booked_customer";
   const [assignee, setAssignee] = useState(lead.assigned_to ?? "");
-  const notifyBadge = NOTIFY_BADGES[lead.notify_status ?? ""];
   const isNew = lead.status === "new";
   const isBooking = lead.kind === "booking";
   const channel = lead.platform === "instagram" ? "Instagram" : "Facebook";
@@ -434,7 +426,6 @@ function LeadCard({
           </Badge>
           <span className="text-xs text-ink-muted">{channel}</span>
           {isNew && <Badge tone="brand">Үзээгүй</Badge>}
-          {notifyBadge && <Badge tone={notifyBadge.tone}>{notifyBadge.label}</Badge>}
           {lead.assigned_to && <Badge tone="success">Хариуцагч: {lead.assigned_to}</Badge>}
           {humanOwned && <Badge tone="warning">{takeoverLabel(lead)}</Badge>}
         </div>

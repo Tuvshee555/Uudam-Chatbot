@@ -9,6 +9,14 @@ const ADMIN_SECURITY_HEADERS = [
   { key: "X-Robots-Tag", value: "noindex, nofollow" },
 ];
 
+const CATALOGUE_RENDER_FILES = [
+  "./public/fonts/*.ttf",
+  "./public/poster/uudam-logo.jpg",
+  "./node_modules/@sparticuz/chromium/bin/**",
+  "./node_modules/playwright-core/browsers.json",
+  "./node_modules/playwright-core/package.json",
+];
+
 const nextConfig: NextConfig = {
   async headers() {
     return [
@@ -22,8 +30,16 @@ const nextConfig: NextConfig = {
   devIndicators: { position: "bottom-right" },
   // Poster extraction uses these node-only libs on the server; keep them out of
   // the bundle so their dynamic/subpath imports resolve at runtime.
-  serverExternalPackages: ["pdf-parse", "mammoth", "pdf-lib", "jpeg-js", "@sparticuz/chromium", "playwright-core"],
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist", "mammoth", "pdf-lib", "jpeg-js", "@sparticuz/chromium", "playwright-core"],
   outputFileTracingIncludes: {
+    // Corporate catalogue renderer (src/lib/catalogue/render): fonts, the repo-approved logo and the
+    // headless Chromium it prints with, for every admin route that can render a PDF.
+    "/api/admin/catalogue/generate": CATALOGUE_RENDER_FILES,
+    "/api/cron/catalogue-refresh": CATALOGUE_RENDER_FILES,
+    "/api/admin/catalogue/preview": CATALOGUE_RENDER_FILES,
+    "/api/admin/catalogue/preview-sample": CATALOGUE_RENDER_FILES,
+    // The readiness checklist only checks that the fonts and the logo exist (no browser is started).
+    "/api/admin/catalogue/state": ["./public/fonts/*.ttf", "./public/poster/uudam-logo.jpg"],
     "/api/poster-pdf": [
       "./src/styles/poster.css",
       "./public/fonts/*.ttf",

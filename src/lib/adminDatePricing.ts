@@ -39,6 +39,16 @@ export function pricingDates(group: PricingGroup, at?: Date | number): string[] 
   return iso.length ? iso : [...new Set((Array.isArray(group.dates) ? group.dates : []).map(String).filter(Boolean))];
 }
 
+/**
+ * The row's departures as calendar days (YYYY-MM-DD) whatever spelling it stores: a poster
+ * row saved as "2026 оны 12 сарын 02" has no ISO key, and pricingDates returns that text as it
+ * is. Used where a date must be matched exactly (the assistant's per-date edits).
+ */
+export function pricingDays(group: PricingGroup, at?: Date): string[] {
+  const now = at instanceof Date ? at : new Date();
+  return [...new Set(pricingDates(group, now).flatMap((value) => (/^\d{4}-\d{2}-\d{2}$/.test(value) ? [value] : nearestOccurrenceOfYearless(value, now))))].sort();
+}
+
 export function pricingDateRows(groups: readonly PricingGroup[]): PricingDateRow[] {
   return groups.flatMap((group, groupIndex) => {
     const dates = pricingDates(group);
@@ -47,10 +57,12 @@ export function pricingDateRows(groups: readonly PricingGroup[]): PricingDateRow
 }
 
 // Editing one date must not change the other departures that shared its old fare.
-export function patchPricingDate<T extends PricingGroup>(groups: readonly T[], row: PricingDateRow, patch: Partial<T>): T[] {
+// `now` reads a yearless row on the same day the caller read it (the assistant's server-side
+// per-date price edit passes its own clock; the browser editor uses today).
+export function patchPricingDate<T extends PricingGroup>(groups: readonly T[], row: PricingDateRow, patch: Partial<T>, now?: Date): T[] {
   const group = groups[row.groupIndex];
   if (!group) return [...groups];
-  const dates = pricingDates(group);
+  const dates = pricingDates(group, now);
   if (dates.length < 2 || !row.date) {
     return groups.map((value, index) => index === row.groupIndex ? { ...value, ...patch } : value);
   }

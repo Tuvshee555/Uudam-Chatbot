@@ -21,11 +21,11 @@ test("conflicting copy retains both values for individual review", () => {
 });
 
 test("unmapped website fields and existing canonical seat counts are inventoried", () => {
-  const web = { ...website, requirements: "Passport", hotelMedia: [{ url: "photo" }], weather: { city: "Sanya" } };
+  const web = { ...website, requirements: "Passport", hotelMedia: [{ url: "photo" }], weather: { city: "Tavrin" } };
   const chatbot = { ...websiteTripToCanonicalFields(web).fields, seats_total: 20, seats_left: 8 };
   const audit = auditTripPair(web, chatbot);
   assert.equal(audit.websiteSeparateValues.requirements, "Passport");
-  assert.deepEqual(audit.websiteSeparateValues.weather, { city: "Sanya" });
+  assert.deepEqual(audit.websiteSeparateValues.weather, { city: "Tavrin" });
   assert.equal(audit.canonicalSeatCountsPresent, true);
   assert.equal('websiteSaveResetsCanonicalSeats' in audit, false);
 });

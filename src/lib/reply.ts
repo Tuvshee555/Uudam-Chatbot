@@ -1,5 +1,6 @@
 import type { TravelTrip } from "./travelTypes";
 import { parseDepartureDateText } from "./travelDates";
+import { withoutHolidaySpans } from "./holidayCalendar";
 import { mentionedOfferHotel, quotablePrices, tripBookingFacts, tripSupportsDate } from "./tripFacts";
 
 const WEBSITE_URL = "";
@@ -60,6 +61,28 @@ export const AI_OUTAGE_HANDOFF_REPLY =
 export function buildHandoffAcknowledgement(options: { aiOutage?: boolean } = {}) {
   return options.aiOutage ? AI_OUTAGE_HANDOFF_REPLY : NO_DATA_HANDOFF_REPLY;
 }
+
+/**
+ * An organisation, a team or a group of colleagues asking for travel, or a customer asking for a
+ * route / quote outside the standard programmes (needDispatch.ts). Only what the company itself
+ * publishes on its custom-trip page: trips on the customer's own dates exist for family, friends and
+ * colleagues; staff prepare a programme and a price offer once the customer gives the destination,
+ * approximate dates and number of travellers; a booking is confirmed only after the terms are agreed.
+ * It must never mention a discount, free seats, barter or a guaranteed price: none of that is data.
+ */
+export const GROUP_INQUIRY_REPLY =
+  "Манайд гэр бүл, найз нөхөд, хамт олны хүссэн өдрөөр тусгай аялал зохион байгуулах боломж бий. Та чиглэл, ойролцоо огноо, аялагчдын тоогоо хэлбэл аяллын зөвлөх хөтөлбөр, үнийн санал бэлтгэнэ. Захиалга нь нөхцөл тохирсны дараа баталгаажна.";
+
+/** Added only after the staff lead was saved: it states a fact that is then true. */
+export const GROUP_INQUIRY_HANDOFF_LINE = "Таны хүсэлтийг аяллын зөвлөхөд дамжууллаа.";
+
+/** The ONE detail asked next, in this order of usefulness; never all of them at once. */
+export const GROUP_INQUIRY_QUESTIONS = {
+  groupSize: "Нийт хэдэн хүн явах вэ?",
+  destination: "Аль чиглэлд явахыг хүсэж байна вэ?",
+  month: "Аль сард явахыг хүсэж байна вэ?",
+  budget: "Нэг хүнд ногдох төсөв хэд орчим вэ?",
+} as const;
 
 const PAYMENT_LEAK_PATTERNS: RegExp[] = [
   /\/register/i,
@@ -207,6 +230,27 @@ export function guardInventedBookingTerms(
   return invented ? "REFER" : reply;
 }
 
+// Commercial terms are company policy, not something a model may infer: a reply may state a
+// discount, a group price, barter or a contract / corporate benefit only when the trip data or the
+// configured settings (discount_policies, special_offers, faq) hold it. A real reply on 2026-11-05
+// answered "Тийм. 40-45 хүнтэй группт тусгай хямдрал санал болгодог" with every one of those empty.
+const COMMERCIAL_CLAIM_TOPICS: Array<{ reply: RegExp; fact: RegExp }> = [
+  { reply: /хямдр|хөнгөлөлт|урамшуул|hongolt|discount|promotion|\bpromo\b|2\+1|5\+1/iu, fact: /хямдр|хөнгөлөлт|урамшуул|discount|promo|2\+1|5\+1|bonus|бонус|үнэгүй/iu },
+  { reply: /групп\p{L}*\s+(?:үнэ|тариф|нөхцөл)|group\s+(?:price|rate|terms)|хамт\s*олн\p{L}*\s+(?:үнэ|тариф|нөхцөл)|тусгай\s+үнэ/iu, fact: /групп|group|хамт\s*олон|тусгай\s+үнэ/iu },
+  { reply: /бартер|barter/iu, fact: /бартер|barter/iu },
+  { reply: /байгууллагын\s+(?:гэрээ|үнэ|хөнгөл|хямдр)|корпорат|corporate|нэхэмжлэ[хл]|гэрээгээр/iu, fact: /байгууллагын\s+(?:гэрээ|үнэ|хөнгөл|хямдр)|корпорат|corporate|нэхэмжлэ[хл]|гэрээгээр/iu },
+];
+
+/**
+ * `commercialFacts` is the text a reply may rely on for commercial terms (commercialFacts.ts: the
+ * candidate trips' own notes and discount data, plus the configured offers, policies and FAQ). A
+ * claim the facts do not contain becomes REFER: staff answer it, the bot does not invent policy.
+ */
+export function guardInventedCommercialClaims(reply: string, commercialFacts: string): string {
+  const invented = COMMERCIAL_CLAIM_TOPICS.some((topic) => topic.reply.test(reply) && !topic.fact.test(commercialFacts));
+  return invented ? "REFER" : reply;
+}
+
 // A tugrik figure in a reply: "3,490,000₮", "3.490.000 ₮", "3490000 төгрөг".
 // No trailing \b: "₮" is not a "word" character to JS regex, so \b right
 // after it never matches when followed by punctuation or end-of-string
@@ -214,6 +258,23 @@ export function guardInventedBookingTerms(
 const TUGRIK_AMOUNT_RE = /(\d{1,3}(?:[.,]\d{3}){1,4}|\d{4,})\s*(?:₮|төгрөг|tugrik|mnt)(?![\p{L}])/giu;
 
 /** Exact names scope a reply section; an embedded shorter name is not a second trip. */
+/**
+ * The line without the trips' own names and their own departure texts, for reading dates out of it. A
+ * date inside a trip's name («… - 2026-12-15-с өмнөх өдрүүдэд хамт олны захиалга авна») or inside its
+ * departure rule («12/15-аас өмнөх өдрүүдэд хамт олны захиалгаар») is the operator's own wording, not a
+ * departure the reply claims: read as one, every answer about such a trip was silenced (2026-11-11).
+ */
+export function withoutOwnTripWords(line: string, trips: TravelTrip[]): string {
+  let rest = line.normalize("NFKC");
+  const own = trips.flatMap((trip) => [trip.route_name, ...(trip.departure_dates || []).filter((date) => !/^\d{4}-\d{2}-\d{2}$/.test(String(date)))])
+    .map((text) => String(text || "").trim().normalize("NFKC")).filter((text) => text.length >= 8).sort((a, b) => b.length - a.length);
+  for (const text of own) {
+    const at = rest.toLowerCase().indexOf(text.toLowerCase());
+    if (at >= 0) rest = `${rest.slice(0, at)} ${rest.slice(at + text.length)}`;
+  }
+  return rest;
+}
+
 export function replySectionTrips(line: string, trips: TravelTrip[]): TravelTrip[] {
   let remaining = line.normalize("NFKC").toLowerCase();
   const named: TravelTrip[] = [];
@@ -250,7 +311,7 @@ export function guardUnverifiedPrices(
 ): string {
   if (candidateTrips.length === 0) return reply;
   const lines = reply.split(/\r?\n/);
-  const allReplyDates = parseDepartureDateText(reply, now);
+  const allReplyDates = parseDepartureDateText(withoutOwnTripWords(reply, candidateTrips), now);
   let activeDates = allReplyDates.length === 1 ? allReplyDates : [];
   let activeTrips = candidateTrips;
   const activeHotels = new Map<string, string>();
@@ -263,12 +324,12 @@ export function guardUnverifiedPrices(
       const sectionDates = new Set<string>();
       for (let next = index; next < lines.length; next++) {
         if (next > index && replySectionTrips(lines[next], candidateTrips).length) break;
-        for (const date of parseDepartureDateText(lines[next], now)) sectionDates.add(date);
+        for (const date of parseDepartureDateText(withoutOwnTripWords(lines[next], candidateTrips), now)) sectionDates.add(date);
       }
       activeDates = sectionDates.size === 1 ? [...sectionDates] : [];
       activeHotels.clear();
     }
-    const lineDates = parseDepartureDateText(line, now);
+    const lineDates = parseDepartureDateText(withoutOwnTripWords(line, candidateTrips), now);
     if (lineDates.length > 0) activeDates = lineDates;
     for (const trip of activeTrips) {
       const hotel = mentionedOfferHotel(trip, line, now);
@@ -315,10 +376,10 @@ export function guardUnverifiedDates(
   if (candidateTrips.length === 0) return reply;
   if (!DATE_CLAIM_WORDS.test(reply)) return reply;
   let activeTrips = candidateTrips;
-  for (const line of reply.split(/\r?\n/)) {
+  for (const line of withoutHolidaySpans(reply).split(/\r?\n/)) {
     const named = replySectionTrips(line, candidateTrips);
     if (named.length) activeTrips = named;
-    const dates = parseDepartureDateText(line, now);
+    const dates = parseDepartureDateText(withoutOwnTripWords(line, candidateTrips), now);
     if (dates.length === 0) continue;
     // A truthful denial may repeat a date that is absent from the schedule.
     if (/байхгүй|алга|гарахгүй|хуваарьгүй/i.test(line)) continue;
@@ -507,6 +568,14 @@ function isGreetingBlock(text: string) {
   return /^(?:сайн\s+байна(?:\s+уу)?|сайн\s+уу|тавтай\s+морил(?:но\s+уу)?|hello|hi)(?:[\s!,.?…:;]|\p{Extended_Pictographic}|\p{Emoji_Modifier}|\uFE0F|\u200D)*$/iu.test(text.trim());
 }
 
+/**
+ * What sanitizeAssistantReply returns when nothing is left of a reply. It is never meant to reach a
+ * customer: every exit treats it as no data (NO_DATA_REPLY_PATTERNS → silence + a staff lead), and
+ * an answer plan whose text came out empty is a hand-off (tripAnswerDecision.ts). Before 2026-11-12
+ * that plan path sent it as an answer ("Үнэ" → this line, nine times in a week, with no lead).
+ */
+export const EMPTY_REPLY_FALLBACK = "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+
 export function sanitizeAssistantReply(text: string) {
   // URLs can contain underscores, control words and case-sensitive signatures.
   // Keep them outside prose cleanup, including internal-vocabulary replacement.
@@ -521,7 +590,7 @@ export function sanitizeAssistantReply(text: string) {
     .replace(/\bContext\b/gi, "аяллын мэдээлэл");
   const cleaned = normalizeWhitespace(stripScoldingRepeatPhrases(stripControlTokens(stripMarkdown(stripLeakedPlaceholders(withoutInternalVocabulary)))))
     .replace(new RegExp(`${urlPrefix}(\\d+)END`, "g"), (_, index: string) => urls[Number(index)]);
-  if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+  if (!cleaned) return EMPTY_REPLY_FALLBACK;
 
   // Split on blank lines (paragraph breaks) — preserve them so the AI's
   // line-by-line trip details format (price on one line, date on next, etc.)
@@ -542,7 +611,7 @@ export function sanitizeAssistantReply(text: string) {
     // within their own block only; everything else across the whole reply.
     // The same holds for a section's own headings: a second "Буудал: …" or
     // "11 сарын 4-ний гаралт" deleted from a later section left its fares under
-    // the previous hotel (Санья, 2026-10-16).
+    // the previous hotel (a partner trip, 2026-10-16).
     const seenPriceLinesInBlock = new Set<string>();
     for (const line of lines) {
       const norm = /https?:\/\//i.test(line) ? line.trim() : normalizeForCompare(line);
@@ -562,7 +631,7 @@ export function sanitizeAssistantReply(text: string) {
     }
   }
 
-  return dedupedBlocks.join("\n\n").trim() || "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+  return dedupedBlocks.join("\n\n").trim() || EMPTY_REPLY_FALLBACK;
 }
 
 export function stripRepeatedGreeting(replyText: string, hasPriorAssistantReply: boolean) {

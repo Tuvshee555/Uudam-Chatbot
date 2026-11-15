@@ -141,7 +141,8 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_ai_change_requests
           ADD COLUMN IF NOT EXISTS rollback_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-          ADD COLUMN IF NOT EXISTS reverted_at TIMESTAMPTZ NULL;
+          ADD COLUMN IF NOT EXISTS reverted_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS applying_at TIMESTAMPTZ NULL;
       `);
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_bot_settings (
@@ -206,7 +207,8 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_leads
           ADD COLUMN IF NOT EXISTS lead_status TEXT NOT NULL DEFAULT 'new_lead';
       `);
-      // Whether staff were pinged for a lead (staffAlerts.ts) and who took it (Leads tab).
+      // Who took a lead (Leads tab). The notify_* columns are kept only so existing rows and
+      // the idempotent ALTER stay valid; nothing writes or reads them any more.
       await client.query(`
         ALTER TABLE travel_leads
           ADD COLUMN IF NOT EXISTS notify_status TEXT NOT NULL DEFAULT '',
@@ -470,20 +472,6 @@ export async function ensureTravelSchema() {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_outbound_messages_created ON travel_outbound_messages (created_at);
       `);
-      // When a consultant last replied in the Messenger thread (staffTakeover.ts).
-      await client.query(`
-        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS last_staff_reply_at TIMESTAMPTZ NULL;
-      `);
-      // When staff last handed the conversation back to the bot ("Ботод буцаах"): consultant
-      // messages at or before this do not take the conversation over again (staffTakeover.ts).
-      await client.query(`
-        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS bot_released_at TIMESTAMPTZ NULL;
-      `);
-      // Which surface the consultant took the conversation over from ("staff_mobile" = the phone
-      // app, "staff_web" = Business Suite on a computer), set with last_staff_reply_at.
-      await client.query(`
-        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS takeover_source TEXT NOT NULL DEFAULT '';
-      `);
       // One row per message echo received during the Meta-app migration (echoObserver.ts):
       // who sent a Page message, by app id — the evidence for echo-based takeover. Shapes and
       // ids only; NEVER message text.
@@ -593,6 +581,45 @@ export async function ensureTravelSchema() {
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
           ON travel_senders (last_seen DESC);
       `);
+      // These columns were added after the table existed in production; on a fresh database
+      // they must follow its CREATE (2026-11-04: a new database failed here, and every trip read
+      // then returned nothing).
+      // When a consultant last replied in the Messenger thread (staffTakeover.ts).
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS last_staff_reply_at TIMESTAMPTZ NULL;
+      `);
+      // When staff last handed the conversation back to the bot ("Ботод буцаах"): consultant
+      // messages at or before this do not take the conversation over again (staffTakeover.ts).
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS bot_released_at TIMESTAMPTZ NULL;
+      `);
+      // Which surface the consultant took the conversation over from ("staff_mobile" = the phone
+      // app, "staff_web" = Business Suite on a computer), set with last_staff_reply_at.
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS takeover_source TEXT NOT NULL DEFAULT '';
+      `);
+      // The one follow-up question after a customer leaves the bot's answer on seen (followUp.ts):
+      // what the last answer armed and when ('' = nothing armed), and when one was last sent.
+      await client.query(`
+        ALTER TABLE travel_senders
+          ADD COLUMN IF NOT EXISTS follow_up_slot     TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS follow_up_question TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS follow_up_armed_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS follow_up_sent_at  TIMESTAMPTZ NULL;
+      `);
+      // The one message after a «Get Started» tap nobody followed (getStartedNudge.ts): when the last tap was
+      // handled (sent or ruled out). A later tap (get_started_at newer than this) is handled again.
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS get_started_nudge_at TIMESTAMPTZ NULL;
+      `);
+      // One row: when the sweeps last ran from customer traffic (trafficSweep.ts), so they run once per few minutes.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_sweep_lock (id INT PRIMARY KEY, last_run_at TIMESTAMPTZ NOT NULL);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_senders_follow_up
+          ON travel_senders (follow_up_armed_at) WHERE follow_up_slot <> '';
+      `);
       // Model spend per day, environment, model and call site (aiUsage.ts): production and
       // testing are always counted apart.
       await client.query(`
@@ -608,6 +635,11 @@ export async function ensureTravelSchema() {
           updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (day, environment, model, source)
         );
+      `);
+      // Input tokens OpenAI served from its prompt cache, billed at a fraction of the price.
+      await client.query(`
+        ALTER TABLE travel_ai_usage
+          ADD COLUMN IF NOT EXISTS cached_tokens BIGINT NOT NULL DEFAULT 0;
       `);
       return true;
     });

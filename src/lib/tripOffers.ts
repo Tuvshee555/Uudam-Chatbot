@@ -1,5 +1,6 @@
 import { nearestOccurrenceOfYearless, parseTripDepartureDateText } from "./travelDates";
 import { customerDate } from "./customerDate";
+import { labelWithoutAge, passengerLabelCondition } from "./passengerCondition";
 import type { TravelTrip } from "./travelTypes";
 
 export type PassengerKind = "adult" | "child" | "infant";
@@ -32,6 +33,8 @@ export type OfferAgeBand =
 export type NormalizedPassengerFare = {
   kind: PassengerKind;
   ageRange: string | null;
+  /** What a passenger label states when it has no age_range: a height ("1,2–1,4 м") or a bed ("оргүй"). */
+  condition: string | null;
   ageBand: OfferAgeBand | null;
   fare: OfferFare;
   currency: string;
@@ -70,6 +73,7 @@ export type ResolvedPassengerPrice = {
   lineTotal: OfferFare;
   sourceOfferId: string;
   ageRange: string | null;
+  condition: string | null;
 };
 export type ResolvedTripOffer = {
   id: string;
@@ -239,6 +243,29 @@ function offerDates(raw: Row, trip: TravelTrip, now: Date): { dates: string[]; d
   return { dates: dropYearCopies(trip, now, unique(dates), everListedDates(trip, catalog)).sort(), dateScoped: dated, issues: unique(issues) };
 }
 
+/**
+ * The words a date, schedule or price-column label is made of: "7 сарын 10", "Баасан гариг
+ * болгон", "Пүрэв, Ням гариг", "1-р сарын үнэ", and the poster table's header "Үнэ" / "Үнийн
+ * мэдээлэл" written into a row's label. Whole words only, so a package name keeps its letters.
+ */
+const DATE_LABEL_WORD = /^(?:\d+[\p{L}]*|р|ны|ний|нд|оны|он|сар|сарын|сард|өдөр|өдрийн|бүр|болгон|гараг|гарагт|гариг|гаригт|гарагийн|гаригийн|даваа|мягмар|лхагва|пүрэв|баасан|бямба|ням|үнэ|үнийн|мэдээлэл|гарах|гаралт|price|prices)$/u;
+
+/**
+ * The package a price row's label names when the import wrote no package_id: "Онгоцны тийзтэй
+ * үнэ" beside "Онгоцны тийзгүй үнэ" are two packages of one trip, not two dates. A label that is
+ * dates or a schedule ("7 сарын 10", "Баасан гараг бүр") or only the poster's column header
+ * ("Үнэ") names none. Unmodelled, such rows had no card of their own: the trip card fell back to
+ * reading raw fields.
+ */
+export function priceRowPackageLabel(raw: Row, now: Date): string | null {
+  const label = str(raw.label);
+  if (!label) return null;
+  // Drop the words a date label is made of; letters left over are a package name.
+  const rest = label.normalize("NFKC").toLocaleLowerCase().split(/[\s,./–—\-·:;()]+/u)
+    .filter((word) => word && !DATE_LABEL_WORD.test(word)).join("");
+  return rest.replace(/[^\p{L}]/gu, "").length > 2 && parseTripDepartureDateText(label, now).length === 0 ? label : null;
+}
+
 /** Inclusive completed ages: 2-11 years covers months 24 through 143. */
 function ageBand(text: string): OfferAgeBand | null {
   const value = text.toLowerCase();
@@ -247,9 +274,12 @@ function ageBand(text: string): OfferAgeBand | null {
   const factor = /сар|month/.test(value) ? 1 : 12;
   const range = /(?:^|\D)(\d{1,3})\s*[-\u2013\u2014]\s*(\d{1,3})(?!\d)/.exec(value);
   if (range) return Number(range[1]) <= Number(range[2]) ? { unit: "month", min: Number(range[1]) * factor, maxExclusive: (Number(range[2]) + 1) * factor } : null;
-  const plus = /(\d{1,3})\s*\+|(?:over|above)\s*(\d{1,3})|(\d{1,3})\s*(?:нас|сар)?\s*(?:дээш|болон дээш)/.exec(value);
+  // "12 дээш", and the way most partner pages write it, "12-оос дээш нас" / "2-оос доош" (the ablative
+  // ending between the number and the word). Unread, the whole trip's fare card was a contradiction
+  // and the bot quoted nothing (2026-11-11, three partner trips).
+  const plus = /(\d{1,3})\s*\+|(?:over|above)\s*(\d{1,3})|(\d{1,3})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(?:нас|сар)?\s*(?:дээш|болон дээш)/.exec(value);
   if (plus) return { unit: "month", min: Number(plus[1] || plus[2] || plus[3]) * factor, maxExclusive: null };
-  const under = /(?:under|below)\s*(\d{1,3})|(\d{1,3})\s*(?:нас|сар)?\s*(?:доош|хүртэл)/.exec(value);
+  const under = /(?:under|below)\s*(\d{1,3})|(\d{1,3})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(?:нас|сар)?\s*(?:доош|хүртэл)/.exec(value);
   if (under) return { unit: "month", min: 0, maxExclusive: (Number(under[1] || under[2]) + (value.includes("хүртэл") ? 1 : 0)) * factor };
   const single = /^(\d{1,3})\s*(?:нас|сар|years?|months?)$/.exec(value);
   return single ? { unit: "month", min: Number(single[1]) * factor, maxExclusive: (Number(single[1]) + 1) * factor } : null;
@@ -292,7 +322,10 @@ function fares(raw: Row, trip: TravelTrip, id: string, now: Date, base: boolean)
     if (kind === "adult" && band?.unit === "month" && band.maxExclusive !== null && band.maxExclusive <= 36) issues.push("passenger_category_age_conflict");
     const fare = money(data, (str(data.currency) || currency).toUpperCase(), kind || "child", scalar);
     if (fare.kind === "unknown" && fare.reason !== "fare_not_confirmed") issues.push(fare.reason);
-    result.push({ kind: kind || "child", ageRange: age || null, ageBand: band, fare, currency: (str(data.currency) || currency).toUpperCase(), sourceOfferId: id, priority, issues });
+    // A label with no age ("Хүүхэд 1,2–1,4 м өндөр") still names who the fare is for, and so does
+    // what a label says beside its age ("Хүүхэд 6-11 нас оргүй": the no-bed fare, not every 6-11).
+    const condition = !scalar && kind ? passengerLabelCondition(age ? labelWithoutAge(str(data.label)) : str(data.label), kind) : null;
+    result.push({ kind: kind || "child", ageRange: age || null, condition, ageBand: band, fare, currency: (str(data.currency) || currency).toUpperCase(), sourceOfferId: id, priority, issues });
   };
   for (const kind of KINDS) {
     const age = str(raw[`${kind}_age`]) || str(savedBands[kind]);
@@ -404,7 +437,7 @@ function computeTripOffers(trip: TravelTrip, now: Date): CanonicalTripOffer[] {
       // made ordinary date-specific prices look like "hotel picker" options.
       hotel: str(raw.hotel) || null,
       hotelId: str(raw.hotel_id) || null,
-      packageId: str(raw.package_id) || str(raw.package) || null,
+      packageId: str(raw.package_id) || str(raw.package) || (source === "price_group" ? priceRowPackageLabel(raw, now) : null) || null,
       currency: (str(raw.currency) || trip.currency || "MNT").toUpperCase(),
       fares: fares(raw, trip, id, now, source === "base"),
       supplementalFares: [
@@ -420,6 +453,14 @@ function computeTripOffers(trip: TravelTrip, now: Date): CanonicalTripOffer[] {
   });
 }
 
+/** "1,2–1,4 М" and "1.2-1.4 м" are one condition: case, spaces, dashes and decimal marks evened out. */
+export function conditionKey(condition: string | null): string {
+  return (condition || "").normalize("NFKC").toLocaleLowerCase().replace(/[‐-―−]/g, "-").replace(/(\d)[.,](\d)/g, "$1.$2").replace(/\s+/g, " ").trim();
+}
+/** Fares of one passenger that differ only by a stated condition (height, bed) at different prices. */
+function conditionsDecideFare(entries: NormalizedPassengerFare[]): boolean {
+  return unique(entries.map((f) => conditionKey(f.condition))).length > 1 && !entries.every((f) => sameFare(f.fare, entries[0].fare));
+}
 function needs(field: OfferSelectionField, reason: string, options: string[] = []): TripOfferResult {
   return { status: "needs_selection", reason, fields: [field], options: unique(options) };
 }
@@ -453,33 +494,40 @@ function covers(band: OfferAgeBand, passenger: PassengerSelection): boolean | nu
  * Active unconditional or explicitly confirmed discounts override regular fares.
  * Null/placeholder fields may inherit; an explicit unknown passenger band may not.
  */
-function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, displayOnly: boolean): TripOfferResult {
+function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, displayOnly: boolean, undated = false): TripOfferResult {
   if (selection.tripId && selection.tripId !== trip.id) return { status: "missing", reason: "trip_selection_mismatch" };
   const packageId = selection.packageId || selection.package;
   const offers = normalizeTripOffers(trip, now);
   const regular = offers.filter((o) => o.source !== "discount");
   const dates = unique(regular.flatMap((o) => o.dates)).sort();
-  let date = str(selection.date);
-  if (date && !validIso(date)) {
-    const parsed = parseTripDepartureDateText(date, now);
-    const matches = hasYear(date) ? parsed : unique(parsed.flatMap((d) => dates.filter((known) => known.slice(5) === d.slice(5))));
-    if (!matches.length) return { status: "missing", reason: "invalid_departure_date" };
-    if (matches.length > 1) return needs("date", "departure_year_required", matches);
-    date = matches[0];
+  // Undated (display only): the rows and base fares of a schedule with no calendar date
+  // ("Ням гараг бүр"); no departure is resolved, so no availability is either.
+  let date = undated ? "" : str(selection.date);
+  let baseAvailability: OfferAvailability = { status: "unknown", seatsLeft: null };
+  if (!undated) {
+    if (date && !validIso(date)) {
+      const parsed = parseTripDepartureDateText(date, now);
+      const matches = hasYear(date) ? parsed : unique(parsed.flatMap((d) => dates.filter((known) => known.slice(5) === d.slice(5))));
+      if (!matches.length) return { status: "missing", reason: "invalid_departure_date" };
+      if (matches.length > 1) return needs("date", "departure_year_required", matches);
+      date = matches[0];
+    }
+    if (!date) {
+      const future = displayOnly ? dates : dates.filter((d) => d >= today(now));
+      if (!dates.length) return { status: "missing", reason: "departure_date_missing" };
+      if (!future.length) return { status: "unavailable", reason: "departed", date: null };
+      if (future.length > 1) return needs("date", "departure_required", future);
+      date = future[0];
+    }
+    if (!displayOnly && date < today(now)) return { status: "unavailable", reason: "departed", date };
+    if (!dates.includes(date)) return { status: "unavailable", reason: "departure_not_offered", date };
+    baseAvailability = offers[0].availability.find((a) => a.date === date) || departureAvailability(trip, date, {}, now);
+    if (baseAvailability.status === "conflict") return conflict(["departure_availability_conflict"]);
+    if (!displayOnly && !["open", "unknown"].includes(baseAvailability.status)) return { status: "unavailable", reason: baseAvailability.status, date, availability: baseAvailability };
   }
-  if (!date) {
-    const future = displayOnly ? dates : dates.filter((d) => d >= today(now));
-    if (!dates.length) return { status: "missing", reason: "departure_date_missing" };
-    if (!future.length) return { status: "unavailable", reason: "departed", date: null };
-    if (future.length > 1) return needs("date", "departure_required", future);
-    date = future[0];
-  }
-  if (!displayOnly && date < today(now)) return { status: "unavailable", reason: "departed", date };
-  if (!dates.includes(date)) return { status: "unavailable", reason: "departure_not_offered", date };
-  const baseAvailability = offers[0].availability.find((a) => a.date === date) || departureAvailability(trip, date, {}, now);
-  if (baseAvailability.status === "conflict") return conflict(["departure_availability_conflict"]);
-  if (!displayOnly && !["open", "unknown"].includes(baseAvailability.status)) return { status: "unavailable", reason: baseAvailability.status, date, availability: baseAvailability };
-  let candidates = regular.filter((o) => !o.dateScoped || o.dates.includes(date));
+  // A row whose dates are text the calendar cannot place ("Баасан гараг болгон") belongs to the undated view only.
+  const appliesOn = (o: CanonicalTripOffer) => undated ? o.dates.length === 0 : !o.dateScoped || o.dates.includes(date);
+  let candidates = regular.filter(appliesOn);
   // A supplied package limits the hotel choices to hotels that sell it.
   if (packageId) {
     if (!candidates.some(offer => offer.packageId === packageId)) return { status: "unavailable", reason: "package_not_offered", date };
@@ -508,7 +556,7 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
     if (!packages.includes(packageId)) return { status: "unavailable", reason: "package_not_offered", date };
     candidates = candidates.filter((o) => !o.packageId || o.packageId === packageId);
   } else if (packages.length > 1) return needs("package", "package_required", packages);
-  const discounts = offers.filter((o) => o.source === "discount" && (!o.dateScoped || o.dates.includes(date)) && (!o.hotel || candidates.some((c) => key(c.hotel) === key(o.hotel))) && (!o.packageId || candidates.some((c) => c.packageId === o.packageId)));
+  const discounts = offers.filter((o) => o.source === "discount" && appliesOn(o) && (!o.hotel || candidates.some((c) => key(c.hotel) === key(o.hotel))) && (!o.packageId || candidates.some((c) => c.packageId === o.packageId)));
   if (selection.discountId) {
     const discount = discounts.find((o) => o.id === selection.discountId);
     if (!discount) return { status: "missing", reason: "discount_not_offered" };
@@ -518,7 +566,7 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
   } else candidates.push(...discounts.filter((o) => o.discount?.active && !o.discount.condition));
   const issues = candidates.flatMap((o) => o.issues);
   if (issues.length) return conflict(issues);
-  const scopedAvailability = candidates.filter((o) => o.source !== "base").flatMap((o) => o.availability.filter((a) => a.date === date));
+  const scopedAvailability = undated ? [] : candidates.filter((o) => o.source !== "base").flatMap((o) => o.availability.filter((a) => a.date === date));
   if (scopedAvailability.some((a) => a.status === "conflict")) return conflict(["departure_availability_conflict"]);
   const closed = scopedAvailability.find((a) => !["open", "unknown"].includes(a.status));
   if (closed && !displayOnly) return { status: "unavailable", reason: closed.status, date, availability: closed };
@@ -543,12 +591,13 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
     const entries = effective.filter((f) => f.kind === kind);
     if (entries.length) prices[kind] = entries.every((f) => sameFare(f.fare, entries[0].fare)) ? entries[0].fare : unknownFare("passenger_age_required");
     // Identical age/category scopes with different prices are contradictory,
-    // even when the caller only requested a fare card.
-    for (const entry of entries) if (entries.some((other) => JSON.stringify(entry.ageBand) === JSON.stringify(other.ageBand) && !sameFare(entry.fare, other.fare))) return conflict([`${kind}_fare_conflict`]);
+    // even when the caller only requested a fare card. Two labels stating
+    // different conditions ("1,2–1,4 м" / "1,2 м доош") are two fares, not one.
+    for (const entry of entries) if (entries.some((other) => JSON.stringify(entry.ageBand) === JSON.stringify(other.ageBand) && conditionKey(entry.condition) === conditionKey(other.condition) && !sameFare(entry.fare, other.fare))) return conflict([`${kind}_fare_conflict`]);
   }
   const passengerPrices: ResolvedPassengerPrice[] = [];
   for (const passenger of selection.passengers || []) {
-    if (!Number.isInteger(passenger.count) || passenger.count <= 0 || passenger.age !== undefined && (!Number.isFinite(passenger.age) || passenger.age < 0) || passenger.birthYear !== undefined && (!Number.isInteger(passenger.birthYear) || passenger.birthYear > Number(date.slice(0, 4)))) return { status: "missing", reason: "invalid_passenger_selection" };
+    if (!Number.isInteger(passenger.count) || passenger.count <= 0 || passenger.age !== undefined && (!Number.isFinite(passenger.age) || passenger.age < 0) || passenger.birthYear !== undefined && (!Number.isInteger(passenger.birthYear) || date !== "" && passenger.birthYear > Number(date.slice(0, 4)))) return { status: "missing", reason: "invalid_passenger_selection" };
     let entries: NormalizedPassengerFare[];
     if (passenger.age !== undefined || passenger.birthYear !== undefined) {
       const matched = effective.filter((f) => f.ageBand && covers(f.ageBand, passenger) === true);
@@ -561,12 +610,16 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
       if (matched.length) entries = matched;
       else if (classified.length === 1) entries = effective.filter((f) => f.kind === classified[0] && !f.ageBand);
       else if (passenger.kind && !effective.some((f) => f.kind === passenger.kind && f.ageBand) && !str(row(trip.extra?.age_rules)[passenger.kind])) entries = effective.filter((f) => f.kind === passenger.kind && !f.ageBand);
-      else return needs("passengers", "passenger_age_band_missing", effective.map((f) => f.ageRange || f.kind));
+      else return needs("passengers", "passenger_age_band_missing", effective.map((f) => f.ageRange || f.condition || f.kind));
+      // An age cannot choose between a height fare and a no-bed fare, and a reply naming the
+      // condition cannot be carried yet: staff quote it (hand-off with a lead, as before).
+      if (!matched.length && conditionsDecideFare(entries)) return conflict([`${entries[0].kind}_fare_conflict`]);
     } else {
       if (!passenger.kind) return needs("passengers", "passenger_kind_required", KINDS);
       entries = effective.filter((f) => f.kind === passenger.kind);
       if (entries.some((f) => f.ageBand?.unit === "birth_year")) return needs("passengers", "passenger_birth_year_required", entries.map((f) => f.ageRange || f.kind));
-      if (unique(entries.map((f) => f.ageRange)).length > 1) return needs("passengers", "passenger_age_required", entries.map((f) => f.ageRange || f.kind));
+      if (unique(entries.map((f) => f.ageRange)).length > 1) return needs("passengers", "passenger_age_required", entries.map((f) => f.ageRange || f.condition || f.kind));
+      if (conditionsDecideFare(entries)) return conflict([`${passenger.kind}_fare_conflict`]);
     }
     if (!entries.length) return { status: "missing", reason: "passenger_fare_missing" };
     const max = Math.max(...entries.map(rank));
@@ -574,7 +627,7 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
     if (!entries.every((f) => f.kind === entries[0].kind && f.currency === entries[0].currency && sameFare(f.fare, entries[0].fare))) return conflict(["passenger_fare_conflict"]);
     const chosen = entries[0];
     if (chosen.fare.kind === "unknown") return { status: "missing", reason: chosen.fare.reason };
-    passengerPrices.push({ kind: chosen.kind, age: passenger.age ?? null, ageUnit: passenger.ageUnit || "year", count: passenger.count, fare: chosen.fare, lineTotal: multiply(chosen.fare, passenger.count), sourceOfferId: chosen.sourceOfferId, ageRange: chosen.ageRange });
+    passengerPrices.push({ kind: chosen.kind, age: passenger.age ?? null, ageUnit: passenger.ageUnit || "year", count: passenger.count, fare: chosen.fare, lineTotal: multiply(chosen.fare, passenger.count), sourceOfferId: chosen.sourceOfferId, ageRange: chosen.ageRange, condition: chosen.condition });
   }
   if (!effective.some((f) => f.fare.kind !== "unknown")) return { status: "missing", reason: "fare_missing" };
   if (unique(effective.map((f) => f.currency)).length > 1) return conflict(["fare_currency_conflict"]);
@@ -602,6 +655,16 @@ export function resolveTripOfferFareCard(trip: TravelTrip, selection: TripOfferS
   return resolve(trip, selection, now, true);
 }
 
+/**
+ * The fares of a trip the calendar cannot date ("Ням гараг бүр" with no website departures):
+ * the base fares and the rows without calendar dates, by the same precedence as a dated card.
+ * Display only — it resolves no departure, so it is never a booking, seat or total assertion.
+ * The offer's date is "". Callers use it only when no regular offer has a calendar date.
+ */
+export function resolveUndatedFareCard(trip: TravelTrip, selection: TripOfferSummarySelection = {}, now = new Date()): TripOfferResult {
+  return resolve(trip, { ...selection, date: null, passengers: [] }, now, true, true);
+}
+
 /** An undated price overview, never a booking/availability/total assertion. */
 export function summarizeTripOfferPrices(trip: TravelTrip, selection: TripOfferSummarySelection = {}, now = new Date()): TripOfferPriceSummary {
   const dates = unique(normalizeTripOffers(trip, now).filter((offer) => offer.source !== "discount").flatMap((offer) => offer.dates)).filter((date) => date >= today(now)).sort();
@@ -615,7 +678,7 @@ export function summarizeTripOfferPrices(trip: TravelTrip, selection: TripOfferS
   const signature = (card: ResolvedTripOffer) => JSON.stringify({
     hotel: key(card.hotel), hotelId: card.hotelId, packageId: card.packageId, currency: card.currency,
     conditions: [...card.conditions].sort(),
-    fares: unique(card.fares.map((fare) => JSON.stringify({ kind: fare.kind, ageRange: fare.ageRange, ageBand: fare.ageBand, fare: fare.fare, currency: fare.currency }))).sort(),
+    fares: unique(card.fares.map((fare) => JSON.stringify({ kind: fare.kind, ageRange: fare.ageRange, condition: fare.condition, ageBand: fare.ageBand, fare: fare.fare, currency: fare.currency }))).sort(),
   });
   if (unique(cards.map(signature)).length > 1) return { status: "needs_selection", reason: "departure_offers_differ", fields: ["date"], options: dates };
   const first = cards[0];
@@ -644,7 +707,8 @@ export function renderTripOfferReply(result: TripOfferResult, options: { fareKin
     // count: two identical "x 1" lines collapsed into one and the total no longer added up.
     const rows = new Map<string, number>();
     for (const p of offer.passengerPrices) {
-      const key = `${labels[p.kind]}${p.ageRange ? ` (${p.ageRange})` : ""}\u0000${renderFare(p.fare, offer.currency)}`;
+      const scope = [p.ageRange, p.condition].filter(Boolean).join(", ");
+      const key = `${labels[p.kind]}${scope ? ` (${scope})` : ""}\u0000${renderFare(p.fare, offer.currency)}`;
       rows.set(key, (rows.get(key) || 0) + p.count);
     }
     for (const [key, count] of rows) {
@@ -654,10 +718,11 @@ export function renderTripOfferReply(result: TripOfferResult, options: { fareKin
   } else for (const f of offer.fares.filter((fare) => !options.fareKinds?.length || options.fareKinds.includes(fare.kind))) {
     // The same fare listed twice, once bare and once with its age band ("Хүүхэд: 2,590,000₮"
     // beside "Хүүхэд (2-11 нас): 2,590,000₮"), reads as two prices: keep the one with the band.
-    const bareTwin = !f.ageRange && offer.fares.some((other) => other !== f && other.kind === f.kind && other.ageRange
+    const bareTwin = !f.ageRange && !f.condition && offer.fares.some((other) => other !== f && other.kind === f.kind && (other.ageRange || other.condition)
       && renderFare(other.fare, offer.currency) === renderFare(f.fare, offer.currency));
     if (bareTwin) continue;
-    if (f.fare.kind !== "unknown") lines.push(`${labels[f.kind]}${f.ageRange ? ` (${f.ageRange})` : ""}: ${renderFare(f.fare, offer.currency)}`);
+    const scope = [f.ageRange, f.condition].filter(Boolean).join(", ");
+    if (f.fare.kind !== "unknown") lines.push(`${labels[f.kind]}${scope ? ` (${scope})` : ""}: ${renderFare(f.fare, offer.currency)}`);
   }
   if (!offer.passengerPrices.length && options.fareKinds?.length && !offer.fares.some((fare) => options.fareKinds!.includes(fare.kind) && fare.fare.kind !== "unknown")) return null;
   if (offer.total && options.showTotal !== false) lines.push(`Нийт: ${renderFare(offer.total, offer.currency)}`);

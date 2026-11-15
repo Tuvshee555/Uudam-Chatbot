@@ -124,21 +124,15 @@ test("parseUpload extracts text from .docx files", async () => {
 });
 
 test("parseUpload preserves DOCX table cell boundaries", async () => {
-  const { deflateRawSync } = await import("node:zlib");
+  const JSZip = (await import("jszip")).default;
   const xml = '<?xml version="1.0"?><w:document xmlns:w="x"><w:body>' +
     '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Гэрмол</w:t></w:r></w:p></w:tc>' +
     '<w:tc><w:p><w:r><w:t>2400000</w:t></w:r></w:p></w:tc></w:tr></w:tbl>' +
     '</w:body></w:document>';
-  const name = Buffer.from("word/document.xml");
-  const content = Buffer.from(xml);
-  const compressed = deflateRawSync(content);
-  const local = Buffer.alloc(30);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(8, 8);
-  local.writeUInt32LE(compressed.length, 18);
-  local.writeUInt32LE(content.length, 22);
-  local.writeUInt16LE(name.length, 26);
-  const docx = Buffer.concat([local, name, compressed]);
+  // A real .docx is a complete ZIP (central directory included), as Word writes it.
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const docx = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 
   const parsed = await parseUpload({
     filename: "table.docx",
@@ -175,4 +169,53 @@ test("parseUpload accepts larger server-side Drive text files", async () => {
 
   assert.equal(parsed.inline, null);
   assert.equal(parsed.text.length, text.trim().length);
+});
+
+test("parseUpload reads a .docx written with data descriptors (streamed entries), keeping Mongolian and Chinese", async () => {
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", "<Types/>");
+  zip.file(
+    "word/document.xml",
+    '<?xml version="1.0"?><w:document xmlns:w="x"><w:body>' +
+      "<w:p><w:r><w:t>Жишээ хөндийн аялал 11-р сарын 21</w:t></w:r></w:p>" +
+      "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Том хүн</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>3,290,000₮</w:t></w:r></w:p></w:tc></w:tr>" +
+      "<w:tr><w:tc><w:p><w:r><w:t>酒店</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>四星级酒店 两人间</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+      "</w:body></w:document>",
+  );
+  // streamFiles writes the sizes after the data (bit 3), as Google Docs and other
+  // streaming writers do; the local header then says size 0.
+  const buffer = await zip.generateAsync({ type: "nodebuffer", streamFiles: true });
+  const parsed = await parseUpload({
+    filename: "streamed.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    dataBase64: buffer.toString("base64"),
+  });
+  assert.match(parsed.text, /Жишээ хөндийн аялал 11-р сарын 21/);
+  assert.match(parsed.text, /Том хүн \| 3,290,000₮/);
+  assert.match(parsed.text, /酒店 \| 四星级酒店 两人间/);
+});
+
+test("parseUpload reads the text layer of a PDF written with object streams", async () => {
+  const { PDFDocument, StandardFonts } = await import("pdf-lib");
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([400, 200]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText("Sample valley tour 21 Nov adult 3,290,000 MNT", { x: 20, y: 100, size: 14, font });
+  const bytes = Buffer.from(await pdf.save({ useObjectStreams: true }));
+  const parsed = await parseUpload({ filename: "trip.pdf", mimeType: "application/pdf", dataBase64: bytes.toString("base64") });
+  assert.equal(parsed.inline, null);
+  assert.match(parsed.text, /Page 1/);
+  assert.match(parsed.text, /Sample valley tour 21 Nov adult 3,290,000 MNT/);
+});
+
+test("parseUpload refuses a PDF with no text layer instead of returning an empty source", async () => {
+  const { PDFDocument } = await import("pdf-lib");
+  const pdf = await PDFDocument.create();
+  pdf.addPage([400, 200]);
+  const bytes = Buffer.from(await pdf.save());
+  await assert.rejects(
+    parseUpload({ filename: "scan.pdf", mimeType: "application/pdf", dataBase64: bytes.toString("base64") }),
+    /уншигдах текст алга/,
+  );
 });

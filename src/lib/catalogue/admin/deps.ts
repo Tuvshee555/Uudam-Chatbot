@@ -1,0 +1,224 @@
+/**
+ * The catalogue admin API's only doors to the rest of the feature.
+ *
+ * The admin routes never import store / data / render / send directly. They ask `getDeps()`,
+ * which loads the real modules lazily (so a route that fails auth or validation never pays for
+ * Chromium or the database) and which tests replace with in-memory fakes via
+ * `setCatalogueAdminDepsForTests`. The port types below are the contract this module needs from
+ * its siblings; the lazy loaders assign the real modules to them, so a drift in a sibling's
+ * exported signature shows up as a typecheck error here.
+ */
+
+import { createHash } from "crypto";
+import type { TravelTrip } from "../../travelTypes";
+import type { CatalogueTestResult } from "../send";
+import type {
+  CatalogueConfig,
+  CatalogueEdition,
+  CatalogueHeroChoice,
+  CataloguePhotoCandidate,
+  CatalogueSnapshot,
+  CatalogueVersionMeta,
+  IsoDay,
+  RenderedCatalogue,
+  SnapshotInput,
+} from "../types";
+import type { CatalogueTesterView, PairingCodeIssued, TesterLookup } from "../testers";
+import type { CatalogueStatsResponse } from "./types";
+import { parsePsidAllowlist } from "./validation";
+
+export type CatalogueStorePort = {
+  ensureCatalogueSchema(): Promise<unknown>;
+  getCatalogueConfig(): Promise<CatalogueConfig>;
+  saveCatalogueConfig(
+    next: CatalogueConfig,
+    actor: string | null,
+    options?: { expectedUpdatedAt?: string | null },
+  ): Promise<CatalogueConfig>;
+  saveDraftVersion(input: {
+    edition: CatalogueEdition;
+    snapshot: CatalogueSnapshot;
+    rendered: RenderedCatalogue;
+    actor: string | null;
+  }): Promise<CatalogueVersionMeta>;
+  listVersions(edition?: CatalogueEdition, limit?: number): Promise<CatalogueVersionMeta[]>;
+  /** Deletes old non-published versions beyond the newest `keep` per edition (storage housekeeping). */
+  pruneOldVersions?(keep: number): Promise<{ deleted: number }>;
+  getVersionMeta(id: string): Promise<CatalogueVersionMeta | null>;
+  getVersionPdf(id: string): Promise<{ bytes: Buffer; meta: CatalogueVersionMeta } | null>;
+  getVersionPageImage(id: string, page: number): Promise<Buffer | null>;
+  getVersionSnapshot(id: string): Promise<CatalogueSnapshot | null>;
+  publishVersion(
+    id: string,
+    actor: string | null,
+    options: { acknowledgeWarnings: boolean },
+  ): Promise<CatalogueVersionMeta>;
+  rollbackTo(id: string, actor: string | null): Promise<CatalogueVersionMeta>;
+  getPublished(edition: CatalogueEdition): Promise<CatalogueVersionMeta | null>;
+  deliveryStats(days: number): Promise<Omit<CatalogueStatsResponse, "ok">>;
+  /** Persistent trip code per trip id (read only). Optional so a fake store may omit it. */
+  getTripCodeMap?(): Promise<Record<string, string>>;
+};
+
+export type CatalogueDataPort = {
+  loadSnapshotInput(
+    edition: CatalogueEdition,
+    options?: { nowIso?: string; tripIdsOverride?: string[]; readOnlyCodes?: boolean; measurePhotos?: boolean },
+  ): Promise<SnapshotInput>;
+  buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot;
+  isTripEligible(trip: TravelTrip, today: IsoDay): { eligible: boolean; reason: string | null };
+  liveDrift(published: CatalogueSnapshot, live: CatalogueSnapshot): { drifted: boolean; reasons: string[] };
+  /** Every selectable hero photo of one trip with its measured size, score and issues, plus the staff choice. */
+  listPhotoCandidates(tripId: string): Promise<{
+    trip: { id: string } | null;
+    candidates: CataloguePhotoCandidate[];
+    chosen: CatalogueHeroChoice | null;
+  }>;
+  /** The diverse shortlist the "Санал болгосон" button fills into the Quick selection. */
+  recommendedQuick(): Promise<{ tripIds: string[]; reasons: Record<string, string>; cover: string | null }>;
+};
+
+export type CatalogueRenderPort = {
+  renderCatalogue(snapshot: CatalogueSnapshot, options?: { pageImages?: boolean; versionLabel?: string }): Promise<RenderedCatalogue>;
+};
+
+export type CatalogueSendPort = {
+  sendCatalogueTest(input: {
+    recipientPsid: string;
+    edition: CatalogueEdition;
+    dryRun?: boolean;
+    /** Test this exact version (a draft awaiting review) instead of the published one. */
+    versionId?: string | null;
+    /** A verified tester (catalogue/testers.ts): the raw PSID is resolved inside the send, never here. */
+    testerId?: string | null;
+  }): Promise<CatalogueTestResult>;
+};
+
+export type CatalogueTestersPort = {
+  listTesters(): Promise<CatalogueTesterView[]>;
+  createPairingCode(input: { actor: string | null; label?: unknown }): Promise<PairingCodeIssued>;
+  revokeTester(id: string, actor: string | null): Promise<boolean>;
+  /** Server-only: carries the raw PSID. Routes use it to decide, never to answer. */
+  getTesterForSend(id: string): Promise<TesterLookup>;
+};
+
+export type CatalogueAdminDeps = {
+  store: CatalogueStorePort;
+  data: CatalogueDataPort;
+  render: CatalogueRenderPort;
+  send: CatalogueSendPort;
+  testers: CatalogueTestersPort;
+  /** Every trip in status "active", straight from the chatbot's trip store. */
+  listActiveTrips(): Promise<TravelTrip[]>;
+  /** Env allowlist of test PSIDs (CATALOGUE_TEST_RECIPIENT_PSIDS); empty when unset. */
+  testRecipientPsids(): string[];
+  /** The Meta kill switch / Vercel-preview suppression (metaOutboundKillSwitch.ts). */
+  metaOutboundDisabled(): boolean;
+  /**
+   * Repo files the PDF renderer needs (fonts + the approved logo) that are NOT on disk, as repo-relative paths.
+   * Empty = all present. Only checks files exist: Chromium is never launched from the admin state.
+   */
+  rendererAssetsMissing(): Promise<string[]>;
+  now(): Date;
+};
+
+let override: Partial<CatalogueAdminDeps> | null = null;
+
+/** Tests only: replace any dependency. Pass null to restore the real ones. */
+export function setCatalogueAdminDepsForTests(next: Partial<CatalogueAdminDeps> | null): void {
+  override = next;
+}
+
+async function loadStore(): Promise<CatalogueStorePort> {
+  const store: CatalogueStorePort = await import("../store");
+  return store;
+}
+
+async function loadData(): Promise<CatalogueDataPort> {
+  const data: CatalogueDataPort = await import("../tripData");
+  return data;
+}
+
+async function loadRender(): Promise<CatalogueRenderPort> {
+  const render: CatalogueRenderPort = await import("../render");
+  return render;
+}
+
+async function loadSend(): Promise<CatalogueSendPort> {
+  const send: CatalogueSendPort = await import("../send");
+  return send;
+}
+
+async function loadTesters(): Promise<CatalogueTestersPort> {
+  const testers: CatalogueTestersPort = await import("../testers");
+  return testers;
+}
+
+async function listActiveTripsFromStore(): Promise<TravelTrip[]> {
+  const { listTrips } = await import("../../travelOps");
+  return listTrips({ status: "active", limit: 5000 });
+}
+
+/** Existence check of the renderer's static files (render/assets.ts lists them). Reads no bytes, starts no browser. */
+async function missingRendererAssets(): Promise<string[]> {
+  const [{ access }, path, assets] = await Promise.all([import("node:fs/promises"), import("node:path"), import("../render/assets")]);
+  const wanted = [assets.LOGO_FILE, ...assets.FONT_FILES.map((font) => `public/fonts/${font.file}`)];
+  const missing: string[] = [];
+  for (const rel of wanted) {
+    try {
+      await access(path.join(/*turbopackIgnore: true*/ process.cwd(), rel));
+    } catch {
+      missing.push(rel);
+    }
+  }
+  return missing;
+}
+
+/**
+ * Lazy, per-key resolution: only the dependency a route actually touches is imported.
+ * Each getter is memoised, so one request never imports twice.
+ */
+export type LazyDeps = {
+  store(): Promise<CatalogueStorePort>;
+  data(): Promise<CatalogueDataPort>;
+  render(): Promise<CatalogueRenderPort>;
+  send(): Promise<CatalogueSendPort>;
+  testers(): Promise<CatalogueTestersPort>;
+  listActiveTrips(): Promise<TravelTrip[]>;
+  testRecipientPsids(): string[];
+  metaOutboundDisabled(): Promise<boolean>;
+  rendererAssetsMissing(): Promise<string[]>;
+  now(): Date;
+};
+
+function once<T>(factory: () => Promise<T>): () => Promise<T> {
+  let cached: Promise<T> | null = null;
+  return () => (cached ??= factory());
+}
+
+export function getDeps(): LazyDeps {
+  const o = override;
+  return {
+    store: o?.store ? async () => o.store as CatalogueStorePort : once(loadStore),
+    data: o?.data ? async () => o.data as CatalogueDataPort : once(loadData),
+    render: o?.render ? async () => o.render as CatalogueRenderPort : once(loadRender),
+    send: o?.send ? async () => o.send as CatalogueSendPort : once(loadSend),
+    testers: o?.testers ? async () => o.testers as CatalogueTestersPort : once(loadTesters),
+    listActiveTrips: o?.listActiveTrips ?? listActiveTripsFromStore,
+    testRecipientPsids: o?.testRecipientPsids ?? (() => parsePsidAllowlist(process.env.CATALOGUE_TEST_RECIPIENT_PSIDS)),
+    metaOutboundDisabled: o?.metaOutboundDisabled
+      ? async () => (o.metaOutboundDisabled as () => boolean)()
+      : async () => (await import("../../metaOutboundKillSwitch")).isMetaOutboundDisabled(),
+    rendererAssetsMissing: o?.rendererAssetsMissing ?? missingRendererAssets,
+    now: o?.now ?? (() => new Date()),
+  };
+}
+
+/** Opaque, stable reference for a PSID: the browser can pick a recipient without ever holding the id. */
+export function recipientRef(psid: string): string {
+  return createHash("sha256").update(`catalogue-test-recipient:${psid}`).digest("hex").slice(0, 16);
+}
+
+export function recipientLabel(psid: string): string {
+  return `…${psid.slice(-4)}`;
+}

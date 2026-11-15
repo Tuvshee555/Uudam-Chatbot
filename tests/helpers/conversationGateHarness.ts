@@ -17,6 +17,8 @@ export type ModelOverride = Partial<{ tripId: string; place: string | null; date
   requestedFacts: Array<{ field: string; evidence: string }>;
   /** The understanding call returns this text as is (malformed JSON, an empty reply). */
   rawUnderstanding: string;
+  /** A non-trip need the understanding call proposes, with the exact words that show it (tripUnderstanding.ts). */
+  need: string | null; need_evidence: string | null;
   /** The provider refuses every call (HTTP 429 insufficient_quota), as during the 2026-10-30 credit outage. */
   unavailable: boolean }>;
 
@@ -50,6 +52,8 @@ export async function conversationGateHarness(context: TestContext, options: {
   const blockedNetwork: string[] = [];
   let catalog: FixtureTrip[] = [];
   let override: ModelOverride = {};
+  // Owner-entered bot settings (faq, special_offers, discount_policies ...) layered over the fixture row.
+  let settingsOverride: Record<string, unknown> = {};
   let serial = 0;
   // Staff takeover (staffTakeover.ts): the scripted Meta thread per customer, the ids the bot
   // recorded for its own sends, and when a consultant last replied.
@@ -65,6 +69,17 @@ export async function conversationGateHarness(context: TestContext, options: {
   const echoes: Array<{ recipient: string; appId: string; classification: string; hasBotMetadata: boolean; deliveredBy: string; verdict: string }> = [];
   // Runs once at the next model call: something that happens while the bot is composing.
   let duringModel: (() => void) | null = null;
+  // The follow-up columns of travel_senders (followUp.ts) and each sender's platform (dbTrackSender).
+  const followUps = new Map<string, { slot: string; question: string; armedAt: string | null; sentAt: string | null }>();
+  const senderPlatform = new Map<string, string>();
+  // «Get Started» taps (dbMarkGetStarted) and when each was handled by the nudge sweep (getStartedNudge.ts).
+  const getStarted = new Map<string, { tappedAt: string; nudgedAt: string | null }>();
+  const iso = (value: unknown) => new Date(String(value)).toISOString();
+  let sweepLockAt: number | null = null;
+  // Runs once when this customer's Messenger thread is next read (e.g. a consultant takes over meanwhile).
+  const threadHooks = new Map<string, () => void>();
+  // The metadata each Messenger send carried (the bot's own marker makes the takeover guard apply).
+  const sendMetadata: Array<{ senderId: string; metadata: string | null; quickReplies: string[] }> = [];
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
   /** Waits (real time, up to 2 s) until fire-and-forget writes make `done` true. Only Date is mocked. */
   const settle = async (done: () => boolean) => {
@@ -72,6 +87,69 @@ export async function conversationGateHarness(context: TestContext, options: {
   };
   const query = async (sql: string, params: unknown[] = []) => {
     const sender = String(params[0] ?? "");
+    // Follow-up arming, sweep and claim (followUp.ts). Times come from the mocked clock; each WHERE condition
+    // is applied only when the statement holds it, so a query that drops one is caught here.
+    if (/UPDATE travel_senders SET follow_up_slot = \$2, follow_up_question = \$3/i.test(sql)) {
+      followUps.set(sender, { slot: String(params[1]), question: String(params[2]), armedAt: new Date().toISOString(), sentAt: followUps.get(sender)?.sentAt ?? null });
+      return result();
+    }
+    if (/UPDATE travel_senders SET follow_up_slot = '', follow_up_question = ''/i.test(sql)) {
+      const state = followUps.get(sender);
+      if (state && (!/follow_up_armed_at = \$2/i.test(sql) || state.armedAt === new Date(String(params[1])).toISOString())) Object.assign(state, { slot: "", question: "" });
+      return result();
+    }
+    if (/SELECT sender_id, follow_up_slot AS slot/i.test(sql)) {
+      const [dueBy, windowStart, cooldown, limit] = params.map(String);
+      const holds = (condition: string) => sql.includes(condition);
+      return result([...followUps.entries()].filter(([id, state]) => state.slot && state.question && state.armedAt
+        && (!holds("platform = 'facebook'") || senderPlatform.get(id) === "facebook") && (!holds("NOT LIKE 'demo:%'") || !id.startsWith("demo:"))
+        && state.armedAt <= new Date(dueBy).toISOString()
+        && (!holds("follow_up_armed_at > $2") || state.armedAt > new Date(windowStart).toISOString())
+        && (!holds("follow_up_sent_at < $3") || !state.sentAt || state.sentAt < new Date(cooldown).toISOString()))
+        .sort((a, b) => String(a[1].armedAt).localeCompare(String(b[1].armedAt))).slice(0, Number(limit))
+        .map(([id, state]) => ({ sender_id: id, slot: state.slot, question: state.question, armed_at: state.armedAt })));
+    }
+    if (/UPDATE travel_senders SET follow_up_sent_at = \$3/i.test(sql)) {
+      const state = followUps.get(sender);
+      const fresh = state && state.slot && state.armedAt === new Date(String(params[1])).toISOString()
+        && (!sql.includes("follow_up_sent_at < $4") || !state.sentAt || state.sentAt < new Date(String(params[3])).toISOString());
+      if (!fresh) return result();
+      Object.assign(state, { sentAt: new Date(String(params[2])).toISOString(),
+        ...(sql.includes("follow_up_slot = ''") ? { slot: "", question: "" } : {}) });
+      return result([{ sender_id: sender }]);
+    }
+    // The traffic sweep's one-row lock (trafficSweep.ts): one claim per 4 minutes of the mocked clock.
+    if (/INSERT INTO travel_sweep_lock/i.test(sql)) {
+      const minutes = Number(params[0] || 4);
+      if (sweepLockAt !== null && Date.now() - sweepLockAt < minutes * 60_000) return result();
+      sweepLockAt = Date.now();
+      return result([{ id: 1 }]);
+    }
+    // Postgres NOW() keeps MICROseconds; a value read back into a JavaScript Date keeps milliseconds. The tap time is
+    // held at microsecond precision here so an exact "=" against the read-back value fails, as it does in production.
+    if (/INSERT INTO travel_senders \(sender_id, platform, last_seen, msg_count, get_started_at/i.test(sql)) {
+      senderPlatform.set(sender, String(params[1] ?? ""));
+      getStarted.set(sender, { tappedAt: `${new Date().toISOString().slice(0, 23)}417Z`, nudgedAt: getStarted.get(sender)?.nudgedAt ?? null });
+      return result();
+    }
+    if (/SELECT sender_id, get_started_at AS tapped_at FROM travel_senders/i.test(sql)) {
+      const [dueBy, windowStart, limit] = params;
+      const at = (value: unknown) => Date.parse(String(value));
+      return result([...getStarted.entries()].filter(([id, state]) => senderPlatform.get(id) === "facebook" && !id.startsWith("demo:")
+        && at(state.tappedAt) <= at(dueBy) && at(state.tappedAt) > at(windowStart) && (!state.nudgedAt || at(state.nudgedAt) < at(state.tappedAt)))
+        .sort((a, b) => a[1].tappedAt.localeCompare(b[1].tappedAt)).slice(0, Number(limit))
+        // pg hands back a Date: milliseconds only.
+        .map(([id, state]) => ({ sender_id: id, tapped_at: new Date(state.tappedAt) })));
+    }
+    if (/UPDATE travel_senders SET get_started_nudge_at = \$3/i.test(sql)) {
+      const state = getStarted.get(sender);
+      if (!state) return result();
+      const exact = /get_started_at = \$2::timestamptz/i.test(sql);
+      const matches = exact ? state.tappedAt === String(params[1]) : Math.abs(Date.parse(state.tappedAt) - Date.parse(String(params[1]))) < 1;
+      if (!matches || (state.nudgedAt && Date.parse(state.nudgedAt) >= Date.parse(state.tappedAt))) return result();
+      state.nudgedAt = iso(params[2]);
+      return result([{ sender_id: sender }]);
+    }
     if (/INSERT INTO travel_outbound_messages/i.test(sql)) {
       if (!outbound.has(sender)) outbound.set(sender, { recipient: String(params[1] ?? ""), at: Date.now() });
       return result();
@@ -118,7 +196,7 @@ export async function conversationGateHarness(context: TestContext, options: {
     }
     if (/SELECT[\s\S]*FROM travel_trip_entries/i.test(sql)) {
       if (/WHERE\s+id\s*=\s*\$1/i.test(sql)) return result(catalog.filter(trip => trip.id === sender));
-      if (params[1] === "archived") return result();
+      if (params[1] === "archived") return result(catalog.filter(trip => trip.status === "archived"));
       return result(catalog);
     }
     if (/SELECT[\s\S]*FROM travel_bot_settings/i.test(sql)) return result([{
@@ -126,6 +204,7 @@ export async function conversationGateHarness(context: TestContext, options: {
       handoff_keywords: [], quick_info_keywords: [], chat_buttons: [],
       extra: { greeting: { enabled: false }, goodbye: { enabled: false }, reminder_enabled: false },
       ...(options.settings || {}),
+      ...settingsOverride,
     }]);
     if (/SELECT[\s\S]*FROM travel_(?:bot_control|page_control)/i.test(sql)) return result([{ bot_paused: false, photo_only: false }]);
     if (/INSERT INTO travel_conversations/i.test(sql)) {
@@ -175,8 +254,15 @@ export async function conversationGateHarness(context: TestContext, options: {
       pauses.set(sender, { paused: true, expires_at: String(params[2]), pause_reason: String(params[1]) }); return result();
     }
     if (/INSERT INTO travel_senders \(sender_id, platform,/i.test(sql)) {
+      senderPlatform.set(sender, String(params[1] ?? ""));
       seen.set(sender, (seen.get(sender) || 0) + 1);
-      return result([{ msg_count: seen.get(sender), prev_msg_at: null, get_started_at: null }]);
+      return result([{ msg_count: seen.get(sender), prev_msg_at: null, get_started_at: getStarted.get(sender)?.tappedAt ?? null }]);
+    }
+    // A customer image is receipted before the webhook acks (customerImageIngest); classification
+    // itself never runs here — its claim UPDATE finds nothing.
+    if (/INSERT INTO travel_customer_documents/i.test(sql)) {
+      return result([{ id: ++serial, platform: params[0], sender_id: params[1], page_id: params[2], event_key: params[3],
+        attachment_index: params[4], attachment_id: params[5], source_url: params[6], ingest_status: "pending" }]);
     }
     // Memory projections, document stores and nonessential claims start empty;
     // the full turn history above stays durable across handler invocations.
@@ -237,6 +323,8 @@ export async function conversationGateHarness(context: TestContext, options: {
     }
     if (/^https:\/\/graph\.facebook\.com\/[^/]+\/me\/conversations\?platform=messenger&user_id=/.test(url)) {
       const customer = new URL(url).searchParams.get("user_id") || "";
+      const hook = threadHooks.get(customer);
+      if (hook) { threadHooks.delete(customer); hook(); }
       const script = threads.get(customer);
       if (script && "fail" in script) {
         if (script.fail === "timeout") throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
@@ -245,7 +333,8 @@ export async function conversationGateHarness(context: TestContext, options: {
         return Response.json({ paging: {} });
       }
       const messages = (script?.messages ?? []).map((entry, index) => ({
-        id: entry.id ?? `m_thread_${index}`,
+        // Meta message ids are unique across conversations: staff messages are stored once per id.
+        id: entry.id ?? `m_thread_${customer}_${index}`,
         from: { id: entry.from === "page" ? "1234567890" : customer },
         message: entry.text ?? "",
         created_time: new Date(Date.now() - entry.agoMs).toISOString(),
@@ -257,7 +346,11 @@ export async function conversationGateHarness(context: TestContext, options: {
       if (failingRecipients.has(String(body.recipient?.id || ""))) {
         return new Response(JSON.stringify({ error: { message: "(#100) Length of param message[text] must be less than or equal to 2000", code: 100 } }), { status: 400 });
       }
-      if (body.message?.text) sends.push({ senderId: String(body.recipient?.id || ""), text: body.message.text });
+      if (body.message?.text) {
+        sends.push({ senderId: String(body.recipient?.id || ""), text: body.message.text });
+        sendMetadata.push({ senderId: String(body.recipient?.id || ""), metadata: body.message.metadata ?? null,
+          quickReplies: Array.isArray(body.message.quick_replies) ? body.message.quick_replies.map((reply: { payload?: string }) => String(reply.payload ?? "")) : [] });
+      }
       return new Response(JSON.stringify({ recipient_id: body.recipient?.id || "fixture", message_id: `fixture-${++serial}`, data: [] }), { status: 200 });
     }
     blockedNetwork.push(url);
@@ -267,6 +360,7 @@ export async function conversationGateHarness(context: TestContext, options: {
   env.resetEnvCacheForTests();
   const webhook = await import("../../src/pages/api/webhook");
   const demo = await import("../../src/pages/api/demo");
+  const followUpCron = await import("../../src/pages/api/cron/follow-up");
   const { getTripSelection } = await import("../../src/lib/tripSelectionState");
   const { closeNeonPool } = await import("../../src/lib/neonDb");
   /** POST one signed webhook delivery and collect the handler's effects. */
@@ -309,10 +403,30 @@ export async function conversationGateHarness(context: TestContext, options: {
     const senderId = `demo:${conversationId}`;
     return { status, body, selection: await getTripSelection(senderId), history: history.filter(row => row.sender_id === senderId) };
   };
-  return { turn, demoTurn, history, leads, models, blockedNetwork, logs,
+  /** One run of the follow-up sweep (/api/cron/follow-up), as the 5-minute workflow calls it. */
+  const runFollowUpCron = async (headers: Record<string, string> = {}) => {
+    const beforeSend = sends.length;
+    let status = 200;
+    let body: Record<string, unknown> = {};
+    const req = { method: "POST", url: "/api/cron/follow-up", query: {}, headers };
+    const res = { status(code: number) { status = code; return res; }, json(value: Record<string, unknown>) { body = value; return res; },
+      send() { return res; }, end() { return res; }, setHeader() {}, get statusCode() { return status; } };
+    await followUpCron.default(req as never, res as never);
+    return { status, body, sends: sends.slice(beforeSend) };
+  };
+  return { turn, demoTurn, history, leads, models, blockedNetwork, logs, runFollowUpCron,
+    /** The follow-up columns of travel_senders for this customer (followUp.ts). */
+    followUpState(senderId: string) { return followUps.get(senderId) ?? null; },
+    getStartedState(senderId: string) { return getStarted.get(senderId) ?? null; },
+    /** Runs `hook` once, when this customer's Messenger thread is next read. */
+    onThreadRead(senderId: string, hook: () => void) { threadHooks.set(senderId, hook); },
+    /** The metadata of every Messenger text send so far. */
+    sendMetadata() { return [...sendMetadata]; },
     /** Meta rejects every message to this customer (as the over-long replies of 2026-10-24). */
     failSends(senderId: string, failing = true) { if (failing) failingRecipients.add(senderId); else failingRecipients.delete(senderId); },
     catalog(value: FixtureTrip[]) { catalog = value; webhook.resetWebhookStateForTests(); },
+    /** Owner-entered settings the bot reads (faq, special_offers, discount_policies ...); the 5 s settings cache is expired. */
+    settings(value: Record<string, unknown>) { settingsOverride = value; context.mock.timers.tick(6_000); },
     /** The Messenger thread Meta returns for this customer (or how reading it fails). */
     thread(senderId: string, script: ThreadScript) { threads.set(senderId, script); },
     /** Ids of the messages the bot sent (recorded at send time, staffTakeover.ts). */

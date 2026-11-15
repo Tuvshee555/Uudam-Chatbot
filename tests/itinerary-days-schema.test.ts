@@ -11,7 +11,8 @@ test("normalizeExtra keeps itinerary_days with title/description/hotel/meals, re
   });
   assert.deepEqual(extra.itinerary_days, [
     { day: 1, title: "УБ – Хархорин", description: "Замд гарна", hotel: "Kharkhorin Hotel", meals: { breakfast: false, lunch: true, dinner: true } },
-    { day: 2, title: "Хархорин – УБ", description: "Буцна", meals: { breakfast: true, lunch: false, dinner: false } },
+    // A meal key the day does not have is "not stated" (null); only an explicit false is "not included".
+    { day: 2, title: "Хархорин – УБ", description: "Буцна", meals: { breakfast: true, lunch: null, dinner: null } },
   ]);
   // itinerary_days is a known key now — must not trigger the "unknown field" warning.
   assert.ok(!warnings.some((w) => w.includes("itinerary_days")));
@@ -27,7 +28,7 @@ test("normalizeExtra preserves a valid itinerary-day photo", () => {
 
 test("normalizeExtra keeps blank itinerary rows instead of silently dropping them", () => {
   const { extra } = normalizeExtra({ itinerary_days: [{ title: "", description: "", meals: {} }] });
-  assert.deepEqual(extra.itinerary_days, [{ day: 1, title: "", description: "", meals: { breakfast: false, lunch: false, dinner: false } }]);
+  assert.deepEqual(extra.itinerary_days, [{ day: 1, title: "", description: "", meals: { breakfast: null, lunch: null, dinner: null } }]);
 });
 
 test("normalizeExtra defaults itinerary_days to an empty array when absent or malformed", () => {

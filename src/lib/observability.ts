@@ -384,9 +384,17 @@ export const PERSISTED_INFO_EVENTS: ReadonlySet<string> = new Set([
   "webhook.inbound_outcome",
   "webhook.get_started_silent",
   "webhook.booked_followup",
+  // The need gate (needDispatch.ts): which class a message was read as, and what the model proposed in
+  // observe mode (no customer text). Low volume; the Vercel log window is too short to compare rule and model.
+  "webhook.need_classified",
+  "webhook.need_observed",
   "webhook.disabled",
   // Meta-app migration: an app that does not own the conversation gets `standby`, never answered.
   "webhook.standby_observed",
+  // The one follow-up after a customer leaves an answer on seen (followUp.ts): sent, or why not
+  // (once per armed answer; no customer text).
+  "follow_up.sent",
+  "follow_up.skipped",
   // The private customer-image store's end-to-end check (customerImageStorage.ts): passes too,
   // so "it was working at …" can be shown, not only failures.
   "customer_documents.storage_check",

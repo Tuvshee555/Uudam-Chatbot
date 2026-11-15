@@ -1,4 +1,5 @@
 import type { TravelTrip } from "./travelOps";
+import { holidayPromptLine, resolveHoliday } from "./holidayCalendar";
 
 export const MONGOLIA_TIME_ZONE = "Asia/Ulaanbaatar";
 
@@ -160,6 +161,33 @@ function daysBetween(a: DateParts, b: DateParts): number {
 //   THIS March — if it already passed, the departure is stale, not next year's.
 type YearInferenceMode = "roll-forward" | "current-year";
 
+/**
+ * "11,19": a month and a two-digit day joined by a comma. Amounts, decimals and counts ("2,5 сая", "4,5 хоног",
+ * "3,4 хүн") are excluded by the day needing two digits and by the unit lookahead.
+ */
+export const COMMA_DATE_RE = /(?<![\d.,/-])(\d{1,2}),(\d{2})(?:\s*-?\s*(?:ны|ний|нд|д|nd|nii|ni))?(?![\d.,/-])(?!\s*(?:хүн|hun|нас|nas|сая|saya|кг|kg|хоног|honog|шөнө|өдөр|udur|удаа|мянга|myanga|₮|төг|%|км|km|цаг|tsag|минут|\$|юань|usd|ам|хүүх|huuh|мин(?!\p{L})|min(?!\p{L})|хувь|ширхэг|одтой))/giu;
+
+/**
+ * A comma pair is a date unless it is a list of DAYS of a month already named ("2 сарын 3,10" means the 3rd and
+ * the 10th, not also March 10) or a count/age written beside a person word ("хүүхэд 5,10"). Found by review of the
+ * first version, which read "3,10" after a month word as a second, phantom date.
+ */
+function commaPairIsDate(text: string, index: number): boolean {
+  const before = text.slice(0, index);
+  if (/(?:сарын|сарт|сард|сар|sariin|sarin|sar|sard)\s*$/iu.test(before)) return false;
+  if (/(?:хүүхэд|huuhed|том|tom|нярай|nyarai)\s*$/iu.test(before)) return false;
+  return true;
+}
+
+/** The comma-typed month/day pairs of a customer message, for matchers that keep their own date formats. */
+export function commaMonthDays(text: string): Array<{ month: number; day: number }> {
+  const normalized = text.normalize("NFKC");
+  return [...normalized.matchAll(COMMA_DATE_RE)]
+    .filter((match) => commaPairIsDate(normalized, match.index ?? 0))
+    .map((match) => ({ month: Number(match[1]), day: Number(match[2]) }))
+    .filter(({ month, day }) => month >= 1 && month <= 12 && day >= 1 && day <= 31);
+}
+
 function explicitDateCandidates(
   text: string,
   now = new Date(),
@@ -203,6 +231,29 @@ function explicitDateCandidates(
     const month = Number(match[1]);
     const day = Number(match[2]);
     push(resolveYear(month, day), month, day);
+  }
+
+  // Customers also type the month and day with a comma ("11,19 гарах <хот>", live 2026-11-13): the date
+  // was not read, so the question lost its date and a different trip was answered. Only in what customers
+  // write (stored trip dates keep their own formats), only with a two-digit day right after the comma and
+  // no space, so decimals and amounts ("2,5 сая", "4,5 хоног", "1,290,000") are never dates.
+  if (yearMode === "roll-forward") {
+    // "12 3 хавьцаа", "12 3 havitsa" (live 2026-11-12: "around December 3" typed with spaces was not read,
+    // and the list shown held no date near it). A month and a day separated by a space are a date only when
+    // an "around" word follows: "2 3 хүн" or "5 6 настай" never are.
+    for (const match of text.matchAll(/(?<![\d.,/-])(1[0-2]|0?[1-9])\s+(\d{1,2})(?:\s*-?\s*(?:ны|ний|нд|д))?\s*(?=(?:хавьцаа|хавьд|хавиар|хавь|орчим|тойро|havi|orchim|around))/giu)) {
+      // "3 4 орчим хүн" is "about 3-4 people", not "around March 4".
+      if (/^\p{L}*\s*(?:хүн|hun|хүний|хүүхэд|huuh|нас|nas)/iu.test(text.slice((match.index ?? 0) + match[0].length))) continue;
+      const month = Number(match[1]);
+      const day = Number(match[2]);
+      push(resolveYear(month, day), month, day);
+    }
+    for (const match of text.matchAll(COMMA_DATE_RE)) {
+      if (!commaPairIsDate(text, match.index ?? 0)) continue;
+      const month = Number(match[1]);
+      const day = Number(match[2]);
+      push(resolveYear(month, day), month, day);
+    }
   }
 
   return candidates;
@@ -316,11 +367,14 @@ export function resolveRequestedMonth(
     return buildMonth(month, month < today.month ? today.year + 1 : today.year);
   }
 
-  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сар(?:ынх|ын|ых|д)?|sard|sar(?:iin|in|yn|un)?)(?!\p{L}|\s*\d)/iu.exec(text);
+  // "2027 оны 2 сард" (also typed "2027 ионы 2-р сард"): a year the customer states is the year, whatever
+  // the month's position against today suggests ("2027 оны 11 сард" asked in November 2026).
+  const match = /(?:(20\d{2})\s*(?:\p{L}{0,4})?\s*)?(?:^|[^\d])(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сар(?:ынх|ын|ых|д)?|sard|sar(?:iin|in|yn|un)?)(?!\p{L}|\s*\d)/iu.exec(text);
   if (!match) return null;
-  const month = Number(match[1]);
+  const month = Number(match[2]);
   if (!Number.isInteger(month) || month < 1 || month > 12) return null;
-  const year = month < today.month ? today.year + 1 : today.year;
+  const stated = match[1] ? Number(match[1]) : null;
+  const year = stated !== null && stated >= today.year ? stated : month < today.month ? today.year + 1 : today.year;
   return {
     year,
     month,
@@ -363,7 +417,51 @@ function fromDateOnward(text: string, now: Date): RequestedDepartureScope | null
   return { kind: "range", startYmd: start, endYmd: end };
 }
 
+// "…явж", "…гараад", "…эхлээд": the end of the leaving clause. "…буцдаг", "…ирэх": the coming-back one.
+const LEAVE_VERB_RE = /(?<![\p{L}])(?:яв(?:ж|аад|ах|на|ъя)|гар(?:аад|ч|ах|на)|эхл(?:ээд|эх)|yav(?:j|aad|ah|na)|gar(?:aad|ch|ah|na)|ehl(?:eed|eh))(?![\p{L}])/giu;
+// "ирэх" before a time word is "next" ("ирэх сард", "ирэх 1 сард"), not "coming back".
+const RETURN_VERB_RE = /(?<![\p{L}])(?:буц\p{L}*|ир(?:эх|нэ|дэг|ж|ээд|сэн)\p{L}*|butsa\p{L}*|ir(?:eh|ne|deg|j|eed)\p{L}*)(?![\p{L}])(?!\s+(?:\d|сар|жил|он|долоо|хоног|sar|jil|on|doloo))/iu;
+
+/**
+ * "12/30-нд явж 1 сарын эхээр буцдаг аялал": two times, the day of leaving and the days of coming
+ * back. The departure is the first; the second only says when the trip must be back. Read as one
+ * scope, "1 сарын эхээр" won and the customer got January departures (OP-10 shape). Null when the
+ * message does not hold both a leaving clause and a dated return clause after it.
+ */
+export function splitReturnClause(text: string): { departureText: string; returnText: string } | null {
+  const back = RETURN_VERB_RE.exec(text);
+  if (!back) return null;
+  const before = text.slice(0, back.index);
+  const leave = [...before.matchAll(LEAVE_VERB_RE)].at(-1);
+  if (!leave) return null;
+  const cut = leave.index! + leave[0].length;
+  const returnText = before.slice(cut);
+  if (!/\d/.test(returnText) || !/\d/.test(before.slice(0, cut))) return null;
+  return { departureText: `${before.slice(0, cut)} ${text.slice(back.index + back[0].length)}`.trim(), returnText: returnText.trim() };
+}
+
+/** When the trip must be back by, read from the return clause ("1 сарын эхээр буцдаг"), or null. */
+export function requestedReturnScope(text: string, now = new Date()): RequestedDepartureScope | null {
+  const split = splitReturnClause(text);
+  return split ? requestedDepartureScope(split.returnText, now) : null;
+}
+
+function tripLengthDays(trip: TravelTrip): number | null {
+  const text = trip.duration_text || "";
+  const days = /(\d{1,2})\s*өдөр/iu.exec(text);
+  if (days) return Number(days[1]);
+  const nights = /(\d{1,2})\s*шөнө/iu.exec(text);
+  return nights ? Number(nights[1]) + 1 : null;
+}
+
+function shiftYmd(ymd: string, days: number): string {
+  return new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 export function requestedDepartureScope(text: string, now = new Date()): RequestedDepartureScope | null {
+  const split = splitReturnClause(text);
+  const leaving = split ? requestedDepartureScope(split.departureText, now) : null;
+  if (leaving && leaving.kind !== "unsupported") return leaving;
   const onward = fromDateOnward(text, now);
   if (onward) return onward;
   const listedDays = sharedMonthDayList(text, now);
@@ -380,7 +478,7 @@ export function requestedDepartureScope(text: string, now = new Date()): Request
   return month ? { kind: "month", year: month.year, month: month.month } : null;
 }
 
-const AROUND_DATE_RE = /\d(?:\s*-?\s*(?:ны|ний|нд|ын|ийн|н|д))?\s*(?:хавьцаа|хавьд|хавиар|хавь|орчим\p{L}*|орчмоор|үеэр|тойро?н?|around|orchim\p{L}*|havi(?:tsaa|d|ar)?)(?!\p{L})/iu;
+const AROUND_DATE_RE = /\d(?:\s*-?\s*(?:ны|ний|нд|ын|ийн|н|д))?\s*(?:хавьцаа|хавьд|хавиар|хавь|орчим\p{L}*|орчмоор|үеэр|тойро?н?|around|orchim\p{L}*|havi(?:tsaa|tsa|d|ar)?)(?!\p{L})/iu;
 const AROUND_DATE_DAYS = 7;
 
 /**
@@ -896,7 +994,8 @@ const MONTH_PART_RE =
   /(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сарын|сар|sari{1,2}n|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|su{1,2}l\S*)/gi;
 const MAX_WINDOW_DAYS = 62;
 
-type RequestedRange = { startYmd: string; endYmd: string; label: string };
+/** `phrase` names a holiday window in customer words ("Цагаан сарын үеэр (…)"); used instead of "<label>-ны хооронд". */
+type RequestedRange = { startYmd: string; endYmd: string; label: string; phrase?: string };
 
 function lastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
@@ -1003,6 +1102,17 @@ export function resolveRequestedRange(text: string, now: Date): RequestedRange |
     }).sort();
     if (bounds.length > 0) return buildRange(bounds[0], bounds[bounds.length - 1]);
   }
+  // "Цагаан сарын үеэр", "наадмаар", "шинэ жилийн дараа": the holiday's real dates, as a window
+  // (holidayCalendar.ts). A month the customer typed ("2 сард") is that month, never a holiday.
+  if (dates.length === 0 && !/\d{1,2}\s*(?:-?\s*[рr])?\s*(?:сарын|сард|сар|sard|sar(?:iin|in|yn|un)?)(?!\p{L})/iu.test(normalized)) {
+    const holiday = resolveHoliday(normalized, now);
+    // Dates not published for that year: never a guess.
+    if (holiday?.status === "unknown") return "unsupported";
+    if (holiday?.status === "resolved") {
+      const [startYmd, endYmd] = holiday.window;
+      return { startYmd, endYmd, label: rangeLabel(startYmd, endYmd), phrase: holiday.phrase };
+    }
+  }
   return null;
 }
 
@@ -1089,6 +1199,9 @@ export function buildTemporalPromptContext(userText: string, now = new Date()): 
   if (requested) {
     lines.push(`The user's requested date resolves to ${requested.ymd}.`);
   }
+  // A holiday named ("цагаан сарын үеэр"): its real dates, so the model never guesses them.
+  const holiday = holidayPromptLine(userText, now);
+  if (holiday) lines.push(holiday);
   return lines.join(" ");
 }
 
@@ -1109,8 +1222,10 @@ export function buildDepartureDateAvailabilityReply(input: {
 }): string | null {
   const now = input.now || new Date();
   const fareOn = input.adultFareOn || baseAdultFare;
-  const requested = resolveRequestedDate(input.userText, now);
-  if (!hasDepartureDateAvailabilityIntent(input.userText, now)) return null;
+  // "12/30-нд явж 1 сарын эхээр буцдаг": the day of leaving answers it, not the days of coming back.
+  const userText = splitReturnClause(input.userText)?.departureText ?? input.userText;
+  const requested = resolveRequestedDate(userText, now);
+  if (!hasDepartureDateAvailabilityIntent(userText, now)) return null;
   const focusTrip = input.focusTrip && input.focusTrip.status === "active" ? input.focusTrip : null;
   const scopedTrips = focusTrip ? [focusTrip] : input.trips;
 
@@ -1145,9 +1260,9 @@ export function buildDepartureDateAvailabilityReply(input: {
     return `${label} гарах аялал одоогоор байхгүй байна. Дараа нь гарах аяллууд:\n\n${options}`;
   };
 
-  const range = resolveRequestedRange(input.userText, now);
+  const range = resolveRequestedRange(userText, now);
   if (range === "unsupported") return "REFER";
-  const listedDays = sharedMonthDayList(input.userText, now);
+  const listedDays = sharedMonthDayList(userText, now);
   if (listedDays) {
     if (!listedDays.length) return "REFER";
     const matches = listedDays.flatMap(ymd => findDepartureMatches(scopedTrips, ymd, now).map(match => ({ ymd, trip: match.trip })));
@@ -1156,17 +1271,18 @@ export function buildDepartureDateAvailabilityReply(input: {
   }
   if (range) {
     const rangeMatches = findRangeDepartures(scopedTrips, range.startYmd, range.endYmd, now);
+    const when = range.phrase ?? `${range.label}-ны хооронд`;
     if (rangeMatches.length > 0) {
       const intro = focusTrip
-        ? `Тийм ээ, ${tripPhrase(focusTrip)} ${range.label}-ны хооронд гарна 😊`
-        : `Тийм ээ, ${range.label}-ны хооронд гарах аяллууд байна 😊`;
+        ? `Тийм ээ, ${tripPhrase(focusTrip)} ${when} гарна 😊`
+        : `Тийм ээ, ${when} гарах аяллууд байна 😊`;
       return `${intro}\n\n${formatMonthDepartureOptions(rangeMatches, fareOn)}`;
     }
-    return nearestAfterMiss(`${range.label}-ны хооронд`, range.startYmd) ?? "REFER";
+    return nearestAfterMiss(when, range.startYmd) ?? "REFER";
   }
 
   if (!requested) {
-    const requestedMonth = resolveRequestedMonth(input.userText, now);
+    const requestedMonth = resolveRequestedMonth(userText, now);
     if (!requestedMonth) return null;
     const monthMatches = findMonthDepartures(scopedTrips, requestedMonth, now);
     if (monthMatches.length === 0) {
@@ -1184,7 +1300,15 @@ export function buildDepartureDateAvailabilityReply(input: {
     return `Тийм ээ, ${requestedMonth.month} сард гарах аяллууд байна 😊\n\n${options}${extra}\n\nАль чиглэл сонирхож байна вэ?`;
   }
 
-  const matches = findDepartureMatches(scopedTrips, requested.ymd, now);
+  const leaving = findDepartureMatches(scopedTrips, requested.ymd, now);
+  // "…1 сарын эхээр буцдаг": of the trips leaving that day, the ones back in the time asked. A trip of
+  // unknown length is kept; when none fits, the day's departures are still the answer.
+  const backBy = requestedReturnScope(input.userText, now);
+  const back = backBy ? leaving.filter((match) => {
+    const days = tripLengthDays(match.trip);
+    return days === null || departureMatchesScope(shiftYmd(requested.ymd, days - 1), backBy);
+  }) : leaving;
+  const matches = back.length ? back : leaving;
   const dateLabel = requested.source === "relative"
     ? `${requested.label} буюу ${formatCustomerDate(requested.ymd)}`
     : formatCustomerDate(requested.ymd);

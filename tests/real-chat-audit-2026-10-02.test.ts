@@ -126,12 +126,22 @@ test("a direct-flight destination ask never falls back to that destination's gro
 });
 
 test("Sar Shiniin asks only return trips explicitly tagged for Lunar New Year", () => {
+  // Changed 2026-11-04: "Сар шинийн тусгай аялал … бүртгэгдээгүй" (none registered, a consultant
+  // will clarify) was a no-data deflection. The question is a time (holidayCalendar.ts): an
+  // ordinary trip far from the holiday is never presented as a lunar trip — it is shown only
+  // as the closest departure, under that heading, after "the holiday's schedule is not out".
+  const now = new Date("2026-11-04T04:00:00Z");
   const noSpecial = buildCatalogListingReply("Hi sar shiniin aylal garsan uu", [
     trip({ id: "ordinary", route_name: "Торвен хотын аялал" }),
-  ]);
+  ], now);
   assert.ok(noSpecial);
-  assert.match(noSpecial.reply, /Сар шинийн тусгай аялал.*бүртгэгдээгүй/);
-  assert.doesNotMatch(noSpecial.reply, /Торвен/);
+  assert.match(noSpecial.reply, /^Цагаан сарын үеэр \([^)]*\) гарах аяллын хуваарь одоогоор гараагүй/);
+  assert.doesNotMatch(noSpecial.reply.split("Одоогийн хуваарьт хамгийн ойр")[0], /Торвен/, "never as a lunar trip");
+  // A trip that leaves over the holiday is the answer.
+  const over = buildCatalogListingReply("Hi sar shiniin aylal garsan uu", [
+    trip({ id: "over", route_name: "Торвен хотын аялал", departure_dates: ["2027-02-05"] }),
+  ], now);
+  assert.match(over!.reply, /^🌙 Цагаан сарын үеэр [^\n]*аялах боломжтой аяллууд:[\s\S]*Торвен/);
 });
 
 test("a <city> date question scopes to that city's trips and excludes unrelated same-date tours", () => {

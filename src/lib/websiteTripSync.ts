@@ -2,21 +2,27 @@ import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { queryNeon, withNeonClient } from "./neonDb";
 import { ensureConnectedTripSchema } from "./connectedTripStore";
-import { duration, posterPhotos, record, records, strings, websiteDepartureSchedule, websiteExtraDetails, websiteMarketingBadge } from "./connectedTripMapping";
+import {
+  WEBSITE_FILLED_CLEARED, WEBSITE_FILLED_QUIET, duration, posterPhotos, projectedPatchTransport, record, records, strings, websiteBrochurePdfUrl,
+  websiteDayMeals, websiteDepartureSchedule, websiteExtraDetails, websiteFilledFields, websiteItineraryMeals, websiteMarketingBadge,
+} from "./connectedTripMapping";
 import { websiteAvailabilityForResync, websiteTripPayload } from "./websiteTripPayload";
 import { getEnv } from "./env";
-import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
 import { classifyTripCategory } from "./tripCategorization";
 import type { TravelTrip } from "./travelTypes";
 import { sameDatabase, websiteProjectionTransaction } from "./websiteSyncTransaction";
-import { applyWebsiteDetailsPatch, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
+import { applyWebsiteDetailsPatch, fillWebsiteFields, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
 import { sameParityValue } from "./tripWebsiteParityValue";
 import { departureSeatsAfterTripEdit } from "./departureSeats";
 import type { WebsiteSyncRow } from "./websiteSyncStatus";
 import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
+import { newWebsiteTripSlug } from "./websiteTripSlug";
 import { logWarn } from "./observability";
+import { safeFetch, SafeFetchError } from "./safeFetch";
+import { isHostedPhotoUrl } from "./tripPhotoEdit";
+import type { DepartureDateState } from "./travelTypes";
 
 let pool: Pool | undefined;
 function bookingPool() {
@@ -131,12 +137,67 @@ async function uploadToCloudinary(file: string | Blob, hash: string): Promise<st
   return response.ok && typeof body.secure_url === "string" ? body.secure_url : null;
 }
 
+/**
+ * An outside photo's bytes, fetched through safeFetch: https only, every redirect hop and DNS
+ * answer checked against private addresses, 15 s and 12 MB. A refused or dead link is null.
+ */
 async function downloadRemotePhoto(url: string): Promise<Blob | null> {
-  const response = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (compatible; UudamTravel/1.0)" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
-  const type = response.headers.get("content-type") || "";
-  if (!response.ok || !type.startsWith("image/")) return null;
-  const bytes = await response.arrayBuffer();
-  return bytes.byteLength > 0 && bytes.byteLength <= MAX_REMOTE_PHOTO_BYTES ? new Blob([bytes], { type }) : null;
+  try {
+    const response = await safeFetch(url, { timeoutMs: 15000, maxBytes: MAX_REMOTE_PHOTO_BYTES, accept: "image/*" });
+    const type = response.contentType.split(";")[0].trim().toLowerCase();
+    if (response.status < 200 || response.status >= 300 || !type.startsWith("image/") || response.body.length === 0) return null;
+    return new Blob([new Uint8Array(response.body)], { type });
+  } catch (error) {
+    if (error instanceof SafeFetchError) return null;
+    throw error;
+  }
+}
+
+const DATA_IMAGE = /^data:(image\/(?:png|jpe?g|webp|gif|avif|heic|heif));base64,([a-z0-9+/=\s]+)$/i;
+
+/**
+ * One photo on OUR Cloudinary, for the assistant's photo actions: a photo already there is
+ * returned as it is; an attached image (data: URL) is uploaded; an outside https link is
+ * downloaded through safeFetch (never by an unchecked fetch, never by handing the raw link on)
+ * and its bytes uploaded. Same cache as the poster path (connected_trip_assets, keyed by the
+ * source). Throws an Error with a plain Mongolian message when the photo cannot be hosted.
+ */
+export async function hostImage(source: string): Promise<string> {
+  const value = String(source || "").trim();
+  if (isHostedPhotoUrl(value)) return value;
+  const env = getEnv();
+  if (!env.cloudinaryApiSecret || !env.cloudinaryCloudName || !env.cloudinaryApiKey) {
+    throw new Error("Зураг байршуулах (Cloudinary) тохиргоо хийгдээгүй байна.");
+  }
+  const hash = createHash("sha256").update(value).digest("hex");
+  const cached = await queryNeon<{ url: string }>("SELECT url FROM connected_trip_assets WHERE hash=$1", [hash]);
+  if (cached?.rows[0]?.url && isHostedPhotoUrl(cached.rows[0].url)) return cached.rows[0].url;
+  let blob: Blob;
+  const inline = value.match(DATA_IMAGE);
+  if (inline) {
+    const bytes = Buffer.from(inline[2].replace(/\s+/g, ""), "base64");
+    if (!bytes.length) throw new Error("Хавсаргасан зураг хоосон байна.");
+    if (bytes.length > MAX_REMOTE_PHOTO_BYTES) throw new Error("Зураг 12 MB-аас том байна.");
+    blob = new Blob([new Uint8Array(bytes)], { type: inline[1].toLowerCase() });
+  } else if (/^https:\/\//i.test(value)) {
+    let response: Awaited<ReturnType<typeof safeFetch>>;
+    try {
+      response = await safeFetch(value, { timeoutMs: 15000, maxBytes: MAX_REMOTE_PHOTO_BYTES, accept: "image/*" });
+    } catch (error) {
+      if (error instanceof SafeFetchError) throw new Error(`Зургийг татаж чадсангүй: ${error.reason}`);
+      throw error;
+    }
+    const type = response.contentType.split(";")[0].trim().toLowerCase();
+    if (response.status < 200 || response.status >= 300) throw new Error("Зургийн холбоос нээгдсэнгүй.");
+    if (!type.startsWith("image/") || !response.body.length) throw new Error("Холбоос зураг биш байна.");
+    blob = new Blob([new Uint8Array(response.body)], { type });
+  } else {
+    throw new Error("Зөвхөн https:// зургийн холбоос эсвэл хавсаргасан зураг байршуулна.");
+  }
+  const url = await uploadToCloudinary(blob, hash).catch(() => null);
+  if (!url) throw new Error("Зургийг Cloudinary руу хуулж чадсангүй.");
+  await queryNeon("INSERT INTO connected_trip_assets(hash,url) VALUES ($1,$2) ON CONFLICT(hash) DO NOTHING", [hash, url]);
+  return url;
 }
 
 async function hostedPhoto(photo: string): Promise<string> {
@@ -243,12 +304,24 @@ export function heldWebsiteFields(sourceMetadata: unknown): Set<string> {
   return held;
 }
 
+/**
+ * The website slug each trip's last delivered sync stored, and whether a later save is
+ * still on its way there. A trip the sync never reached is missing from the answer.
+ */
+export async function websiteSlugsFor(tripIds: string[]): Promise<Record<string, { slug: string | null; pending: boolean }>> {
+  const ids = [...new Set(tripIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const result = await queryNeon<{ trip_id: string; website_slug: string | null; pending: boolean }>(
+    "SELECT trip_id, website_slug, revision > synced_revision AS pending FROM trip_website_sync WHERE trip_id = ANY($1::text[])", [ids]);
+  return Object.fromEntries((result?.rows || []).map((row) => [row.trip_id, { slug: row.website_slug ? String(row.website_slug) : null, pending: row.pending === true }]));
+}
+
 async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster: Record<string, unknown>) {
   // Stable source IDs, not titles, are the identity across both databases.
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [source.id]);
   const prior = (await client.query(`SELECT * FROM "Trip" WHERE "sourceTripId"=$1 FOR UPDATE`, [source.id])).rows[0];
   const id = prior?.id || randomUUID();
-  const slug = prior?.slug || `trip-${createHash("sha256").update(source.id).digest("hex").slice(0, 20)}`;
+  const slug = prior?.slug || newWebsiteTripSlug(source.id);
   const d = duration(source.duration_text);
   // Only photos the website can draw: a source photo that could not be copied to
   // Cloudinary would be a broken image on every page showing the trip.
@@ -289,13 +362,18 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const offering = websiteTripPayload(liveSource, websiteDepartureSchedule(source, now), now);
   const hadSourcePhotos = strings(previousSnapshot.photos).length > 0;
   const image = photos[0] || (hadSourcePhotos ? "" : prior?.image || "");
-  const pdf = getPosterPdfPublicUrl(String(source.extra.poster_trip_id));
-  if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF");
+  // The rendered poster first; a brochure staff uploaded when there is no poster PDF.
+  const pdf = websiteBrochurePdfUrl(source.extra);
+  if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF (the trip has no usable uploaded brochure_pdf_url)");
   const marketingBadge = websiteMarketingBadge(source);
   const held = heldWebsiteFields(prior?.sourceMetadata);
   const metadata: Record<string, unknown> = { ...record(prior?.sourceMetadata), ...source.extra,
     price_groups: offering.priceGroups, canonicalOffers: offering.canonicalOffers,
-    marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge } };
+    marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge },
+    // Included / own cost / not stated per website day, and the day's meal
+    // note: ItineraryDay.meals can only list included meals. A website
+    // itinerary edit still on its way here keeps the states it was drawn with.
+    ...(held.has("itinerary") ? {} : { itineraryMeals: websiteItineraryMeals(poster.days, source.extra.itinerary_days) }) };
   for (const field of held) {
     if (field.startsWith("sourceMetadata.")) metadata[field.slice("sourceMetadata.".length)] = record(prior?.sourceMetadata)[field.slice("sourceMetadata.".length)];
   }
@@ -349,8 +427,33 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     currency: source.currency || "MNT", foodIncluded: source.has_food, departureRule: source.extra.departure_rule || null,
   };
   const mergedContent = prior ? mergeWebsiteContent(prior, { ...fallbackBaseline, ...baselineContent }, proposedContent, { preferIncoming: true, hold: held }) : { data: proposedContent, conflicts: [] };
-  const details = applyWebsiteDetailsPatch(prior, source.extra.website_details_patch);
-  const newConflicts = [...mergedContent.conflicts, ...details.conflicts];
+  // Transport tags the new-trip review wrote into the patch for the projection
+  // are not a manual override: they follow transport_type like any filled
+  // field. Until a sync has stored its own transport baseline, that patch
+  // value is what the projection last put on the website.
+  const patch = record(source.extra.website_details_patch);
+  const patchTransport = projectedPatchTransport(record(patch.values).transport,
+    [source.extra.transport_type, previousExtra.transport_type], record(prior?.sourceMetadata).projectedPatchTransport);
+  const manualPatch = patchTransport
+    ? { ...patch, values: Object.fromEntries(Object.entries(record(patch.values)).filter(([key]) => key !== "transport")) }
+    : patch;
+  const details = applyWebsiteDetailsPatch(prior, manualPatch);
+  // Booking terms, transport, destinations and the solo supplement: staff type
+  // these on the website too and it never sends them back, so the chatbot's
+  // value fills an empty field or one it wrote itself, never a website edit.
+  // A field the admin's own website_details_patch sets is that patch's; once
+  // the patch stops naming it, the value it wrote is a website edit (kept).
+  const filledProposal = websiteFilledFields(source, offering.priceGroups);
+  const filledBaseline = patchTransport && !("transport" in baselineContent) ? { ...baselineContent, transport: patchTransport } : baselineContent;
+  const filled = fillWebsiteFields(prior, filledBaseline, filledProposal, {
+    hold: held, skip: new Set(Object.keys(record(manualPatch.values))),
+    quiet: WEBSITE_FILLED_QUIET, cleared: WEBSITE_FILLED_CLEARED,
+  });
+  // The stored patch keeps that transport until staff save website details
+  // again; remembering it keeps it the projection's after transport_type moves on.
+  if (patchTransport) metadata.projectedPatchTransport = patchTransport;
+  else delete metadata.projectedPatchTransport;
+  const newConflicts = [...mergedContent.conflicts, ...filled.conflicts, ...details.conflicts];
   // Conflicts describe the current three-way merge only. Keeping historical
   // conflicts here made an already-resolved trip look permanently divergent.
   const allConflicts = newConflicts.filter((conflict, index, entries) =>
@@ -359,10 +462,14 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const contentFields = mergedContent.data;
   const data: Record<string, unknown> = {
     ...contentFields,
+    ...filled.data,
     ...(categoryId !== undefined ? { categoryId } : {}),
     brochurePdfUrl: pdf,
     ...details.data,
-    sourceMetadata: JSON.stringify({ ...metadata, contentHash, contentSnapshot: proposedContent, contentConflicts: allConflicts }),
+    // The filled fields' proposal is the next sync's "did anyone edit it there"
+    // baseline — also for a held or patch-set field, whose website value is
+    // then a website edit, never something the next sync may overwrite.
+    sourceMetadata: JSON.stringify({ ...metadata, contentHash, contentSnapshot: { ...proposedContent, ...filledProposal }, contentConflicts: allConflicts }),
     // "paused" behaves exactly like sold_out here: visible, just not
     // bookable — the trip stays on the site so customers can still ask
     // about it, but every departure below reads as closed, not open.
@@ -397,14 +504,14 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       dayNumbers.push(number);
       const previousDay = previousDays.find((entry, index) => (Number(entry.day) || index + 1) === number);
       if (prior && previousDay && sameParityValue(previousDay, day)) continue;
-      const meals = record(day.meals);
+      // Only meals the program says are included are listed; a meal it does not
+      // mention stays unlisted and its "not stated" lives in itineraryMeals.
       const dayFields = { title: String(day.route || `${number}-р өдөр`), description: day.summary || null, accommodation: day.hotel || null,
-        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: typeof day.photo === "string" && isSitePhotoHost(day.photo) ? day.photo : null };
+        meals: websiteDayMeals(day.meals), image: typeof day.photo === "string" && isSitePhotoHost(day.photo) ? day.photo : null };
       const oldDay = oldDays.find((entry) => entry.dayNumber === number);
       if (oldDay) {
-        const oldMeals = record(previousDay?.meals);
         const baseline = { title: previousDay?.route, description: previousDay?.summary || null, accommodation: previousDay?.hotel || null,
-          meals: [oldMeals.breakfast ? "Өглөө" : "", oldMeals.lunch ? "Өдөр" : "", oldMeals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay?.photo || null };
+          meals: websiteDayMeals(previousDay?.meals), image: previousDay?.photo || null };
         const result = mergeWebsiteContent(oldDay, baseline, dayFields, { preferIncoming: true });
         const entries = Object.entries(result.data);
         if (entries.length) await client.query(`UPDATE "ItineraryDay" SET ${entries.map(([key], index) => `"${key}"=$${index + 2}`).join(",")} WHERE id=$1`, [oldDay.id, ...entries.map(([, value]) => value)]);
@@ -423,9 +530,8 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       if (dayNumbers.includes(number)) continue;
       const oldDay = oldDays.find((entry) => entry.dayNumber === number);
       if (!oldDay) continue;
-      const meals = record(previousDay.meals);
       const baseline = { title: String(previousDay.route || `${number}-р өдөр`), description: previousDay.summary || null, accommodation: previousDay.hotel || null,
-        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay.photo || null };
+        meals: websiteDayMeals(previousDay.meals), image: previousDay.photo || null };
       if (!mergeWebsiteContent(oldDay, baseline, baseline).conflicts.length) {
         await client.query(`UPDATE "ItineraryDay" SET "dayNumber"=$2 WHERE id=$1`, [oldDay.id, archiveDayNumber--]);
       } else {
@@ -484,20 +590,119 @@ export type DateSeatState = "open" | "low" | "full";
  * on that date only. Returns false when the trip has no such live departure.
  */
 export async function setDepartureSeatState(sourceTripId: string, date: string, state: DateSeatState): Promise<boolean> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-  const status = state === "low" ? "ALMOST_FULL" : state === "full" ? "SOLD_OUT" : "OPEN";
-  const result = await bookingPool().query(
-    `UPDATE "Departure" d SET status=$3::"DepartureStatus",
-       -- a stale zero count would keep a reopened date sold out
-       "seatsLeft"=CASE WHEN $3 <> 'SOLD_OUT' AND d."seatsLeft"=0 THEN NULL ELSE d."seatsLeft" END
-     FROM "Trip" t
-     WHERE d."tripId"=t.id AND t."sourceTripId"=$1
-       AND (d."startDate" + interval '8 hours')::date = $2::date
-       AND d.status NOT IN ('CANCELLED','DEPARTED')
-     RETURNING d.id`,
-    [sourceTripId, date, status],
+  return (await changeDepartureState(sourceTripId, date, state)).rows.length > 0;
+}
+
+/** The website status each assistant date state writes. */
+export const DEPARTURE_STATUS_OF: Record<DepartureDateState, string> = { open: "OPEN", low: "ALMOST_FULL", full: "SOLD_OUT", paused: "PAUSED" };
+
+/** One website departure row as it was before a change and as the change left it. */
+export type DepartureStateRow = { id: string; status: string; seatsLeft: number | null; after_status: string; after_seats_left: number | null; date?: string };
+export type DepartureStateChange = { slug: string | null; rows: DepartureStateRow[] };
+/** One website departure row as it is now (raw status, PAUSED included). */
+export type DepartureRowState = { id: string; date: string; status: string; seatsLeft: number | null };
+
+/**
+ * Every website departure row of one chatbot trip, raw (the status the row holds, not the
+ * availability overlay's reading of it). Read before and after a trip-level status change
+ * (archive, cancel, pause) so its rollback can put each date back: re-activating a trip in the
+ * projection reopens every closed date (upsertWebsiteTrip), which on its own would turn a date
+ * that was sold out or paused before the change into a bookable one.
+ */
+export async function readDepartureRows(sourceTripId: string): Promise<{ slug: string | null; rows: DepartureRowState[] }> {
+  const result = await bookingPool().query<{ id: string; date: string; status: string; seats_left: number | null; slug: string | null }>(
+    `SELECT d.id, to_char((d."startDate" + interval '8 hours')::date, 'YYYY-MM-DD') AS date, d.status::text AS status,
+            d."seatsLeft" AS seats_left, t.slug
+       FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id
+      WHERE t."sourceTripId"=$1
+      ORDER BY d."startDate", d.id`,
+    [sourceTripId],
   );
-  return (result.rowCount ?? 0) > 0;
+  return {
+    slug: result.rows[0]?.slug ? String(result.rows[0].slug) : null,
+    rows: result.rows.map((row) => ({ id: String(row.id), date: String(row.date), status: String(row.status), seatsLeft: row.seats_left ?? null })),
+  };
+}
+
+/** True while the trip's latest save has not reached the website yet (its projection is queued). */
+export async function websiteSyncPending(tripId: string): Promise<boolean> {
+  const result = await queryNeon<{ pending: boolean }>("SELECT revision > synced_revision AS pending FROM trip_website_sync WHERE trip_id=$1", [tripId]);
+  return result?.rows[0]?.pending === true;
+}
+
+/**
+ * Sets one departure day's status (OPEN / ALMOST_FULL / SOLD_OUT / PAUSED) and returns every
+ * row it changed with its RAW earlier status and seat count, read in the same statement, so a
+ * rollback can put back exactly what was there (PAUSED included, which the availability
+ * overlay used to read as "open"). Reopening clears a stale zero seat count, as before.
+ */
+export async function changeDepartureState(sourceTripId: string, date: string, state: DepartureDateState): Promise<DepartureStateChange> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(state in DEPARTURE_STATUS_OF)) return { slug: null, rows: [] };
+  const status = DEPARTURE_STATUS_OF[state];
+  const result = await bookingPool().query<{ id: string; status: string; seats_left: number | null; slug: string | null; after_status: string; after_seats_left: number | null }>(
+    `WITH target AS (
+       SELECT d.id, d.status::text AS status, d."seatsLeft" AS seats_left, t.slug
+         FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id
+        WHERE t."sourceTripId"=$1
+          AND (d."startDate" + interval '8 hours')::date = $2::date
+          AND d.status NOT IN ('CANCELLED','DEPARTED')
+        FOR UPDATE OF d
+     ), changed AS (
+       UPDATE "Departure" d SET status=$3::"DepartureStatus",
+         -- a stale zero count would keep a reopened date sold out
+         "seatsLeft"=CASE WHEN $4::text IN ('OPEN','ALMOST_FULL') AND d."seatsLeft"=0 THEN NULL ELSE d."seatsLeft" END
+         FROM target WHERE d.id=target.id
+       RETURNING d.id, d.status::text AS after_status, d."seatsLeft" AS after_seats_left
+     )
+     SELECT target.id, target.status, target.seats_left, target.slug, changed.after_status, changed.after_seats_left
+       FROM target JOIN changed ON changed.id=target.id`,
+    [sourceTripId, date, status, status],
+  );
+  const rows = result.rows.map((row) => ({
+    id: String(row.id), status: String(row.status), seatsLeft: row.seats_left ?? null,
+    after_status: String(row.after_status), after_seats_left: row.after_seats_left ?? null,
+  }));
+  return { slug: result.rows[0]?.slug ? String(result.rows[0].slug) : null, rows };
+}
+
+/**
+ * Puts departure rows back to the status and seat count recorded before an assistant change,
+ * but only while every row still has the status that change gave it: a date staff (or the
+ * website) changed since is left alone and reported, never overwritten.
+ */
+export async function restoreDepartureRows(rows: DepartureStateRow[]): Promise<{ restored: number; changedSince: string[] }> {
+  if (!rows.length) return { restored: 0, changedSince: [] };
+  const client = await bookingPool().connect();
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{ id: string; status: string; seats_left: number | null }>(
+      `SELECT id, status::text AS status, "seatsLeft" AS seats_left FROM "Departure" WHERE id=ANY($1::text[]) FOR UPDATE`, [rows.map((row) => row.id)]);
+    const now = new Map(current.rows.map((row) => [String(row.id), { status: String(row.status), seatsLeft: row.seats_left ?? null }]));
+    // Every row already back where it was (a rollback run a second time): nothing to write.
+    if (rows.every((row) => now.get(row.id)?.status === row.status && now.get(row.id)?.seatsLeft === row.seatsLeft)) {
+      await client.query("ROLLBACK");
+      return { restored: 0, changedSince: [] };
+    }
+    // A row gone, or with a status or seat count other than the change left, was edited since.
+    const changedSince = rows.filter((row) => {
+      const live = now.get(row.id);
+      return !live || live.status !== row.after_status || live.seatsLeft !== row.after_seats_left;
+    }).map((row) => row.id);
+    if (changedSince.length) {
+      await client.query("ROLLBACK");
+      return { restored: 0, changedSince };
+    }
+    for (const row of rows) {
+      await client.query(`UPDATE "Departure" SET status=$2::"DepartureStatus","seatsLeft"=$3 WHERE id=$1`, [row.id, row.status, row.seatsLeft]);
+    }
+    await client.query("COMMIT");
+    return { restored: rows.length, changedSince: [] };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function flushWebsiteSync(tripId?: string, limit = 5) {
@@ -580,8 +785,12 @@ export async function notifyWebsiteTripsChanged(slugs: string[]) {
   const unique = [...new Set(slugs.filter(Boolean))];
   const explicit = process.env.WEBSITE_REVALIDATE_URL?.trim();
   if (!unique.length || (!explicit && process.env.VERCEL_ENV !== "production")) return;
-  const secret = process.env.WEBSITE_TRIP_SYNC_SECRET || getEnv().adminSecret;
-  if (!secret) return;
+  // Its own secret only: the admin password must never travel to another service.
+  const secret = process.env.WEBSITE_TRIP_SYNC_SECRET?.trim();
+  if (!secret) {
+    logWarn("website_revalidate.skipped", { reason: "WEBSITE_TRIP_SYNC_SECRET is not set", slugs: unique.length });
+    return;
+  }
   try {
     const response = await fetch(`${(explicit || BOOKING_WEBSITE_URL).replace(/\/$/, "")}/api/internal/trip-changed`, {
       method: "POST",

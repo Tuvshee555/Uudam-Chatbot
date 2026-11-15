@@ -4,11 +4,12 @@
  *
  * - Spreadsheets become an HTML table — the model reads tabular data far
  *   more accurately as HTML than as raw cell dumps.
- * - PDFs are text-extracted server-side when possible, and images are passed
- *   through as inline binary for OpenAI vision.
+ * - PDFs are text-extracted server-side with pdf.js; a PDF with no text layer is
+ *   an error here (the admin page renders those to images before uploading).
+ * - Images are passed through as inline binary for OpenAI vision.
  */
 import ExcelJS from "exceljs";
-import { inflateRawSync } from "node:zlib";
+import JSZip from "jszip";
 import { docxDocumentXmlToText } from "./docxText";
 
 export type ParsedUpload = {
@@ -222,74 +223,67 @@ async function legacyXlsToHtml(buffer: Buffer): Promise<string> {
 }
 
 /**
- * Pulls a single file out of a ZIP archive (DOCX/XLSX are ZIPs) using only
- * Node's built-in zlib — no external unzip dependency. Returns null if the
- * entry isn't found. Handles both stored (method 0) and deflated (method 8).
+ * Extracts readable text from a .docx (Word) file. A .docx is a ZIP whose
+ * word/document.xml holds the body. JSZip reads the central directory, so an
+ * entry whose sizes live in a data descriptor (Google Docs and other streaming
+ * writers) is found too; the earlier header-scanning reader skipped those and
+ * reported the file as unreadable (2026-11-04).
  */
-function readZipEntry(buffer: Buffer, entryName: string): Buffer | null {
-  const target = Buffer.from(entryName, "utf8");
-  let offset = 0;
-  // Local file headers start with PK\x03\x04 (0x04034b50).
-  while (offset + 30 <= buffer.length) {
-    if (buffer.readUInt32LE(offset) !== 0x04034b50) {
-      // Not at a local header — scan forward to the next signature.
-      const next = buffer.indexOf("PK\x03\x04", offset + 1, "binary");
-      if (next === -1) break;
-      offset = next;
-      continue;
-    }
-    const method = buffer.readUInt16LE(offset + 8);
-    const compressedSize = buffer.readUInt32LE(offset + 18);
-    const nameLength = buffer.readUInt16LE(offset + 26);
-    const extraLength = buffer.readUInt16LE(offset + 28);
-    const nameStart = offset + 30;
-    const name = buffer.subarray(nameStart, nameStart + nameLength);
-    const dataStart = nameStart + nameLength + extraLength;
-
-    if (compressedSize > 0 && name.equals(target)) {
-      const data = buffer.subarray(dataStart, dataStart + compressedSize);
-      if (method === 0) return Buffer.from(data);
-      if (method === 8) {
-        try {
-          return inflateRawSync(data);
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    }
-
-    if (compressedSize > 0) {
-      offset = dataStart + compressedSize;
-    } else {
-      // Streamed entry (size in data descriptor) — fall back to scanning.
-      const next = buffer.indexOf("PK\x03\x04", dataStart, "binary");
-      if (next === -1) break;
-      offset = next;
-    }
+async function docxToText(buffer: Buffer): Promise<string> {
+  let xml: string | undefined;
+  try {
+    const zip = await JSZip.loadAsync(buffer);
+    xml = await zip.file("word/document.xml")?.async("string");
+  } catch {
+    xml = undefined;
   }
-  return null;
+  if (!xml) {
+    throw new Error(
+      "Word файлыг уншиж чадсангүй (word/document.xml олдсонгүй). PDF болгож хадгалаад эсвэл текстээ хуулж оруулна уу.",
+    );
+  }
+  return docxDocumentXmlToText(xml);
 }
 
 /**
- * Extracts readable text from a .docx (Word) file. A .docx is a ZIP whose
- * word/document.xml holds the body; we strip XML tags, turning paragraph and
- * line breaks into newlines so price lists stay legible to the AI.
+ * The PDF's text layer, page by page, through pdf.js (the same engine the admin
+ * page uses in the browser). pdf-parse 1.x bundled a 2018 pdf.js that rejected
+ * PDFs with object streams, i.e. most files Word and Chrome write today, with
+ * "Invalid PDF structure" (2026-11-04).
  */
-function docxToText(buffer: Buffer): string {
-  const xmlBuf = readZipEntry(buffer, "word/document.xml");
-  if (!xmlBuf) {
-    throw new Error(
-      "Word файлыг уншиж чадсангүй. PDF болгож хадгалаад эсвэл текстээ хуулж оруулна уу.",
-    );
+async function pdfToText(buffer: Buffer): Promise<{ text: string; pages: number }> {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const document = await pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    disableFontFace: true,
+    useSystemFonts: false,
+    verbosity: 0,
+  }).promise;
+  const pages: string[] = [];
+  try {
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const lines: string[] = [];
+      let line = "";
+      for (const item of content.items) {
+        if (!("str" in item)) continue;
+        line += item.str;
+        if (item.hasEOL) {
+          lines.push(line);
+          line = "";
+        } else if (item.str && !item.str.endsWith(" ")) {
+          line += " ";
+        }
+      }
+      if (line.trim()) lines.push(line);
+      const text = lines.map((entry) => entry.replace(/[ \t]+/g, " ").trimEnd()).join("\n").trim();
+      if (text) pages.push(`Page ${pageNumber}\n${text}`);
+    }
+  } finally {
+    await document.destroy().catch(() => undefined);
   }
-  return docxDocumentXmlToText(xmlBuf.toString("utf8"));
-}
-
-async function pdfToText(buffer: Buffer): Promise<string> {
-  const pdf = (await import("pdf-parse/lib/pdf-parse.js")).default;
-  const data = await pdf(buffer);
-  return String(data.text || "").trim();
+  return { text: pages.join("\n\n").trim(), pages: document.numPages };
 }
 
 function normalizeImageMime(extension: string, mimeType?: string): string {
@@ -336,7 +330,7 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
   }
 
   if (isWord) {
-    const text = docxToText(buffer);
+    const text = await docxToText(buffer);
     if (!text) throw new Error("Word файлд текст олдсонгүй.");
     return { label: filename, text, inline: null };
   }
@@ -348,15 +342,22 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
   }
 
   if (isPdf) {
-    const text = await pdfToText(buffer);
-    if (text) {
-      return { label: filename, text, inline: null };
+    let parsed: { text: string; pages: number };
+    try {
+      parsed = await pdfToText(buffer);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`PDF файлыг нээж чадсангүй (${reason}). Файл гэмтсэн эсвэл нууц үгтэй байж магадгүй.`);
     }
-    return {
-      label: filename,
-      text: "",
-      inline: null,
-    };
+    if (parsed.text) {
+      return { label: filename, text: parsed.text, inline: null };
+    }
+    // No text layer: a scanned or image-only PDF. Nothing can be read from it here; the
+    // admin page renders such pages to images itself, so say that instead of sending the
+    // model an empty source that looks like a parsed file.
+    throw new Error(
+      `PDF-д уншигдах текст алга (${parsed.pages} хуудас, сканнердсан зураг байж магадгүй). Админ хуудаснаас шууд оруулбал хуудас бүрийг зураг болгон уншина.`,
+    );
   }
 
   if (isImage) {

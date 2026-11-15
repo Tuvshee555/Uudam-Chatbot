@@ -1,14 +1,21 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getEnv } from "./env";
+import { deriveAdminKey } from "./adminSession";
 import type { CustomerDocument } from "./customerDocuments";
 import type { ConversationRow } from "./travelSessionDb";
 
 const LINK_TTL_SECONDS = 60 * 60;
+const LINK_KEY_LABEL = "customer-file-link:v1";
+
+/** HMAC(ADMIN_SESSION_SECRET, "customer-file-link:v1"); null while that secret is weak (no links then). */
+function linkKey(): Buffer | null {
+  return deriveAdminKey(getEnv().adminSessionSecret, LINK_KEY_LABEL);
+}
 
 function sign(message: string) {
-  const secret = getEnv().adminSecret;
-  if (!secret) throw new Error("admin_image_signing_unavailable");
-  return createHmac("sha256", secret).update(message).digest("hex");
+  const key = linkKey();
+  if (!key) throw new Error("admin_image_signing_unavailable");
+  return createHmac("sha256", key).update(message).digest("hex");
 }
 
 // A document link signs "<id>:<expires>"; an inbox attachment link signs
@@ -17,7 +24,7 @@ const documentMessage = (id: number, expires: number) => `${id}:${expires}`;
 const attachmentMessage = (rowId: number, index: number, expires: number) => `attachment:${rowId}:${index}:${expires}`;
 
 function verify(message: string, expires: number, candidate: string) {
-  if (!getEnv().adminSecret) return false;
+  if (!linkKey()) return false;
   const now = Math.floor(Date.now() / 1000);
   if (!Number.isSafeInteger(expires) || expires < now || expires > now + LINK_TTL_SECONDS
     || !/^[a-f0-9]{64}$/.test(candidate)) return false;

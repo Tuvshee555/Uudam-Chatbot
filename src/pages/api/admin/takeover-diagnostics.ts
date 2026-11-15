@@ -37,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }));
       const state = (await queryNeon<Record<string, unknown>>(
         `SELECT s.paused, s.pause_reason, s.paused_at, s.expires_at, s.last_staff_reply_at,
-                l.lead_status, l.assigned_to <> '' AS assigned, l.seen_at, l.notify_status
+                l.lead_status, l.assigned_to <> '' AS assigned, l.seen_at
            FROM travel_senders s LEFT JOIN LATERAL (SELECT * FROM travel_leads WHERE sender_id = s.sender_id ORDER BY id DESC LIMIT 1) l ON TRUE
           WHERE s.sender_id = $1`, [senderId],
       ))?.rows[0] ?? null;

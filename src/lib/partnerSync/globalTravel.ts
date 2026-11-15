@@ -47,7 +47,13 @@ export type PartnerTour = {
   airlines: string[];
   durationDays: number | null;
   durationNights: number | null;
-  hotels: { name: string; stars: number | null; description: string }[];
+  /**
+   * The partner's hotel records. `id` is the partner's own hotel id and `url` its hotel page link
+   * (both optional: snapshots stored before 2026-11-05 have neither). The partner's hotel photos are
+   * not copied: they are served from its own API under a path with no image extension, which the
+   * website shows as a link to the partner's domain, not as a photo.
+   */
+  hotels: { id?: string | null; name: string; stars: number | null; description: string; url?: string }[];
   includes: string[];
   excludes: string[];
   days: PartnerDay[];
@@ -184,6 +190,37 @@ async function sha256Hex(value: string): Promise<string> {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * A hotel's own page (a booking site, the hotel's site): https only, and never a page on the partner's
+ * own domain, which would send our customer to the partner.
+ */
+export function hotelPageUrl(value: unknown, partnerUrl: string): string {
+  if (typeof value !== "string" || !value.trim()) return "";
+  try {
+    const url = new URL(value.trim());
+    const partner = new URL(partnerUrl).hostname.replace(/^www\./, "").toLowerCase();
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== "https:" || host === partner || host.endsWith(`.${partner}`)) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+/** The tour's hotel records; a record with no name is not a hotel. */
+export function readHotels(raw: unknown, partnerUrl: string): PartnerTour["hotels"] {
+  return (Array.isArray(raw) ? raw : [])
+    .map((entry) => record(entry))
+    .map((hotel) => ({
+      id: typeof hotel.id === "string" && hotel.id.trim() ? hotel.id.trim() : typeof hotel.id === "number" ? String(hotel.id) : null,
+      name: String(hotel.name ?? "").trim(),
+      description: String(hotel.description ?? "").trim(),
+      stars: Number.isFinite(Number(hotel.stars)) && Number(hotel.stars) > 0 ? Number(hotel.stars) : null,
+      url: hotelPageUrl(hotel.url, partnerUrl),
+    }))
+    .filter((hotel) => hotel.name);
+}
+
 /** The partner writes its own brand into the blurb ("GTC-тэй хамт …"); our customers must not read that. */
 export function ownVoice(text: string): string {
   return text.replace(/GTC\S*\s+хамт\s+/gi, "").replace(/\s+/g, " ").trim();
@@ -212,14 +249,12 @@ export async function fetchGlobalTravelTour(slug: string, options: { timeoutMs?:
 
   const durationDays = Number(tour.duration_day);
   const durationNights = Number(tour.duration_night);
-  const hotels = (Array.isArray(tour.hotels) ? tour.hotels : [])
-    .map((entry) => record(entry))
-    .map((hotel) => ({ name: String(hotel.name ?? "").trim(), description: String(hotel.description ?? "").trim(), stars: Number.isFinite(Number(hotel.stars)) && Number(hotel.stars) > 0 ? Number(hotel.stars) : null }))
-    .filter((hotel) => hotel.name);
+  const sourceUrl = `https://global-travel.mn/tours/${slug}`;
+  const hotels = readHotels(tour.hotels, sourceUrl);
 
   const data: Omit<PartnerTour, "contentHash"> = {
     slug,
-    sourceUrl: `https://global-travel.mn/tours/${slug}`,
+    sourceUrl,
     title: String(tour.title ?? "").trim(),
     description: ownVoice(String(tour.description ?? "")),
     destinations: strings(tour.cities),

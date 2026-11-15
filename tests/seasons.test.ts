@@ -4,7 +4,7 @@ process.env.VERIFY_TOKEN ||= "test-verify-token";
 process.env.TOKEN_PAGE ||= "test-page-token";
 process.env.FACEBOOK_PAGE_ID ||= "1234567890";
 process.env.META_APP_SECRET ||= "test-meta-secret";
-process.env.ADMIN_SECRET ||= "test-admin-secret";
+process.env.ADMIN_SESSION_SECRET ||= "test-session-key-7f3a9c1e5b2d8f40-6a1c9e7b3d5f2a8c";
 process.env.REDIS_STATE_ENABLED ||= "false";
 
 import assert from "node:assert/strict";

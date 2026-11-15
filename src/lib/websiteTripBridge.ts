@@ -3,6 +3,9 @@ import { sameParityValue } from "./tripWebsiteParityValue";
 import { duration } from "./connectedTripMapping";
 import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
+import { mergeWebsiteDateFares } from "./websiteDateFares";
+import { parseTripDepartureDateText } from "./travelDates";
+import { legacyUnstatedMeals } from "./tripExtraSchema";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -162,6 +165,37 @@ function canonicalDepartures(values: unknown[]): UnknownRecord[] {
   });
 }
 
+/** Today in Ulaanbaatar, "YYYY-MM-DD". */
+function mongoliaToday(now = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+/**
+ * The calendar days a schedule names, read through the stored write-time
+ * resolution first ("10 сарын 8" → 2026-10-08) and the date parser otherwise.
+ * Null when an entry is a rule rather than a day ("Пүрэв гараг бүр") or cannot
+ * be read: such a schedule is the chatbot's to keep.
+ */
+function scheduleDays(values: unknown, resolved: unknown): Map<string, string> | null {
+  const known = new Map<string, string>();
+  for (const entry of Array.isArray(resolved) ? resolved.map(record) : []) {
+    if (typeof entry.text === "string" && typeof entry.ymd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry.ymd)) known.set(entry.text.trim(), entry.ymd);
+  }
+  const days = new Map<string, string>();
+  for (const value of strings(values)) {
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(value) ? [value] : known.has(value) ? [known.get(value)!] : parseTripDepartureDateText(value);
+    if (iso.length !== 1) return null;
+    if (!days.has(iso[0])) days.set(iso[0], value);
+  }
+  return days;
+}
+
+function futureDays(days: Map<string, string>, today: string): string[] {
+  return [...days.keys()].filter((day) => day >= today).sort();
+}
+
+const sameDays = (left: string[], right: string[]) => left.length === right.length && left.every((day, index) => day === right[index]);
+
 function durationText(days: unknown, nights: unknown): string {
   const dayCount = Math.max(1, Math.trunc(numberOrNull(days) ?? 1));
   const nightCount = Math.max(0, Math.trunc(numberOrNull(nights) ?? Math.max(0, dayCount - 1)));
@@ -191,7 +225,110 @@ export function websiteTripToCanonicalFields(input: unknown): {
   return mapWebsiteTrip(input);
 }
 
-function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMutationFields } {
+type MealKey = "breakfast" | "lunch" | "dinner";
+type MealState = Record<MealKey, boolean | null>;
+const MEAL_KEYS: readonly MealKey[] = ["breakfast", "lunch", "dinner"];
+/*
+ * How a meal phrase typed on the website reads. Twin of dayMealSlots in the website's
+ * src/lib/itineraryMeals.ts (uudam-booking-web: SLOTS, NOT_INCLUDED, ALL_MEALS): the website
+ * draws ✓/✗ from its copy and this one decides what the bot is told, so the two must read
+ * every phrase the same way. Change both together.
+ */
+const MEAL_PATTERNS: Record<MealKey, RegExp> = {
+  breakfast: /өглөө|breakfast/iu,
+  lunch: /(?:^|[^\p{L}])(?:өдөр|өдрийн|үдийн|lunch)/iu,
+  dinner: /орой|dinner/iu,
+};
+/** A meal phrase that says the meal is NOT included ("Орой ороогүй", "Өдрийн хоол өөрийн зардлаар", "Орой үгүй"). */
+const MEAL_NOT_INCLUDED = /ороогүй|орохгүй|багтаагүй|багтахгүй|хоолгүй|өөрийн|өөрөө|үгүй|not included|excluded|own expense|self[- ]?paid/iu;
+/** "3 хоол", "Бүх хоол", "Full board": all three meals at once. */
+const ALL_MEALS = /(?:^|[^\p{L}\p{N}])(?:3|гурван)\s*(?:удаагийн\s*|удаа\s*)?хоол|бүх\s*хоол|full\s*board|all\s*meals/iu;
+
+function mealStateOf(value: unknown): boolean | null {
+  return value === true ? true : value === false ? false : null;
+}
+
+/**
+ * What a website day's meal list names, read as the website reads it: true included, false
+ * typed as not included, null named both ways (unknown). A meal the list does not name is absent.
+ */
+function namedMeals(listed: string[]): Partial<MealState> {
+  const named: Partial<MealState> = {};
+  for (const phrase of listed.flatMap(meal => meal.split(/[,;/]+/)).map(part => part.trim()).filter(Boolean)) {
+    const included = !MEAL_NOT_INCLUDED.test(phrase);
+    const keys = MEAL_KEYS.filter(key => MEAL_PATTERNS[key].test(phrase));
+    for (const key of keys.length ? keys : ALL_MEALS.test(phrase) ? MEAL_KEYS : []) {
+      named[key] = key in named && named[key] !== included ? null : included;
+    }
+  }
+  return named;
+}
+
+/**
+ * What each chatbot day's meals were at the last sync, by the chatbot's day number. The website
+ * lists only included meals, so "not included" (false) and "not stated" (null) live in the sync's
+ * `sourceMetadata.itineraryMeals`; a trip synced before that existed falls back to the chatbot's
+ * own days from the last sync.
+ */
+function websiteMealStates(itineraryMeals: unknown, priorDays: unknown): Map<number, MealState> {
+  const states = new Map<number, MealState>();
+  const legacy = new Set<number>();
+  (Array.isArray(priorDays) ? priorDays : []).map(record).forEach((day, index) => {
+    const meals = record(day.meals);
+    const dayNumber = Number(day.day) || index + 1;
+    states.set(dayNumber, { breakfast: mealStateOf(meals.breakfast), lunch: mealStateOf(meals.lunch), dinner: mealStateOf(meals.dinner) });
+    if (legacyUnstatedMeals(meals, day.meal_note)) legacy.add(dayNumber);
+  });
+  (Array.isArray(itineraryMeals) ? itineraryMeals : []).map(record).forEach((day) => {
+    const dayNumber = Number(day.dayNumber);
+    if (!(dayNumber > 0)) return;
+    const state = { breakfast: mealStateOf(day.breakfast), lunch: mealStateOf(day.lunch), dinner: mealStateOf(day.dinner) };
+    // websiteItineraryMeals sends a legacy all-false day as "not stated"; the chatbot day still
+    // holds its false, and the three-way comparison below reads that stored value.
+    if (legacy.has(dayNumber) && MEAL_KEYS.every(key => state[key] === null) && !text(day.note)) return;
+    states.set(dayNumber, state);
+  });
+  return states;
+}
+
+/**
+ * The website day this one was before the save: what that day listed (null when there is no
+ * earlier website copy to compare with) and the states of the chatbot day it was drawn from.
+ */
+type PriorWebsiteDay = { meals: string[] | null; before: MealState | undefined };
+
+/**
+ * Where a website day was in the copy this save replaced. The website renumbers its days 1..n on
+ * every save (booking-web src/server/tripInput.ts normalizeItinerary), so a day is found by its
+ * ItineraryDay id, by position only when it has none; -1 for a day the save added.
+ */
+function previousWebsiteDayIndex(day: UnknownRecord, index: number, previousDays: UnknownRecord[]): number {
+  return day.id ? previousDays.findIndex((entry) => entry.id === day.id) : index;
+}
+
+/**
+ * A meal the website names is what it says. One it does not name stays what the chatbot day it
+ * came from said (true, false or not stated), unless that day listed it and the save took it off
+ * (not included). A day the save added states nothing it does not name. With no earlier website
+ * copy, a meal the sync drew as included and the website no longer lists was taken off; one with
+ * no stored state (a trip made on the website, a day the chatbot never had) stays not stated, as
+ * the website itself reads an unnamed meal.
+ */
+function websiteDayMealStates(listed: string[], prior: PriorWebsiteDay | null): MealState {
+  const now = namedMeals(listed);
+  const was = prior?.meals ? namedMeals(prior.meals) : null;
+  const state = (key: MealKey): boolean | null => {
+    if (key in now) return now[key] ?? null;
+    if (!prior) return null;
+    const before = prior.before?.[key];
+    if (was) return was[key] === true ? false : before ?? null;
+    return before === true ? false : before ?? null;
+  };
+  return { breakfast: state("breakfast"), lunch: state("lunch"), dinner: state("dinner") };
+}
+
+/** `previousItinerary`: the website days this save replaced, which tell each day's identity. */
+function mapWebsiteTrip(input: unknown, previousItinerary?: unknown): { sourceTripId: string; fields: TripMutationFields } {
   const trip = record(input);
   const sourceTripId = websiteTripSourceId(trip);
 
@@ -203,17 +340,21 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
   const uniqueDates = [...new Set(dates)];
   const image = text(trip.image);
   const photos = [...new Set([image, ...strings(trip.extraImages)].filter(Boolean))];
+  const mealStates = websiteMealStates(metadata.itineraryMeals, priorExtra.itinerary_days);
+  const previousDays = Array.isArray(previousItinerary) ? previousItinerary.map(record) : null;
+  const priorDay = (day: UnknownRecord, index: number): PriorWebsiteDay | null => {
+    if (!previousDays) return { meals: null, before: mealStates.get(Number(day.dayNumber) || index + 1) };
+    const oldIndex = previousWebsiteDayIndex(day, index, previousDays);
+    const oldDay = previousDays[oldIndex];
+    return oldDay ? { meals: strings(oldDay.meals), before: mealStates.get(Number(oldDay.dayNumber) || oldIndex + 1) } : null;
+  };
   const itinerary = (Array.isArray(trip.itinerary) ? trip.itinerary.map(record) : [])
     .map((day, index) => ({
       day: index + 1,
       title: text(day.title),
       description: text(day.description),
       hotel: text(day.accommodation),
-      meals: {
-        breakfast: strings(day.meals).some(meal => /өглөө|breakfast/i.test(meal)),
-        lunch: strings(day.meals).some(meal => /өдөр|lunch/i.test(meal)),
-        dinner: strings(day.meals).some(meal => /орой|dinner/i.test(meal)),
-      },
+      meals: websiteDayMealStates(strings(day.meals), priorDay(day, index)),
       ...(text(day.image) ? { photo: text(day.image) } : {}),
     }))
     .filter(day => day.title || day.description || day.hotel || "photo" in day || Object.values(day.meals).some(Boolean));
@@ -239,7 +380,15 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
     })
     .filter((group): group is NonNullable<typeof group> => Boolean(group));
 
+  // The length as numbers too: the bot, the reply checker and the next sync read these first, so a
+  // website length edit that changed only the text was answered with the old length and then
+  // projected back over the website's edit.
+  const lengthDays = Math.max(1, Math.trunc(numberOrNull(trip.durationDays) ?? 1));
+  const lengthNights = Math.max(0, Math.trunc(numberOrNull(trip.durationNights) ?? Math.max(0, lengthDays - 1)));
   const extra = {
+    duration_days: lengthDays,
+    // Never as many nights as days: the save refuses that pair, and the website edit would not land at all.
+    duration_nights: lengthNights < lengthDays ? lengthNights : null,
     website_summary: text(trip.summary),
     included_items: strings(trip.included),
     excluded_items: strings(trip.excluded),
@@ -295,6 +444,7 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
     if (!sources.some(source => owns(trip, source))) delete (fields as UnknownRecord)[key];
   }
   const structured: Record<string, string> = {
+    duration_days: "durationDays", duration_nights: "durationNights",
     website_summary: "summary", included_items: "included", excluded_items: "excluded", important_notes: "importantNotes",
     departure_rule: "departureRule", itinerary_days: "itinerary", customer_visible: "isPublished", website_departure_availability: "departures",
   };
@@ -310,12 +460,12 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
 const WEBSITE_FIELD_TARGETS: Record<string, string[]> = {
   title: ["route_name"], description: ["notes"], hotel: ["hotel"], currency: ["currency"],
   price: ["adult_price"], childPrice: ["child_price", "extra.child_rules"], infantPrice: ["infant_price", "extra.child_rules"],
-  durationDays: ["duration_text"], durationNights: ["duration_text"], foodIncluded: ["has_food"],
+  durationDays: ["duration_text", "extra.duration_days"], durationNights: ["duration_text", "extra.duration_nights"], foodIncluded: ["has_food"],
   isPublished: ["status", "extra.customer_visible"], image: ["photo_urls"], extraImages: ["photo_urls"],
   departures: ["departure_dates", "extra.website_departure_availability", "extra.price_groups", "departure."],
   summary: ["extra.website_summary"], included: ["extra.included_items"], excluded: ["extra.excluded_items"],
   importantNotes: ["extra.important_notes"], departureRule: ["extra.departure_rule"], itinerary: ["extra.itinerary_days"],
-  "sourceMetadata.price_groups": ["extra.price_groups"], "sourceMetadata.age_rules": ["extra.age_rules"],
+  "sourceMetadata.price_groups": ["extra.price_groups", "departure."], "sourceMetadata.age_rules": ["extra.age_rules"],
   "sourceMetadata.hotel_profiles": ["extra.hotel_profiles"], "sourceMetadata.hotel_links": ["extra.hotel_links"],
 };
 
@@ -374,9 +524,12 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
   const currentPhotos = strings(canonical.photo_urls);
   if (owns(incoming, "image") && !owns(incoming, "extraImages") && !owns(previous, "extraImages")) (nextInput as UnknownRecord).extraImages = currentPhotos.slice(1);
   if (owns(incoming, "extraImages") && !owns(incoming, "image") && !owns(previous, "image")) (nextInput as UnknownRecord).image = currentPhotos[0] || "";
-  const next = mapWebsiteTrip(nextInput).fields;
+  // Both readings of the itinerary find each day in the website copy this save replaced (by
+  // ItineraryDay id), so its meal states are the ones of the day it was, not of its new number.
+  const previousItinerary = Array.isArray(previous.itinerary) ? previous.itinerary : undefined;
+  const next = mapWebsiteTrip(nextInput, previousItinerary).fields;
   if (!owns(incoming, "currency") && !owns(previous, "currency")) delete next.currency;
-  const before = Object.keys(previous).length ? mapWebsiteTrip(previous).fields : null;
+  const before = Object.keys(previous).length ? mapWebsiteTrip(previous, previousItinerary).fields : null;
   const baselineExtra = record(baselineSource.extra);
   const conflicts = (Array.isArray(canonicalExtra.shared_conflicts) ? [...canonicalExtra.shared_conflicts] : []) as SharedConflict[];
   const priorConflicts = conflicts.length;
@@ -396,12 +549,38 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
   // Comparing against the empty notes turned every description edit on such a
   // trip into a conflict.
   const descriptionFallbacks = [text(record(baselineSource.poster).subtitle), text(canonical.route_name), text(baselineSource.route_name)].filter(Boolean);
+  // The website's schedule could not be taken because the chatbot keeps this trip's dates as a rule.
+  let scheduleIsRule = false;
   for (const [key, value] of Object.entries(next)) {
     if (key === "extra" || key === "operator_name") continue;
     if (sameParityValue(canonical[key], value)) continue;
     if (key === "status" && !["draft", "archived"].includes(String(canonical.status))) continue;
     if (before && sameParityValue(value, before[key as keyof TripMutationFields])) continue;
     const baseValue = before ? before[key as keyof TripMutationFields] : baselineSource[key];
+    if (key === "departure_dates") {
+      // The chatbot writes its dates as Mongolian text ("10 сарын 8"), the website as
+      // calendar days. Compared as text, a date added on the website turned into a
+      // conflict on every trip spelt that way, and the bot never offered the new date.
+      // Days are compared; the chatbot's spelling is kept for days both still have.
+      const today = mongoliaToday();
+      const current = scheduleDays(canonical.departure_dates, canonicalExtra.departure_dates_resolved);
+      const incoming = scheduleDays(value, null);
+      const base = scheduleDays(baseValue, canonicalExtra.departure_dates_resolved);
+      if (!current || !incoming) { scheduleIsRule = true; continue; }
+      const [currentDays, incomingDays] = [futureDays(current, today), futureDays(incoming, today)];
+      if (sameDays(currentDays, incomingDays)) continue;
+      const baseDays = base ? futureDays(base, today) : null;
+      if (baseDays && sameDays(baseDays, incomingDays)) continue;
+      if (baseDays && sameDays(currentDays, baseDays)) {
+        // Only the website changed the schedule: past entries stay as they are, days it
+        // still has keep the chatbot's wording, new days are added as calendar days.
+        const kept = [...current.entries()].filter(([day]) => day < today).map(([, spelling]) => spelling);
+        Object.assign(fields, { departure_dates: [...kept, ...incomingDays.map((day) => current.get(day) ?? day)] });
+        continue;
+      }
+      accept(key, currentDays, baseDays ?? baseValue, incomingDays, () => Object.assign(fields, { [key]: value }));
+      continue;
+    }
     if (key === "duration_text" && sameParityValue(duration(String(canonical[key] || "")), duration(String(baseValue || "")))) {
       Object.assign(fields, { [key]: value }); continue;
     }
@@ -410,17 +589,47 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
     accept(key, current, baseValue, value,
       () => Object.assign(fields, { [key]: value }));
   }
+  // The trip's departures after this save; a website fare for any other date creates nothing.
+  const liveDates = new Set([...(next.departure_dates ?? []), ...strings(canonical.departure_dates)].map(dateKey).filter(Boolean));
+  let fareDates = new Set<string>();
+  let priceGroupsMerged = false;
   for (const [key, value] of Object.entries(next.extra || {})) {
     if (before && sameParityValue(value, before.extra?.[key])) continue;
     // Seats and sold-out states belong to the website (bookings decrement them
     // there); the canonical copy only mirrors them, so it never conflicts.
     if (key === "website_departure_availability") { extra[key] = value; continue; }
     const base = before?.extra && owns(before.extra, key) ? before.extra[key] : baselineExtra[key];
+    // The length numbers follow a website length edit the way duration_text does: taken when the
+    // chatbot's own number is unset or unchanged since the website's base; otherwise a conflict.
+    if ((key === "duration_days" || key === "duration_nights") && (canonicalExtra[key] == null || sameParityValue(canonicalExtra[key], base))) {
+      extra[key] = value;
+      continue;
+    }
+    // Per-date fares merge one date and option at a time (websiteDateFares.ts); the two
+    // stores never hold identical lists, so a whole-list comparison always conflicted.
+    // A chatbot record with no fare table yet is the simplest case of the same merge:
+    // nothing on its side to overwrite, so the website's per-date fares are adopted.
+    // Compared as whole lists instead, every date or fare edit on such a trip became an
+    // "extra.price_groups" conflict and the edit never reached the bot.
+    if (key === "price_groups" && Array.isArray(value) && value.length) {
+      const merge = mergeWebsiteDateFares(canonicalExtra.price_groups ?? [], base, value, liveDates);
+      // Whatever the cells said, the two lists are never compared whole: a label, an
+      // ordering or a website-only key is not a fare, and comparing the lists as one
+      // value recorded an "extra.price_groups" conflict that then blocked every later
+      // fare save on the trip as "open_conflict" (2026-11-03).
+      fareDates = merge.dates;
+      priceGroupsMerged = true;
+      if (merge.groups) extra.price_groups = merge.groups;
+      merge.conflicts.forEach(addConflict);
+      continue;
+    }
     if (key === "itinerary_days" && before && Array.isArray(value)) {
+      // Meals compare in three states: read as booleans, a chatbot "not stated" -> "not included"
+      // edit looked unchanged and the website's copy silently put "not stated" back.
       const facts = (raw: unknown) => (Array.isArray(raw) ? raw : []).map((item, index) => {
         const day = record(item), meals = record(day.meals);
         return { day: Number(day.day) || index + 1, title: text(day.title), description: text(day.description), hotel: text(day.hotel),
-          meals: { breakfast: meals.breakfast === true, lunch: meals.lunch === true, dinner: meals.dinner === true } };
+          meals: { breakfast: mealStateOf(meals.breakfast), lunch: mealStateOf(meals.lunch), dinner: mealStateOf(meals.dinner) } };
       });
       if (sameParityValue(facts(canonicalExtra[key]), facts(base)) || sameParityValue(facts(canonicalExtra[key]), facts(value))) {
         const previousDays = Array.isArray(previous.itinerary) ? previous.itinerary.map(record) : [];
@@ -428,7 +637,7 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
         const canonicalDays = Array.isArray(canonicalExtra[key]) ? canonicalExtra[key] as unknown[] : [];
         extra[key] = value.map((item, index) => {
           const day = record(item), incomingDay = record(incomingDays[index]);
-          const oldIndex = incomingDay.id ? previousDays.findIndex((entry) => entry.id === incomingDay.id) : index;
+          const oldIndex = previousWebsiteDayIndex(incomingDay, index, previousDays);
           const oldDay = previousDays[oldIndex], canonicalDay = record(canonicalDays[oldIndex]);
           const merged = { ...canonicalDay, ...day };
           if (oldDay && sameParityValue(oldDay.image, incomingDay.image)) {
@@ -487,7 +696,8 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
     const groups = (Array.isArray(canonicalExtra.price_groups) ? canonicalExtra.price_groups : []).map(record);
     for (const row of currentWebsiteDepartureRows(incoming.departures.map(record))) {
       const date = dateKey(row.startDate);
-      if (!date) continue;
+      // The date-pricing editor writes each fare into the row too; its price groups already settled it.
+      if (!date || fareDates.has(date)) continue;
       for (const fare of ["price", "childPrice", "infantPrice"] as const) {
         if (!owns(row, fare)) continue;
         const typed = numberOrNull(row[fare]);
@@ -530,11 +740,20 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
     }
     const landed = targets.some((target) => {
       if (applied.includes(target) || recorded.some((conflict) => conflict.field === target || conflict.field.startsWith(target))) return true;
+      // The fare table was merged cell by cell: every fare this save typed was applied,
+      // recorded as a conflict above, or already the chatbot's own value.
+      if (target === "extra.price_groups" && priceGroupsMerged) return true;
       // Already the canonical value (an earlier delivery, or both sides agree).
       const nextValue = target.startsWith("extra.") ? (next.extra as UnknownRecord | undefined)?.[target.slice(6)] : next[target as keyof TripMutationFields];
       const current = target.startsWith("extra.") ? canonicalExtra[target.slice(6)] : canonical[target];
       return nextValue !== undefined && sameParityValue(current, nextValue);
     });
+    // Seats and statuses of a rule-scheduled trip still land; the website's new or
+    // removed days do not, and staff must hear that even though part of the save did.
+    if (field === "departures" && scheduleIsRule) {
+      ignored.push({ field, reason: "recurring_schedule" });
+      continue;
+    }
     if (landed) continue;
     // Blocked by a disagreement recorded by an earlier save, still unresolved.
     if (conflicts.some((conflict) => targets.some((target) => conflict.field === target || conflict.field.startsWith(target)))) {

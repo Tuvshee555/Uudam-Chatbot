@@ -73,21 +73,14 @@ export function DateSeatsEditor({
   }
 
   return (
-    <section className="rounded-xl border border-line bg-surface p-4 sm:p-5">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-[15px] font-semibold text-ink">Огноо бүрийн суудал</h3>
-        {lowCount > 0 && <span className="text-xs font-medium text-warning">{lowCount} өдөр «Цөөн суудал» гэж харагдаж байна</span>}
-      </div>
-      <p className="mt-1 text-xs text-ink-subtle">
-        «Цөөн суудал» гэж сонгосон өдөр л вебсайт болон чатбот дээр тэр өдрийн хажууд харагдана. Бусад өдрөөр харагдахгүй.
-        Дарсан даруйдаа хадгалагдана.
-      </p>
+    <div>
+      {lowCount > 0 && <p className="mb-2 text-xs font-medium text-warning">{lowCount} өдөр «Цөөн суудал» гэж харагдаж байна.</p>}
       {rows.length === 0 ? (
-        <p className="mt-3 text-sm text-ink-muted">
-          Вебсайтад нийтлэгдсэн гарах өдөр алга. Огноогоо хадгалж, аяллаа идэвхтэй болгосны дараа энд сонгоно.
+        <p className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-sm text-ink-muted">
+          Вэбсайтад нийтлэгдсэн гарах өдөр алга. Огноогоо хадгалж, аяллаа идэвхтэй болгосны дараа энд сонгоно.
         </p>
       ) : (
-        <ul className="mt-3 max-h-72 divide-y divide-line overflow-y-auto border-y border-line">
+        <ul className="max-h-72 divide-y divide-line overflow-y-auto rounded-lg border border-line px-3">
           {rows.map((row) => (
             <li key={row.date} className="flex flex-wrap items-center justify-between gap-2 py-2">
               <span className="min-w-0 text-sm">
@@ -119,6 +112,6 @@ export function DateSeatsEditor({
           ))}
         </ul>
       )}
-    </section>
+    </div>
   );
 }

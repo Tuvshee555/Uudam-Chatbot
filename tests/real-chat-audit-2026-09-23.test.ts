@@ -32,6 +32,7 @@ import { buildContextualUserText } from "../src/lib/contextualText";
 import { hasBankAccountRequest } from "../src/lib/reply";
 import { quickReplyTitle } from "../src/lib/quickReplyTitle";
 import { birthYearBand } from "../src/lib/birthYearAgeBands";
+import { verifyTripReply } from "../src/lib/tripReplyVerification";
 
 // These read the environment when they load — import after applyTestEnv().
 let routing: typeof import("../src/lib/fastPathRouting");
@@ -236,7 +237,8 @@ test("a bank-account request is recognised; a payment claim stays a payment clai
 
 test("birth-year tiers are shown as birth years, not the misread '14-20 нас'", () => {
   assert.equal(birthYearBand("ХҮҮХЭД -2014-2015 ОН"), "2014-2015 он");
-  const saved = trip({
+  // The poster header "Үнэ" as the row's label: neither a package nor a heading of its own.
+  const tiers = (infant: Record<string, unknown>[]) => trip({
     id: "years",
     child_price: 999999,
     extra: {
@@ -251,16 +253,28 @@ test("birth-year tiers are shown as birth years, not the misread '14-20 нас'"
           passenger_prices: [
             { label: "ХҮҮХЭД -2014-2015 ОН", age_range: "14-20 нас", price: 999999 },
             { label: "ХҮҮХЭД 2016-2023 ОН", age_range: "16-20 нас", price: 888888 },
+            ...infant,
           ],
         },
       ],
     },
   });
-  const reply = buildStructuredTripReply(joinContextAndTurn(saved.route_name, "үнэ хэд вэ"), [sanitizeTripForCustomers(saved)]) || "";
-  assert.doesNotMatch(reply, /14-20 нас|16-20 нас/);
+  // The infant tier's own birth-year label restores the misread infant band too.
+  const saved = tiers([{ label: "НЯРАЙ 2024-2026 ОН", age_range: "24-20 нас", price: 0, note: "Үнэгүй" }]);
+  const customerTrip = sanitizeTripForCustomers(saved);
+  // Before the trip's 12/20 departure: once it has passed there is no fare to quote.
+  const now = new Date("2026-11-06T10:00:00+08:00");
+  const reply = buildStructuredTripReply(joinContextAndTurn(saved.route_name, "үнэ хэд вэ"), [customerTrip], now) || "";
+  assert.doesNotMatch(reply, /14-20 нас|16-20 нас|24-20 нас/);
   assert.match(reply, /2014-2015 онд төрсөн\/: 999,999₮/);
   assert.match(reply, /2016-2023 онд төрсөн\/: 888,888₮/);
-  assert.doesNotMatch(reply, /💰 Үнэ:\n\nҮнэ\n/);
+  assert.doesNotMatch(reply, /💰 Үнэ:\n\nҮнэ\n|Багц: Үнэ/);
+  assert.equal(verifyTripReply({ reply, trips: [customerTrip], now }), reply);
+  // A misread band nothing restores is a contradiction to the resolver: no fare (silence and a
+  // staff lead), never fares printed beside a band read from the wrong digits.
+  const unrepaired = buildStructuredTripReply(joinContextAndTurn(saved.route_name, "үнэ хэд вэ"), [sanitizeTripForCustomers(tiers([]))], now) || "";
+  assert.match(unrepaired, /Үнийн мэдээлэл одоогоор тодорхойгүй байна/);
+  assert.doesNotMatch(unrepaired, /24-20 нас|999,999₮/);
 });
 
 test("a departure saved after it passed is not quoted as next year's", () => {

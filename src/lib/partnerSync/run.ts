@@ -57,8 +57,10 @@ async function syncLocked(config: TourConfig, flags: Flags): Promise<SyncResult>
   const before = stored && Array.isArray(stored.rows) ? stored : null;
   const queue = await queryNeon<{ synced: boolean }>("SELECT revision=synced_revision AS synced FROM trip_website_sync WHERE trip_id=$1", [config.tripId]);
   const posterData = buildPosterData(tour, existing.data);
-  const desired = buildTripFields(tour, posterData);
   const canonical = linked.rows[0];
+  // The stored extra keeps the hotel photos, links, descriptions and hotels staff added; posterData
+  // still holds the stored partner_snapshot, which tells a staff edit from the partner's older value.
+  const desired = buildTripFields(tour, posterData, canonical.extra);
   const matches = Object.entries(desired).every(([key, value]) => key === "extra"
     ? Object.entries(normalizeExtraPatch(record(value))).every(([name, fact]) => isDeepStrictEqual(canonical.extra[name], fact))
     : value === undefined || isDeepStrictEqual(canonical[key], value));
@@ -114,7 +116,11 @@ export async function syncTour(config: TourConfig, flags: Flags = {}): Promise<S
   return result;
 }
 
-/** Tells staff what the sync changed or why it stopped. Never throws: an alert must not fail the sync. */
+/**
+ * One-line summary of what a sync changed or why it stopped; null for an unchanged run. Nothing
+ * is sent anywhere (the staff alert system was removed 2026-11-04): the run's return value and
+ * the cron log are the record.
+ */
 export function alertText(result: SyncResult): string | null {
   if (result.status === "synced" && result.lines.length) {
     return [`🔄 Хамтрагч аялал шинэчлэгдлээ (${result.slug})`, ...result.lines.slice(0, 25), result.lines.length > 25 ? `…дахиад ${result.lines.length - 25} өөрчлөлт` : ""].filter(Boolean).join("\n");
@@ -125,17 +131,6 @@ export function alertText(result: SyncResult): string | null {
   return null;
 }
 
-async function alertStaff(result: SyncResult): Promise<void> {
-  const text = alertText(result);
-  if (!text) return;
-  try {
-    const { notifyStaff } = await import("../staffAlerts");
-    await notifyStaff(text, "partner_sync");
-  } catch {
-    // The run's return value is the record.
-  }
-}
-
 export async function runPartnerSync(flags: Flags = {}): Promise<SyncResult[]> {
   const results: SyncResult[] = [];
   for (const config of TOURS) {
@@ -144,7 +139,6 @@ export async function runPartnerSync(flags: Flags = {}): Promise<SyncResult[]> {
       const reason = (error instanceof Error ? error.message : String(error)).replace(/postgres(?:ql)?:\/\/\S+/g, "[database]");
       results.push({ slug: config.slug, status: "failed", reason, lines: [] });
     }
-    if (!flags.dryRun) await alertStaff(results[results.length - 1]);
   }
   return results;
 }

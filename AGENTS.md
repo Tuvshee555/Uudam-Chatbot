@@ -37,6 +37,9 @@ evidence that the chatbot works.
   target is not the production site, and no other evaluation run is going. It prints the estimated calls
   and cost first. `EVAL_MAX_MODEL_CALLS` (default 150) is a hard stop. The owner allows reasonable test
   runs on the existing credit without asking each time; never loop runs or remove the cap.
+- Spend as little credit as possible (owner, 2026-11-04): run every free check first, then at most ONE
+  paid run per change, at the end. A failure in a paid run is fixed and verified with free checks; re-run
+  it only when the fix changed bot behaviour, never to confirm a test-script fix. Report the runs and cost.
 - The GitHub "Live replay" workflow is manual only and needs `approve: yes`.
 - Model spend is recorded per day, environment, model and source in `travel_ai_usage` (admin System
   page). `AI_DAILY_BUDGET_USD` (default 20) raises a critical issue when production spend passes it.

@@ -7,6 +7,7 @@ import { getTripById, patchTrip, upsertTrip } from "@/lib/travelDb";
 import { queryNeon } from "@/lib/neonDb";
 import type { TripMutationFields } from "@/lib/travelTypes";
 import { dedupePhotoUrlsByContent } from "@/lib/tripPhotoImport/dedupePhotos";
+import { MAX_TRIP_PHOTOS } from "@/lib/tripPhotoEdit";
 
 // Only route_name/duration_text/departure_dates/adult_price/child_price/
 // hotel/has_food/extra may be written by "Аялалд нэмэх" (the poster→trip
@@ -41,7 +42,8 @@ function sanitizeApprovedFields(input: unknown): TripMutationFields {
 }
 
 const CLOUDINARY_FOLDER = "uudam-travel-trips";
-const MAX_PHOTOS = 20;
+// The same cap as the editor, the assistant and patchTrip (tripPhotoEdit.MAX_TRIP_PHOTOS).
+const MAX_PHOTOS = MAX_TRIP_PHOTOS;
 const MAX_IMAGES_PER_SYNC = 10;
 
 export type PosterSyncPhotoInput = {

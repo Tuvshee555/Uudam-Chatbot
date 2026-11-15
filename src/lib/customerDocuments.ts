@@ -428,7 +428,16 @@ async function applySensitiveRetentionPolicy() {
   ).catch(() => {});
 }
 
-function buildExtractionParts(image: DownloadedImage): OpenAIPart[] {
+/**
+ * The model that reads customer images (CUSTOMER_IMAGE_MODEL overrides). gpt-4.1-mini since 2026-11-12:
+ * gpt-4o-mini bills every image as roughly 25-37k input tokens, about six times what this model
+ * charges for the same picture, and it reads documents at least as well.
+ */
+export function customerImageModel(): string {
+  return process.env.CUSTOMER_IMAGE_MODEL || "gpt-4.1-mini";
+}
+
+export function buildExtractionParts(image: { buffer: Buffer; mimeType: string; hash: string }): OpenAIPart[] {
   return [
     {
       text: [
@@ -590,6 +599,7 @@ async function extractImageData(
 ) {
   const result = await askOpenAIParts(buildExtractionParts(image), {
     source: "customer_documents.extract",
+    openaiModel: customerImageModel(),
     requestId: trace?.requestId,
     correlationId: trace?.correlationId,
     jsonMode: true,

@@ -79,15 +79,18 @@ function tripNamePattern(name: string): RegExp | null {
  * flight question and the whole reply was "Шууд нислэгтэй аялал." (held-out 2026-11-02).
  * Names of one word are never removed this way.
  */
-function stripLatinTripNames(line: string, names: string[]): string {
+function stripLatinTripNames(line: string, names: string[], shortNames: string[] = []): string {
   if (!/[a-z]/i.test(line)) return line;
   const tokens = line.split(/\s+/).filter(Boolean);
   const phonetic = tokens.map((token) => phoneticLatinText(token));
   const drop = tokens.map(() => false);
-  for (const name of names) {
+  // A short form (the name without "аялал") only right before a number or at the end, as in Cyrillic.
+  for (const [name, short] of [...names.map((name) => [name, false] as const), ...shortNames.map((name) => [name, true] as const)]) {
     const target = phoneticLatinText(name).split(/\s+/).filter(Boolean);
     if (target.length < 2) continue;
     for (let start = 0; start + target.length <= tokens.length; start += 1) {
+      const next = tokens[start + target.length];
+      if (short && next !== undefined && !/^\d/.test(next)) continue;
       if (target.every((word, offset) => phonetic[start + offset] === word)) for (let offset = 0; offset < target.length; offset += 1) drop[start + offset] = true;
     }
   }
@@ -105,13 +108,15 @@ const NUMBERED_BUTTON_LINE = /^\s*\d{1,2}\s*[.)]\s*(.+?)\s*(?:\.\.\.|…)?\s*$/u
 export function stripTripNamesForIntent(text: string, trips: TravelTrip[]): string {
   // "Вэлмор шууд нислэгтэй 1 сая төгрөгөөр болох уу" names the trip without its last word "аялал";
   // left in place, "нислэгтэй" read as a transport question (dev evaluation 2026-11-02).
-  const names = Array.from(new Set(trips.flatMap((trip) => {
-    const name = trip.route_name?.trim();
-    if (!name) return [];
-    const shortName = name.replace(/\s+(?:аялал|аяллын|tour|trip)$/iu, "");
-    return shortName !== name && shortName.split(/\s+/).length >= 2 ? [name, shortName] : [name];
-  })))
+  const names = Array.from(new Set(trips.map((trip) => trip.route_name?.trim()).filter((name): name is string => Boolean(name))))
     .sort((a, b) => b.length - a.length);
+  // The short form is removed only right before a number or at the end: inside a longer name it
+  // would cut a sibling's name apart ("<хот> хотын" out of "<хот> хотын намрын аялал", leaving a
+  // season question; merge review 2026-11-15).
+  const shortNames = [...new Set(names.flatMap((name) => {
+    const shortName = name.replace(/\s+(?:аялал|аяллын|tour|trip)$/iu, "");
+    return shortName !== name && shortName.split(/\s+/).length >= 2 ? [shortName] : [];
+  }))];
   const looseNames = names.map(looseNorm);
   return websiteTripLinksInText(text).textWithoutUrls
     .split("\n")
@@ -126,7 +131,11 @@ export function stripTripNamesForIntent(text: string, trips: TravelTrip[]): stri
         const pattern = tripNamePattern(name);
         if (pattern) stripped = stripped.replace(pattern, " ");
       }
-      return stripLatinTripNames(stripped, names).replace(/[ \t]{2,}/g, " ").trim();
+      for (const shortName of shortNames) {
+        const pattern = tripNamePattern(shortName);
+        if (pattern) stripped = stripped.replace(pattern, (match: string, offset: number, whole: string) => /^\s*(?:\d|$)/u.test(whole.slice(offset + match.length)) ? " " : match);
+      }
+      return stripLatinTripNames(stripped, names, shortNames).replace(/[ \t]{2,}/g, " ").trim();
     })
     .join("\n")
     .trim();

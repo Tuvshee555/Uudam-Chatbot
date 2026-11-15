@@ -4,11 +4,11 @@ import { spawnSync } from "node:child_process";
 // mocked PG/provider transports; inherited production endpoints are removed.
 const env = { ...process.env };
 for (const key of Object.keys(env)) {
-  if (/TOKEN|SECRET|API_KEY|DATABASE_URL|^NEON_|^REDIS|^UPSTASH|^VERCEL|^BOOKING_|^STAFF_|^TELEGRAM_|_SINK_|^GOOGLE_DRIVE_|^FACEBOOK_PAGES$/i.test(key)) delete env[key];
+  if (/TOKEN|SECRET|API_KEY|DATABASE_URL|^NEON_|^REDIS|^UPSTASH|^VERCEL|^BOOKING_|^STAFF_|^TELEGRAM_|_SINK_|^GOOGLE_DRIVE_|^GOOGLE_CLIENT|^ADMIN_GOOGLE_|^FACEBOOK_PAGES$/i.test(key)) delete env[key];
 }
 Object.assign(env, { NODE_ENV: "test", OPENAI_API_KEY: "conversation-fixture-key", VERIFY_TOKEN: "conversation-fixture-token",
   TOKEN_PAGE: "conversation-fixture-token", FACEBOOK_PAGE_ID: "1234567890", META_APP_SECRET: "test-meta-secret",
-  ADMIN_SECRET: "conversation-fixture-secret", REDIS_STATE_ENABLED: "false", REDIS_RATE_LIMIT_ENABLED: "false",
+  ADMIN_SESSION_SECRET: "conversation-fixture-session-key-4a8c2e6f0b9d3f7a", REDIS_STATE_ENABLED: "false", REDIS_RATE_LIMIT_ENABLED: "false",
   REDIS_REPLAY_ENABLED: "false", REDIS_CONVERSATION_ENABLED: "false", REDIS_PAUSE_ENABLED: "false" });
 // Customer journeys come first: each is the shape of real conversations that failed in production
 // (docs/chatbot-forensic-audit.md). This gate runs in CI and in the Vercel prebuild, so a change that
@@ -18,8 +18,20 @@ const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test
   "tests/list-card-dates.test.ts", "tests/inbound-visibility.test.ts",
   "tests/webhook-conversations.test.ts", "tests/demo-conversation-parity.test.ts", "tests/webhook-durable-handoff.test.ts", "tests/website-chat-webhook.test.ts",
   "tests/staff-takeover-journeys.test.ts", "tests/webhook-echo-journeys.test.ts", "tests/webhook-echo-enforce-journeys.test.ts",
-  "tests/human-takeover-journeys.test.ts", "tests/accuracy-cost-journeys.test.ts",
-  "tests/meta-next-send-testers.test.ts", "tests/meta-next-send-all.test.ts"],
+  "tests/human-takeover-journeys.test.ts", "tests/accuracy-cost-journeys.test.ts", "tests/sticker-reaction-journeys.test.ts",
+  "tests/meta-next-send-testers.test.ts", "tests/meta-next-send-all.test.ts", "tests/catalogue-journeys.test.ts",
+  // Understanding journeys (2026-11-11): need gate, identity/context, calendar/holiday, scenario suite.
+  "tests/understanding-need-journeys.test.ts", "tests/understanding-routing-journeys.test.ts", "tests/understanding-routing-unavailable.test.ts",
+  "tests/understanding-routing-existing-customer.test.ts", "tests/understanding-holiday-journeys.test.ts", "tests/understanding-scenarios.test.ts",
+  "tests/understanding-catalogue-need.test.ts", "tests/understanding-live-2026-11-11.test.ts", "tests/understanding-title-note.test.ts",
+  "tests/understanding-fa-cal.test.ts", "tests/understanding-fa-ctx.test.ts", "tests/understanding-fa-need.test.ts",
+  "tests/understanding-checker-2026-11-11.test.ts",
+  // Next question + 10-minute follow-up (owner 2026-11-12): the bot asks one useful thing, and once after silence.
+  "tests/understanding-next-question.test.ts", "tests/follow-up-journeys.test.ts",
+  // Consultant-grade date handling (2026-11-13): a comma date, a city shared by several trips, the nearest
+  // real departures when none matches, "the date doesn't suit me", and the ended-trip notice staying in its lane.
+  "tests/destination-alternatives-journeys.test.ts", "tests/archived-notice-journeys.test.ts", "tests/customer-number-formats.test.ts", "tests/review-fixes-journeys.test.ts",
+  "tests/get-started-nudge-journeys.test.ts", "tests/more-options-journeys.test.ts", "tests/traffic-sweep-journeys.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

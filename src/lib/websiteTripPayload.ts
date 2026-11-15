@@ -1,6 +1,7 @@
 import {
-  normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard,
-  type CanonicalTripOffer, type OfferAvailability, type OfferFare, type ResolvedTripOffer, type TripOfferResult, type TripOfferSelection,
+  conditionKey, normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard,
+  type CanonicalTripOffer, type NormalizedPassengerFare, type OfferAvailability, type OfferFare, type ResolvedTripOffer, type TripOfferResult,
+  type TripOfferSelection,
 } from "./tripOffers";
 import type { TravelTrip } from "./travelTypes";
 
@@ -53,6 +54,35 @@ function displayAmount(
     : null;
 }
 
+// Words a departure-date cell is written with ("5-р сарын 6", "Мягмар 11/10",
+// "5/6-аас 5/13 хүртэл"). A label made only of these and numbers is a date.
+const DATE_WORDS = new Set([
+  "сар", "сарын", "сараас", "сард", "р", "ны", "ний", "нд", "д", "т", "аас", "ээс", "оос", "өөс", "наас", "нээс",
+  "хүртэл", "өдөр", "өдрийн", "гараг", "гариг", "даваа", "мягмар", "лхагва", "пүрэв", "баасан", "бямба", "ням", "бүр",
+  "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "to",
+]);
+
+/**
+ * The name staff gave a price row ("Эрт захиалга", "Стандарт өрөө"), or ""
+ * when its label is only its own date text. The poster mapper labels every
+ * row with its date cell ("5/6, 5/13"); sent as a name, that cell showed on
+ * the website as the option's title and split equal-priced dates into
+ * separate price blocks. The trip editor rewrites a row's dates but not its
+ * label, so a stale date cell is recognised by its shape too.
+ */
+function priceRowName(source: Record<string, unknown> | undefined, date: string): string {
+  const label = typeof source?.label === "string" ? source.label.trim() : "";
+  if (!label) return "";
+  const squash = (value: string) => value.toLowerCase().replace(/\s+/g, " ").replace(/\s*([,;])\s*/g, "$1 ").trim();
+  const lists = ["display_dates", "dates", "date_keys"].map(key => Array.isArray(source?.[key])
+    ? (source![key] as unknown[]).filter((value): value is string => typeof value === "string" && Boolean(value.trim())).map(value => value.trim())
+    : []);
+  const own = new Set([date, ...lists.flat(), ...lists.filter(list => list.length).map(list => list.join(", "))].map(squash));
+  if (own.has(squash(label))) return "";
+  const words = label.toLowerCase().match(/\p{L}+/gu) || [];
+  return /\d/.test(label) && words.every(word => DATE_WORDS.has(word)) ? "" : label;
+}
+
 function displayOffer(entry: WebsiteOfferEntry): ResolvedTripOffer | null {
   if (entry.fareCard.status !== "ready") return null;
   const availability = entry.result.status === "unavailable" ? entry.result.availability : undefined;
@@ -96,6 +126,29 @@ export function websiteAvailabilityForResync(
   return availability ? { ...departure, status: String(availability.status).toUpperCase() } : departure;
 }
 
+/**
+ * A passenger band's name on the website: its kind with the age ("Хүүхэд 2-5 нас") or, for a
+ * fare told apart by height or bed, the condition ("Хүүхэд (1,2–1,4 м өндөр)"). With kind and
+ * age alone such a fare reached the website as a bare "Хүүхэд", and two of them read as one.
+ */
+function passengerBandLabel(fare: NormalizedPassengerFare): string {
+  const kind = fare.kind === "infant" ? "Нярай" : fare.kind === "adult" ? "Том хүн" : "Хүүхэд";
+  return `${kind}${fare.ageRange ? ` ${fare.ageRange}` : ""}${fare.condition ? ` (${fare.condition})` : ""}`;
+}
+
+/** The row's bands other than the adult fare, each once: the same passenger, age, condition and fare listed twice is one band. */
+function passengerBands(offer: ResolvedTripOffer): NormalizedPassengerFare[] {
+  const seen = new Set<string>();
+  return offer.fares.filter(fare => {
+    if (fare.kind === "adult") return false;
+    // "1,2–1,4 м" and "1.2-1.4 М" are one band (the resolver folds them the same way).
+    const key = JSON.stringify([fare.kind, fare.ageRange || "", conditionKey(fare.condition), fare.fare, fare.currency]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string, unknown>>) {
   const source = offer.sourceOfferIds.map(id => sourceRows.get(id)).find(Boolean);
   const partnerPassengers = source?.partner_source === true && Array.isArray(source.passenger_prices)
@@ -105,11 +158,16 @@ function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string
   delete sourceWithoutDimensions.hotel;
   delete sourceWithoutDimensions.hotel_id;
   delete sourceWithoutDimensions.package_id;
+  // The row's own name ("Эрт захиалга", "Стандарт өрөө") is what the website
+  // shows for an option without a hotel or package; the date is the fallback,
+  // and the label of a row that only repeats its date cell. Its note stays
+  // beside it through the spread above.
+  const label = priceRowName(source, offer.date) || offer.date;
   return {
     ...sourceWithoutDimensions,
     ...(typeof source?.single_price === "number" ? { single_price: source.single_price } : {}),
     id: offer.id,
-    label: offer.date,
+    label,
     dates: [offer.date], display_dates: [offer.date], date_keys: [offer.date],
     ...(offer.hotel ? { hotel: offer.hotel } : {}),
     ...(offer.hotelId ? { hotel_id: offer.hotelId } : {}),
@@ -117,12 +175,12 @@ function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string
     adult_price: adult,
     adult_price_range: offer.prices.adult?.kind === "range" ? { min: offer.prices.adult.min, max: offer.prices.adult.max } : null,
     child_price: displayAmount(offer, "child", source), infant_price: displayAmount(offer, "infant", source),
-    passenger_prices: offer.fares.filter(fare => fare.kind !== "adult").map(fare => ({
-      label: source?.partner_source === true
-        ? String(partnerPassengers.find((price) => price.age_range === fare.ageRange)?.label
-          || `${fare.kind === "infant" ? "Нярай" : "Хүүхэд"}${fare.ageRange ? ` ${fare.ageRange}` : ""}`)
-        : `${fare.kind === "infant" ? "Нярай" : "Хүүхэд"}${fare.ageRange ? ` ${fare.ageRange}` : ""}`,
+    passenger_prices: passengerBands(offer).map(fare => ({
+      label: source?.partner_source === true && !fare.condition
+        ? String(partnerPassengers.find((price) => price.age_range === fare.ageRange)?.label || passengerBandLabel(fare))
+        : passengerBandLabel(fare),
       age_range: fare.ageRange || "", price: exactAmount(fare.fare), currency: fare.currency,
+      ...(fare.condition ? { condition: fare.condition } : {}),
       ...(fare.fare.kind === "free" ? { note: "Үнэгүй" } : {}),
       ...(fare.fare.kind === "range" ? { price_range: { min: fare.fare.min, max: fare.fare.max } } : {}),
     })),

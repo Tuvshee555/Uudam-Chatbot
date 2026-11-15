@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { websiteTripToCanonicalFields } from "../src/lib/websiteTripBridge";
+import { itineraryMealsText } from "../src/lib/tripKnowledgeText";
 
 test("website trip updates retain shared facts for chatbot and poster", () => {
   const result = websiteTripToCanonicalFields({
@@ -140,4 +141,77 @@ test("website hotel records sync as one canonical name, link, description and me
     name: "Jomtien Palm Beach Hotel & Resort",
     url: "https://www.jomtien-palmbeach.com/",
   }]);
+});
+
+test("a website itinerary edit keeps a 'not stated' meal not stated and a removed meal not included", () => {
+  const base = {
+    sourceTripId: "trip-web-meals",
+    title: "ТУРШИЛТЫН АЯЛАЛ",
+    durationDays: 3,
+    durationNights: 2,
+    currency: "MNT",
+    departures: [],
+  };
+  const withStates = websiteTripToCanonicalFields({
+    ...base,
+    sourceMetadata: {
+      itineraryMeals: [
+        { dayNumber: 1, breakfast: true, lunch: null, dinner: false },
+        { dayNumber: 2, breakfast: true, lunch: true, dinner: null },
+      ],
+    },
+    itinerary: [
+      { dayNumber: 1, title: "Өдөр нэг", meals: ["Өглөө"] },
+      { dayNumber: 2, title: "Өдөр хоёр", meals: ["Өглөө"] },
+    ],
+  });
+  const days = withStates.fields.extra?.itinerary_days as Array<{ meals: Record<string, boolean | null> }>;
+  assert.deepEqual(days[0].meals, { breakfast: true, lunch: null, dinner: false });
+  assert.deepEqual(days[1].meals, { breakfast: true, lunch: false, dinner: null }, "lunch was taken off on the website");
+
+  const legacy = websiteTripToCanonicalFields({ ...base, itinerary: [{ title: "Өдөр нэг", meals: ["Орой"] }] });
+  const legacyDays = legacy.fields.extra?.itinerary_days as Array<{ meals: Record<string, boolean | null> }>;
+  assert.deepEqual(legacyDays[0].meals, { breakfast: null, lunch: null, dinner: true }, "with no stored states an unnamed meal is not stated");
+
+  const typed = websiteTripToCanonicalFields({ ...base, itinerary: [{ title: "Өдөр нэг", meals: ["Өглөө, Орой ороогүй"] }] });
+  const typedDays = typed.fields.extra?.itinerary_days as Array<{ meals: Record<string, boolean | null> }>;
+  assert.deepEqual(typedDays[0].meals, { breakfast: true, lunch: null, dinner: false }, "'Орой ороогүй' is dinner not included, never included");
+});
+
+test("a trip made on the website keeps the meals it never named not stated, and the bot says nothing about them", () => {
+  const created = websiteTripToCanonicalFields({
+    sourceTripId: "trip-web-created",
+    title: "ТУРШИЛТЫН ШИНЭ АЯЛАЛ",
+    durationDays: 2,
+    durationNights: 1,
+    currency: "MNT",
+    departures: [],
+    itinerary: [
+      { dayNumber: 1, title: "Өдөр нэг", meals: ["Өглөө"] },
+      { dayNumber: 2, title: "Өдөр хоёр", meals: [] },
+    ],
+  });
+  const days = created.fields.extra?.itinerary_days as Array<{ meals: Record<string, boolean | null> }>;
+  assert.deepEqual(days[0].meals, { breakfast: true, lunch: null, dinner: null });
+  assert.deepEqual(days[1].meals, { breakfast: null, lunch: null, dinner: null });
+  assert.equal(itineraryMealsText(days), "1-р өдөр — өглөөний хоол багтсан");
+});
+
+test("with no earlier website copy, only a meal the last sync drew as included and now gone becomes not included", () => {
+  const result = websiteTripToCanonicalFields({
+    sourceTripId: "trip-web-no-copy",
+    title: "ТУРШИЛТЫН АЯЛАЛ",
+    durationDays: 3,
+    durationNights: 2,
+    currency: "MNT",
+    departures: [],
+    sourceMetadata: { itineraryMeals: [{ dayNumber: 1, breakfast: true, lunch: true, dinner: false }] },
+    itinerary: [
+      { dayNumber: 1, title: "Өдөр нэг", meals: ["Өглөө"] },
+      { dayNumber: 2, title: "Шинэ өдөр", meals: ["Орой"] },
+    ],
+  });
+  const days = result.fields.extra?.itinerary_days as Array<{ meals: Record<string, boolean | null> }>;
+  assert.deepEqual(days[0].meals, { breakfast: true, lunch: false, dinner: false }, "lunch was taken off; dinner was already not included");
+  assert.deepEqual(days[1].meals, { breakfast: null, lunch: null, dinner: true }, "a day the chatbot never had states only what it names");
 });

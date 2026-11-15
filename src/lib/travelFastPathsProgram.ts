@@ -3,15 +3,14 @@
  * "send me the program" reply builder.
  */
 
-import { filterFutureDepartureDates, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import { buildFareSection } from "./tripFareBlock";
-import { customerDate } from "./customerDate";
 import { intentTextOf } from "./customerTurn";
 import type { TravelTrip } from "./travelOps";
 import {
   findTripMatches,
   getAliases,
+  getTripNameHaystack,
   getTripBrochureAsset,
   getTripWebsiteLink,
   hasProgramIntent,
@@ -32,8 +31,10 @@ import {
   type TripProgramReplyResult,
   type TripResolution,
 } from "./travelFastPathsSearch";
-import { buildAmbiguousTripReply, hasPriceIntent } from "./travelFastPathsPricing";
+import { buildAmbiguousTripReply, formatExtraFeesLine, hasPriceIntent } from "./travelFastPathsPricing";
 import { replyPreferences } from "./chatbotReplyPolicy";
+import { aliasOccursInText } from "./aliasMatch";
+import { isAttributeWord } from "./travelModeWords";
 
 const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "хөтөлбөр",
@@ -191,37 +192,17 @@ export function getTripItineraryLines(trip: TravelTrip): string[] {
   return lines;
 }
 
-function formatPrice(amount: number | null | undefined): string {
-  if (!amount) return "";
-  return amount.toLocaleString("mn-MN") + "₮";
-}
-
-function buildTripSummaryLines(trip: TravelTrip): string {
+function buildTripSummaryLines(trip: TravelTrip, now: Date): string {
   const lines: string[] = [];
   if (trip.duration_text && !isGenericConfirmationText(trip.duration_text)) {
     lines.push(`⏱ ${trip.duration_text}`);
   }
-  // The same fare and date lines as every other trip card: this card printed the trip's
-  // top-level price (can be stale against per-date fares) and the stored date text,
-  // so a customer read a raw ISO date under "Гарах өдрүүд" (2026-10-17).
-  const fareSection = buildFareSection(trip);
-  if (fareSection) {
-    lines.push(...fareSection);
-    return lines.join("\n");
-  }
-  const adult = formatPrice(trip.adult_price);
-  const child = formatPrice(trip.child_price);
-  if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);
-  else if (adult) lines.push(`💰 Үнэ: ${adult}`);
-  const resolvedDates = ((trip.extra || {}) as Record<string, unknown>).departure_dates_resolved as
-    | ResolvedDepartureDate[]
-    | undefined;
-  const dates = sortDepartureDatesForDisplay(
-    filterFutureDepartureDates(trip.departure_dates?.filter(Boolean) ?? [], new Date(), resolvedDates),
-    new Date(),
-    resolvedDates,
-  );
-  if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).map((date) => customerDate(date)).join(", ")}${dates.length > 5 ? "…" : ""}`);
+  // The same fare and date lines as every other trip card (tripFareBlock.ts), for every trip.
+  // This card used to fall back to the trip's top-level adult and child price, which dropped
+  // the other child bands and the free infant, and to say nothing about a trip with no fare.
+  // A trip with no fare now prints the no-data sentence: silence and a staff lead.
+  const fees = formatExtraFeesLine(trip);
+  lines.push(...buildFareSection(trip, now, fees ? [fees] : []));
   return lines.join("\n");
 }
 
@@ -232,6 +213,7 @@ function buildShortMediaReply(trip: TravelTrip): string {
 export function buildTripProgramReply(
   text: string,
   trips: TravelTrip[],
+  now = new Date(),
 ): TripProgramReplyResult | null {
   // Asked by the customer, not implied by a trip NAME: tapping a trip named
   // "<хот> [сар]-р сарын аяллын хөтөлбөр" is choosing it, not asking for its PDF.
@@ -245,7 +227,7 @@ export function buildTripProgramReply(
   const wantsFlight = queryWantsFlight(text);
   const exactMentionedTrips = trips.filter((trip) => {
     if (query.includes(normText(trip.route_name))) return true;
-    return getAliases(trip).some((alias) => query.includes(normText(alias)));
+    return getAliases(trip).some((alias) => aliasOccursInText(alias, text));
   });
   // A shared destination word is NOT the same as naming a trip. When several
   // tours visit the destination the customer said, that is precisely when the
@@ -392,7 +374,7 @@ export function buildTripProgramReply(
 
   // A program request does not request every hotel, fare and departure.
   const priceIntent = intentText.replace(/хөтөлбөр\p{L}*/giu, "");
-  const summary = hasPriceIntent(priceIntent) ? buildTripSummaryLines(best) : "";
+  const summary = hasPriceIntent(priceIntent) ? buildTripSummaryLines(best, now) : "";
   const summaryBlock = summary ? `\n${summary}` : "";
   const brochure = getTripBrochureAsset(best);
   // The owner's call (2026-10-02): a link to the live trip page, not the PDF
@@ -544,6 +526,19 @@ export function buildTripProgramReply(
 }
 
 /**
+ * Did the customer type a word of the ended trip's name that no open trip's name holds (word by word, a
+ * travel-mode word never counts)? Then the customer means the ended trip, not its open look-alike.
+ */
+function namesEndedTripAlone(text: string, ended: TravelTrip, open: TravelTrip[]): boolean {
+  const same = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)));
+  const held = open.flatMap((trip) => getTripNameHaystack(trip).split(/\s+/).filter(Boolean));
+  const typed = normText(text).split(/\s+/).filter(Boolean);
+  const distinct = getTripNameHaystack(ended).split(/\s+/)
+    .filter((word) => word.length >= 4 && !/\d/.test(word) && !isAttributeWord(word) && !held.some((other) => same(other, word)));
+  return distinct.some((word) => typed.some((said) => same(said, word)));
+}
+
+/**
  * A trip auto-archives once every departure date has passed (see
  * sanitizeTripScheduleForCurrentDate in travelDb.ts) — it disappears from the
  * website and from the catalogue the bot's own matchers search. Without this,
@@ -556,6 +551,13 @@ export function buildTripProgramReply(
 export function buildArchivedTripNotice(
   text: string,
   archivedTrips: TravelTrip[],
+  /**
+   * The open catalogue. When the customer's words already name an open trip (or several), the answer is
+   * about those, never about an ended trip that shares a word with them. Live since 2026-11-11: 18 of 44
+   * open trip names typed in full were answered with "<another, ended trip> is inactive". Omitted only
+   * where the caller has already established that no open trip matched.
+   */
+  activeTrips?: TravelTrip[],
 ): { reply: string; trip: TravelTrip } | null {
   const unavailable = archivedTrips.filter(
     (trip) =>
@@ -564,21 +566,28 @@ export function buildArchivedTripNotice(
         (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
           "all_departure_dates_passed" ||
         (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
-          "no_departure_dates"
+          "no_departure_dates" ||
+        // A trip sold on request until a deadline that has passed has ended the same way.
+        (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
+          "request_window_passed"
       ),
   );
   if (unavailable.length === 0) return null;
-  const exactNameMatches = unavailable.filter((trip) => {
-    const normalizedText = normText(text);
-    const route = normText(trip.route_name || "");
-    return route.length >= 8 && normalizedText.includes(route);
-  });
-  if (exactNameMatches.length === 0) return null;
-  const resolution = resolveTripFromUserMessage(text, exactNameMatches, {
+  // The trip is named by its full name, an alias or the part of its name the customer uses
+  // ("Манжуурын аялал" for "<ХОТ>-ын … АЯЛАЛ"): the resolver verifies ONE trip, the same strength that
+  // picks an active trip. Several ended trips sharing the word, or a word they only resemble, name none.
+  const resolution = resolveTripFromUserMessage(text, unavailable, {
     allowLooseFallback: false,
     includeArchived: true,
   });
   if (resolution.status !== "verified") return null;
+  // The open catalogue answers first (an open trip typed in full must never be called "inactive" because an ended
+  // trip shares a word with it) - unless the customer typed a word that ONLY the ended trip's name holds
+  // ("<city> НАМРЫН аялал 2097": the ended trip itself, whose open sibling shares the city).
+  if (activeTrips?.length) {
+    const open = resolveTripFromUserMessage(text, activeTrips, { allowLooseFallback: false, includeSoldOut: true });
+    if (open.status !== "not_found" && !namesEndedTripAlone(text, resolution.trip, activeTrips)) return null;
+  }
   const reason = (resolution.trip.extra as Record<string, unknown> | undefined)?.archived_reason;
   const detail = reason === "no_departure_dates"
     ? "гарах өдөр нь одоогоор баталгаажаагүй байгаа тул"

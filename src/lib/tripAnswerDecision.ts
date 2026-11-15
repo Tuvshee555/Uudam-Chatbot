@@ -1,6 +1,6 @@
 import type { TripAnswerPlan } from "./tripAnswerPlan";
 import { presentAssistantReply } from "./chatbotReplyPolicy";
-import { enforceWebsiteForPayment, isReferReply, sanitizeAssistantReply } from "./reply";
+import { EMPTY_REPLY_FALLBACK, enforceWebsiteForPayment, isReferReply, sanitizeAssistantReply } from "./reply";
 
 export type TripAnswerDecision = {
   outcome: "answered" | "clarify" | "handoff";
@@ -8,6 +8,9 @@ export type TripAnswerDecision = {
   plan: TripAnswerPlan;
   missingFacts: string[];
 };
+
+/** Nothing of the plan's text survived presentation: the cleaner's stand-in line, not an answer. */
+const isEmptyStandIn = (reply: string) => reply.trim() === EMPTY_REPLY_FALLBACK;
 
 /** Both channels consume field coverage, rather than guessing an outcome from prose. */
 export function decideTripAnswer(
@@ -24,7 +27,10 @@ export function decideTripAnswer(
     return { outcome: "handoff", reply: "REFER", plan, missingFacts: [...new Set(missingFacts)] };
   }
   const reply = presentAssistantReply({ ...presentation, reply: enforceWebsiteForPayment(sanitizeAssistantReply(plan.reply)) });
-  if (!reply.trim() || isReferReply(reply)) {
+  // A plan with no section for the turn ("3 том хүн" stating a party, a bare "Үнэ" the plan wrote
+  // nothing for) came back as the cleaner's "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай
+  // холбож өгье." and was SENT, with no lead. No data is silence and a staff lead (owner's rule).
+  if (!reply.trim() || isReferReply(reply) || isEmptyStandIn(plan.reply) || isEmptyStandIn(reply)) {
     return { outcome: "handoff", reply: "REFER", plan, missingFacts: ["reply.empty"] };
   }
   return { outcome: plan.status, reply, plan, missingFacts: [] };

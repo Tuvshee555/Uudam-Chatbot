@@ -16,6 +16,7 @@ import { createHmac } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { evaluationCallBudget, requireApprovedEvaluation } from "./lib/evalGuard.mjs";
 import { processAiTotals } from "../src/lib/aiUsage";
+import { withoutHolidaySpans } from "../src/lib/holidayCalendar";
 import test from "node:test";
 
 type Scenario = { id: string; turns: string[] };
@@ -156,7 +157,9 @@ test("live replay", { timeout: 900_000 }, async (context) => {
       const amount = Number(match[1].replace(/,/g, ""));
       if (!storedNumbers.has(amount) && !(total && match[1] === total[1])) issues.push(`amount ${match[1]} not in catalogue`);
     }
-    for (const match of reply.replace(/[^\n]*хооронд[^\n]*/g, "").matchAll(/(?<![\d,.])(\d{1,2})\/(\d{1,2})(?![\d,])|(\d{1,2}) сарын (\d{1,2})/g)) {
+    // The asked window ("…-ны хооронд") and a holiday's own days ("Наадмын үеэр (7 сарын 11–15)")
+    // restate the question; every departure listed under them is still checked.
+    for (const match of withoutHolidaySpans(reply).replace(/[^\n]*хооронд[^\n]*/g, "").matchAll(/(?<![\d,.])(\d{1,2})\/(\d{1,2})(?![\d,])|(\d{1,2}) сарын (\d{1,2})/g)) {
       const day = match[1] ? `${Number(match[1])}/${Number(match[2])}` : `${Number(match[3])}/${Number(match[4])}`;
       if (!storedDays.has(day)) issues.push(`date ${day} not a stored departure`);
     }

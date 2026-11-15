@@ -16,7 +16,7 @@ test("dated fare fields have visible labels and do not repeat age in passenger n
   assert.match(html, /Насны хүрээ/);
   assert.match(html, /Нэг хүний үнэ/);
   assert.match(html, /value="Хүүхэд"/);
-  assert.match(html, /value="4490000"/);
+  assert.match(html, /value="4,490,000"/);
   assert.equal(group.passenger_prices[0].label, "Хүүхэд 4-12 нас");
 });
 

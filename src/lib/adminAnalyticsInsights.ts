@@ -105,12 +105,11 @@ export function tripCoverage(trip: Row): Set<CoverageTopic> {
 }
 
 /**
- * Logged events that are normal operation, not failures: staff replying in Messenger, the
- * bot staying silent on purpose, and the staff-alert channel the owner chose not to use.
- * They made the overview report "5 техникийн асуудал" on a healthy day.
+ * Logged events that are normal operation, not failures: staff replying in Messenger and the
+ * bot staying silent on purpose. They made the overview report "5 техникийн асуудал" on a
+ * healthy day.
  */
 export const NOT_A_FAILURE_EVENTS: ReadonlySet<string> = new Set([
-  "staff_alert.no_channel_configured",
   "webhook.staff_takeover_detected",
   "webhook.ai_no_data_customer_silenced",
   "webhook.ai_ungrounded_trip_reply_suppressed",

@@ -13,6 +13,8 @@ import { normalizePriceRange } from "./priceRange";
 
 // ─── known keys ──────────────────────────────────────────────────────────────
 
+import { isTransportType } from "./tripTransitDays";
+
 const KNOWN_EXTRA_KEYS = new Set([
   "aliases",
   "price_groups",
@@ -41,6 +43,22 @@ const KNOWN_EXTRA_KEYS = new Set([
   "age_rules",
   "marketing_badge",
   "website_summary",
+  // Set by the file-to-trip pipeline (tripProposalFinalize.ts) and the poster mapper.
+  "transport_type",
+  "duration_days",
+  "duration_nights",
+  "destinations",
+  "photo_credits",
+  "website_details_patch",
+  // Hotels a trip stays at (name, link, photos, description) and the packages its price rows sell.
+  // Each is written only when the input carries it, so a trip without them stays without them.
+  "hotel_profiles",
+  "hotel_links",
+  "package_options",
+  // The partner page a trip was made from (assistant link → new trip) and when it was read;
+  // the partner watch (src/lib/partnerWatch) checks that page again.
+  "source_url",
+  "source_checked_at",
 ]);
 
 /**
@@ -89,6 +107,37 @@ function enrichDateKeys<T extends Record<string, unknown>>(group: T): T {
   return { ...group, date_keys: Array.from(all), display_dates: displayDates };
 }
 
+/**
+ * Per-row availability. A partner row always states it (the partner sync writes both keys); any
+ * other row keeps a status or seat count only when it has one, so a row without them is unchanged.
+ */
+function priceRowAvailability(g: Record<string, unknown>): Record<string, unknown> {
+  if (g.partner_source === true) {
+    return { partner_source: true, status: asString(g.status), seats_left: asNumberOrNull(g.seats_left) };
+  }
+  const status = asString(g.status).trim();
+  const seats = asNumberOrNull(g.seats_left);
+  return {
+    ...(status ? { status } : {}),
+    ...(seats != null && seats >= 0 ? { seats_left: seats } : {}),
+  };
+}
+
+/**
+ * Which hotel a row is: `hotel_id` is the hotel's stable identity (the resolver and the validator
+ * key on it before the name) and `hotel_profile_ids` the hotel profiles it stays at.
+ */
+function priceRowHotel(g: Record<string, unknown>): Record<string, unknown> {
+  const hotel = asString(g.hotel).trim();
+  const hotelId = asString(g.hotel_id).trim();
+  const profileIds = [...new Set(asStringArray(g.hotel_profile_ids).map((id) => id.trim()))];
+  return {
+    ...(hotel ? { hotel } : {}),
+    ...(hotelId ? { hotel_id: hotelId } : {}),
+    ...(profileIds.length ? { hotel_profile_ids: profileIds } : {}),
+  };
+}
+
 function normalizePriceGroups(raw: unknown): Record<string, unknown>[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -96,12 +145,8 @@ function normalizePriceGroups(raw: unknown): Record<string, unknown>[] {
     .map((g) =>
       enrichDateKeys({
         label: asString(g.label),
-        ...(g.partner_source === true ? {
-          partner_source: true,
-          status: asString(g.status),
-          seats_left: asNumberOrNull(g.seats_left),
-        } : {}),
-        ...(asString(g.hotel).trim() ? { hotel: asString(g.hotel).trim() } : {}),
+        ...priceRowAvailability(g),
+        ...priceRowHotel(g),
         ...(asString(g.package_id || g.package).trim()
           ? { package_id: asString(g.package_id || g.package).trim() }
           : {}),
@@ -118,6 +163,9 @@ function normalizePriceGroups(raw: unknown): Record<string, unknown>[] {
         infant_age: asString(g.infant_age),
         passenger_prices: normalizePassengerPrices(g.passenger_prices),
         ...(asNumberOrNull(g.single_price) != null ? { single_price: asNumberOrNull(g.single_price) } : {}),
+        // A documented free child/infant fare (the website writes these for a 0₮ fare).
+        ...(g.child_price_free === true ? { child_price_free: true } : {}),
+        ...(g.infant_price_free === true ? { infant_price_free: true } : {}),
         note: asString(g.note || g.notes),
       }),
     );
@@ -146,25 +194,10 @@ function normalizeDiscountGroups(raw: unknown): Record<string, unknown>[] {
 }
 
 function normalizeDepartureDateGroups(raw: unknown): Record<string, unknown>[] {
-  // Legacy format: same shape as price_groups but stored
-  // under "departure_date_groups".  Normalise the same way.
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((g): g is Record<string, unknown> => !!g && typeof g === "object")
-    .map((g) =>
-      enrichDateKeys({
-        label: asString(g.label),
-        dates: asStringArray(g.dates),
-        display_dates: asStringArray(g.display_dates),
-        date_keys: asStringArray(g.date_keys),
-        adult_price: asNumberOrNull(g.adult_price),
-        child_price: asNumberOrNull(g.child_price),
-        infant_price: asNumberOrNull(g.infant_price),
-        child_age: asString(g.child_age),
-        infant_age: asString(g.infant_age),
-        note: asString(g.note || g.notes),
-      }),
-    );
+  // Legacy format: same shape as price_groups but stored under "departure_date_groups", so it is
+  // normalised by the same rules. It used to keep only the flat fares, which silently dropped the
+  // child/infant bands, hotel, package and single-room price a file reading put here.
+  return normalizePriceGroups(raw);
 }
 
 function normalizePassengerPrices(raw: unknown): Record<string, unknown>[] {
@@ -291,6 +324,12 @@ function normalizeItineraryDays(raw: unknown): Record<string, unknown>[] {
       const hotel = asString(d.hotel);
       const photo = asString(d.photo).trim();
       const mealsRaw = d.meals && typeof d.meals === "object" ? (d.meals as Record<string, unknown>) : {};
+      const mealNote = asString(d.meal_note).trim();
+      // null = the source does not say whether the meal is included. It used to be
+      // coerced to false, which turned "not stated" into "not included" on save; a
+      // meal key that is missing altogether says nothing either (Boolean(undefined)
+      // saved it as "not included"). Only an explicit false is "not included".
+      const meal = (value: unknown) => (value === null || value === undefined ? null : Boolean(value));
       return {
         day: index + 1,
         title,
@@ -298,12 +337,139 @@ function normalizeItineraryDays(raw: unknown): Record<string, unknown>[] {
         ...(hotel ? { hotel } : {}),
         ...(photo.startsWith("https://") ? { photo } : {}),
         meals: {
-          breakfast: Boolean(mealsRaw.breakfast),
-          lunch: Boolean(mealsRaw.lunch),
-          dinner: Boolean(mealsRaw.dinner),
+          breakfast: meal(mealsRaw.breakfast),
+          lunch: meal(mealsRaw.lunch),
+          dinner: meal(mealsRaw.dinner),
         },
+        ...(mealNote ? { meal_note: mealNote.slice(0, 300) } : {}),
       };
     });
+}
+
+export type StatedDayMeals = { breakfast: boolean | null; lunch: boolean | null; dinner: boolean | null };
+
+/**
+ * Before 2026-11 every meal a source did not state was saved as false, so a stored false
+ * is not reliable on its own. A day whose three meals are all false and that has no meal
+ * note is that legacy shape (live: 55 such days on 28 of 36 active trips), not a program
+ * that says "no meals". A meal note ("хоол өөрийн зардлаар") makes it a stated fact.
+ */
+export function legacyUnstatedMeals(meals: unknown, mealNote?: unknown): boolean {
+  const day = meals && typeof meals === "object" && !Array.isArray(meals) ? (meals as Record<string, unknown>) : {};
+  return day.breakfast === false && day.lunch === false && day.dinner === false
+    && !(typeof mealNote === "string" && mealNote.trim());
+}
+
+/**
+ * A day's meals as its program states them: true included, false not included, null not
+ * stated. The legacy all-false day reads as not stated; a day with some meals true and some
+ * false keeps its false (the program listed some meals and not others). Every reader that
+ * says "not included" (the website's ✗, the AI catalogue) goes through this one rule.
+ */
+export function statedDayMeals(meals: unknown, mealNote?: unknown): StatedDayMeals {
+  if (legacyUnstatedMeals(meals, mealNote)) return { breakfast: null, lunch: null, dinner: null };
+  const day = meals && typeof meals === "object" && !Array.isArray(meals) ? (meals as Record<string, unknown>) : {};
+  const state = (value: unknown) => (value === true ? true : value === false ? false : null);
+  return { breakfast: state(day.breakfast), lunch: state(day.lunch), dinner: state(day.dinner) };
+}
+
+/** An ISO date-time ("2026-11-11T06:00:00.000Z"), or "" for anything else. */
+function isoTimestamp(value: unknown): string {
+  const text = asString(value).trim();
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text) && Number.isFinite(Date.parse(text)) ? new Date(text).toISOString() : "";
+}
+
+/**
+ * A hotel link a customer may be sent to, or a hotel photo: https only. The website's hotel cards,
+ * the bot's hotel answer and the AI catalogue show nothing else, so an "http:" link (or
+ * "javascript:", or bare text) kept here was silently invisible everywhere; it is refused at save
+ * time instead, with a warning. The partner sync keeps staff photos by this same rule.
+ */
+export function httpsLink(value: unknown): string {
+  const url = asString(value).trim();
+  return /^https:\/\/[^\s]+$/i.test(url) ? url.slice(0, 1000) : "";
+}
+
+/**
+ * The hotels a trip stays at, as the website's "Буудал" cards and the admin editor read them:
+ * { id?, name, url, description, media: [{ url, caption }], stars? }. `id` is the stable key a
+ * price row's `hotel_profile_ids` / `hotel_id` link to (the partner's own hotel id when it has one).
+ * A profile without a name, a link that is not https and a photo without an https URL are dropped,
+ * each with a warning.
+ */
+function normalizeHotelProfiles(raw: unknown[], warnings: string[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  let dropped = 0;
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) { dropped++; continue; }
+    const profile = item as Record<string, unknown>;
+    const name = asString(profile.name).trim();
+    if (!name) { dropped++; continue; }
+    const url = httpsLink(profile.url);
+    if (!url && asString(profile.url).trim()) warnings.push(`«${name}» буудлын холбоос https биш тул хасагдлаа`);
+    const mediaRaw = Array.isArray(profile.media) ? profile.media : [];
+    const media = mediaRaw.flatMap((entry) => {
+      const value = typeof entry === "string" ? { url: entry } : entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+      const mediaUrl = httpsLink((value as Record<string, unknown>).url);
+      return mediaUrl ? [{ url: mediaUrl, caption: asString((value as Record<string, unknown>).caption).trim().slice(0, 200) }] : [];
+    });
+    if (media.length < mediaRaw.length) warnings.push(`«${name}» буудлын ${mediaRaw.length - media.length} зураг https URL-гүй тул хасагдлаа`);
+    const id = asString(profile.id).trim();
+    const stars = asNumberOrNull(profile.stars);
+    out.push({
+      ...(id ? { id } : {}),
+      name,
+      url,
+      description: asString(profile.description).trim(),
+      media,
+      ...(stars != null && stars >= 1 && stars <= 7 ? { stars } : {}),
+    });
+  }
+  if (dropped) warnings.push(`${dropped} буудлын мэдээлэл нэргүй тул хасагдлаа`);
+  return out;
+}
+
+/** The older hotel name -> link list ({ name, url }); a row without both is dropped with a warning. */
+function normalizeHotelLinks(raw: unknown[], warnings: string[]): Record<string, unknown>[] {
+  const out = raw.flatMap((item) => {
+    const link = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    const name = asString(link.name).trim();
+    const url = httpsLink(link.url);
+    return name && url ? [{ name, url }] : [];
+  });
+  if (out.length < raw.length) warnings.push(`${raw.length - out.length} буудлын холбоос нэр эсвэл https URL-гүй тул хасагдлаа`);
+  return out;
+}
+
+/**
+ * The packages a trip's price rows sell ({ id, label, note }). A price row's `package_id` is one of
+ * these ids; the label is what a customer reads (the id stands in when there is none).
+ */
+function normalizePackageOptions(raw: unknown[], warnings: string[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  const out = raw.flatMap((item) => {
+    const option = typeof item === "string" ? { id: item } : item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    const label = asString(option.label).trim();
+    const id = asString(option.id).trim() || label;
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    return [{ id, label: label || id, note: asString(option.note).trim() }];
+  });
+  if (out.length < raw.length) warnings.push(`${raw.length - out.length} багцын сонголт нэргүй эсвэл давхардсан тул хасагдлаа`);
+  return out;
+}
+
+/** A list key is written only when the input has it; a value that is not a list is dropped with a warning. */
+function optionalList(
+  raw: Record<string, unknown>, key: string, warnings: string[],
+  normalize: (items: unknown[], warnings: string[]) => Record<string, unknown>[],
+): Record<string, unknown> {
+  if (!(key in raw) || raw[key] === undefined) return {};
+  if (!Array.isArray(raw[key])) {
+    warnings.push(`${key} жагсаалт биш тул хадгалагдсангүй`);
+    return {};
+  }
+  return { [key]: normalize(raw[key] as unknown[], warnings) };
 }
 
 function normalizeAnswerHints(raw: unknown): Record<string, unknown>[] {
@@ -409,9 +575,41 @@ export function normalizeExtra(
     age_rules: normalizeAgeRules(raw.age_rules),
     marketing_badge: normalizeMarketingBadge(raw.marketing_badge),
     website_summary: asString(raw.website_summary).trim(),
+    ...(isTransportType(raw.transport_type) ? { transport_type: raw.transport_type } : {}),
+    ...(asNumberOrNull(raw.duration_days) !== null ? { duration_days: asNumberOrNull(raw.duration_days) } : {}),
+    ...(asNumberOrNull(raw.duration_nights) !== null ? { duration_nights: asNumberOrNull(raw.duration_nights) } : {}),
+    ...(asStringArray(raw.destinations).length ? { destinations: asStringArray(raw.destinations) } : {}),
+    ...(Object.keys(normalizePhotoCredits(raw.photo_credits)).length ? { photo_credits: normalizePhotoCredits(raw.photo_credits) } : {}),
+    ...(raw.website_details_patch && typeof raw.website_details_patch === "object" && !Array.isArray(raw.website_details_patch)
+      ? { website_details_patch: raw.website_details_patch } : {}),
+    ...optionalList(raw, "hotel_profiles", warnings, normalizeHotelProfiles),
+    ...optionalList(raw, "hotel_links", warnings, normalizeHotelLinks),
+    ...optionalList(raw, "package_options", warnings, normalizePackageOptions),
+    ...(httpsLink(raw.source_url) ? { source_url: httpsLink(raw.source_url) } : {}),
+    ...(isoTimestamp(raw.source_checked_at) ? { source_checked_at: isoTimestamp(raw.source_checked_at) } : {}),
   };
 
   return { extra, warnings };
+}
+
+/**
+ * Where each photo came from, keyed by its URL — the website shows it as
+ * "Зургийн эх сурвалж" (photoCredits.ts there reads the same shape).
+ */
+function normalizePhotoCredits(raw: unknown): Record<string, Record<string, string>> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, Record<string, string>> = {};
+  for (const [url, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^https?:\/\//.test(url) || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    const credit = value as Record<string, unknown>;
+    const entry: Record<string, string> = {};
+    for (const key of ["title", "subject", "author", "license", "licenseUrl", "page", "provider"]) {
+      const text = asString(credit[key]).trim();
+      if (text) entry[key] = text.slice(0, 300);
+    }
+    if (Object.keys(entry).length) out[url] = entry;
+  }
+  return out;
 }
 
 /**

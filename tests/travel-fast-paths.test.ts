@@ -5,6 +5,8 @@ import { findTripMatches } from "../src/lib/travelFastPathsSearch";
 import { joinContextAndTurn } from "../src/lib/customerTurn";
 import { quickReplyTitle } from "../src/lib/quickReplyTitle";
 import type { TravelTrip } from "../src/lib/travelOps";
+import { verifyTripReply } from "../src/lib/tripReplyVerification";
+import { shouldSilenceNoDataReply } from "../src/lib/reply";
 
 const NOW = new Date("2026-06-24T04:00:00.000Z");
 
@@ -1271,67 +1273,63 @@ test("ticketed price query does not fall back to ticketless price when ticketed 
 });
 
 test("ticket price comparison keeps the included and excluded labels", () => {
-  const reply = buildStructuredTripReply(
-    "Сурмак, Фэлмор аялал\nтийзтэйгээ ялгаа?",
-    [
-      trip({
-        id: "surmak-ticket-comparison",
-        route_name: "Сурмак, Фэлмор аялал",
-        departure_dates: ["Баасан гариг болгон", "7 сарын 10"],
-        extra: {
-          price_groups: [
-            {
-              label: "Онгоцны тийзгүй үнэ",
-              dates: ["Баасан гариг болгон"],
-              adult_price: 1490000,
-              child_price: 1460000,
-            },
-            {
-              label: "Онгоцны тийзтэй үнэ",
-              dates: ["7 сарын 10"],
-              adult_price: 5600000,
-              child_price: 1550000,
-            },
-          ],
-        },
-      }),
-    ],
-    NOW,
-  );
-
-  assert.match(reply || "", /Онгоцны тийзгүй үнэ/);
-  assert.match(reply || "", /Онгоцны тийзтэй үнэ/);
-  assert.match(reply || "", /1,490,000₮/);
-  assert.match(reply || "", /5,600,000₮/);
-  assert.doesNotMatch(reply || "", /📅 Гарах өдрүүд:\s*$/);
+  // Price rows named for what they include are packages (the shared card's "Багц: …"), on a
+  // dated departure and on a weekly schedule the calendar cannot date alike. The reply
+  // checker accepts each card as printed.
+  const packages = (dates: string[]) => [
+    { label: "Онгоцны тийзгүй үнэ", dates, adult_price: 1490000, child_price: 1460000 },
+    { label: "Онгоцны тийзтэй үнэ", dates, adult_price: 5600000, child_price: 1550000 },
+  ];
+  const dated = trip({ id: "surmak-ticket-comparison", route_name: "Сурмак, Фэлмор аялал", departure_dates: ["7 сарын 10"], extra: { price_groups: packages(["7 сарын 10"]) } });
+  const weekly = trip({ id: "surmak-ticket-weekly", route_name: "Сурмак, Фэлмор аялал", departure_dates: ["Баасан гариг болгон"], extra: { price_groups: packages(["Баасан гариг болгон"]) } });
+  for (const shape of [dated, weekly]) {
+    const reply = buildStructuredTripReply("Сурмак, Фэлмор аялал\nтийзтэйгээ ялгаа?", [shape], NOW) || "";
+    assert.match(reply, /Багц: Онгоцны тийзгүй үнэ\n• Том хүн: 1,490,000₮\n• Хүүхэд: 1,460,000₮/, shape.id);
+    assert.match(reply, /Багц: Онгоцны тийзтэй үнэ\n• Том хүн: 5,600,000₮\n• Хүүхэд: 1,550,000₮/, shape.id);
+    assert.doesNotMatch(reply, /📅 Гарах өдрүүд:\s*$/);
+    assert.equal(verifyTripReply({ reply, trips: [shape], now: NOW }), reply, shape.id);
+  }
+  // A weekly row beside a calendar date is never quoted as that date's price: the card shows
+  // the dated package only (the checker could not tie a weekly fare to a heading).
+  const mixed = trip({ id: "surmak-ticket-mixed", route_name: "Сурмак, Фэлмор аялал", departure_dates: ["Баасан гариг болгон", "7 сарын 10"], extra: { price_groups: [
+    { label: "Онгоцны тийзгүй үнэ", dates: ["Баасан гариг болгон"], adult_price: 1490000, child_price: 1460000 },
+    { label: "Онгоцны тийзтэй үнэ", dates: ["7 сарын 10"], adult_price: 5600000, child_price: 1550000 },
+  ] } });
+  const mixedReply = buildStructuredTripReply("Сурмак, Фэлмор аялал\nтийзтэйгээ ялгаа?", [mixed], NOW) || "";
+  assert.match(mixedReply, /Багц: Онгоцны тийзтэй үнэ\n• Том хүн: 5,600,000₮/);
+  assert.doesNotMatch(mixedReply, /1,490,000₮/);
+  assert.equal(verifyTripReply({ reply: mixedReply, trips: [mixed], now: NOW }), mixedReply);
 });
 
 test("cruise price reply uses room price table when top-level prices are null", () => {
-  const reply = buildStructuredTripReply(
-    "Усан онгоцны аялал Талвин Вирдэн хэд вэ?",
-    [
-      trip({
-        id: "cruise",
-        route_name: "Усан онгоцны аялал - Ормак - Вэлмор -Дорнэл - Талвин Вирдэн",
-        adult_price: null,
-        child_price: null,
-        extra: {
-          aliases: ["Усан онгоцны аялал", "Талвин Вирдэн круз"],
-          room_prices: [
-            { room_type: "4 ортой цонхтой өрөө", price: 1210000, currency: "MNT" },
-            { room_type: "2 ортой цонхтой өрөө", price: 1320000, currency: "MNT" },
-          ],
-          extra_fees: [
-            { label: "Онгоцонд гарын мөнгө", amount: 710, currency: "CNY", applies_to: "1 хүн" },
-          ],
-        },
-      }),
-    ],
-  );
+  const cruise = trip({
+    id: "cruise",
+    route_name: "Усан онгоцны аялал - Ормак - Вэлмор -Дорнэл - Талвин Вирдэн",
+    adult_price: null,
+    child_price: null,
+    extra: {
+      aliases: ["Усан онгоцны аялал", "Талвин Вирдэн круз"],
+      room_prices: [
+        { room_type: "4 ортой цонхтой өрөө", price: 1210000, currency: "MNT" },
+        { room_type: "2 ортой цонхтой өрөө", price: 1320000, currency: "MNT" },
+      ],
+      extra_fees: [
+        { label: "Онгоцонд гарын мөнгө", amount: 710, currency: "CNY", applies_to: "1 хүн" },
+      ],
+    },
+  });
+  const reply = buildStructuredTripReply("Усан онгоцны аялал Талвин Вирдэн хэд вэ?", [cruise], NOW) || "";
 
-  assert.match(reply || "", /Усан онгоцны аялал/);
-  assert.match(reply || "", /4 ортой цонхтой өрөө: 1,210,000₮/);
-  assert.match(reply || "", /710\s*CNY/);
+  assert.match(reply, /Усан онгоцны аялал/);
+  assert.match(reply, /Өрөөний төрлөөр:\n• 4 ортой цонхтой өрөө: 1,210,000₮\n• 2 ортой цонхтой өрөө: 1,320,000₮/);
+  assert.match(reply, /710\s*CNY/);
+  assert.equal(verifyTripReply({ reply, trips: [cruise], now: NOW }), reply);
+  // Once every departure has passed (the live bot archives such a trip) there is no fare to
+  // quote: the no-data sentence, which the webhook turns into silence and a staff lead.
+  const later = buildStructuredTripReply("Усан онгоцны аялал Талвин Вирдэн хэд вэ?", [cruise], new Date("2026-12-20T04:00:00.000Z")) || "";
+  assert.match(later, /Үнийн мэдээлэл одоогоор тодорхойгүй байна/);
+  assert.doesNotMatch(later, /1,210,000₮|CNY/);
+  assert.ok(shouldSilenceNoDataReply(later));
 });
 
 test("child age range query is not misread as a date and returns the matching child tier", () => {
@@ -2012,7 +2010,9 @@ test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even 
     "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аяллын хүүхдийн үнэ (2-10 нас) 1,200,000₮ байна.\n\nХэрэв танд илүү дэлгэрэнгүй мэдээлэл хэрэгтэй бол асуугаарай! 😊";
   const contextualText = joinContextAndTurn(staleContext, "тэр шууд нислэгтэй нь хэд байсан бэ?");
 
-  const reply = buildStructuredTripReply(contextualText, trips);
+  // Pinned before the trip's departures: on the real clock they have passed, and a trip with
+  // no upcoming departure has no fare to quote (the live bot archives it).
+  const reply = buildStructuredTripReply(contextualText, trips, NOW);
 
   assert.ok(reply);
   assert.match(reply as string, /газар \+ нислэг хосолсон аялал/);
@@ -2058,12 +2058,19 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
     },
   });
 
-  const reply = buildSeatsReply("Саргол хотын шинжилгээтэй аялал хэд вэ?", [withFee]);
+  const reply = buildSeatsReply("Саргол хотын шинжилгээтэй аялал хэд вэ?", [withFee], NOW);
 
   assert.ok(reply);
   assert.match(reply as string, /Том хүн: 1,100,000₮/);
   assert.match(reply as string, /600.*CNY/);
   assert.match(reply as string, /300.*CNY/);
+  // The trip card prints the fee under its prices, before the dates, as the price card does.
+  const card = buildStructuredTripReply("Саргол хотын шинжилгээтэй - газрын аялал", [withFee], NOW) || "";
+  assert.match(card, /• Хүүхэд: 1,060,000₮\n⚠️ Дээрх үнэ дээр нэмэлт төлбөр орно: Шинжилгээний төлбөр \(том хүн\): 600 CNY; Шинжилгээний төлбөр \(хүүхэд\): 300 CNY\n\n📅 Гарах өдрүүд:/);
+  assert.equal(verifyTripReply({ reply: card, trips: [withFee], now: NOW }), card);
+  // A trip with no fare to quote takes no "on top of the price above" line.
+  const unpriced = trip({ ...withFee, id: "sargol-no-fare", adult_price: null, child_price: null });
+  assert.doesNotMatch(buildSeatsReply("Саргол хотын шинжилгээтэй аялал хэд вэ?", [unpriced], NOW) || "", /нэмэлт төлбөр/);
 });
 
 test("missing photos or program do not send unrelated price details as an answer", () => {
@@ -2241,25 +2248,32 @@ test("a documented-free infant survives its price group's dates passing", () => 
   // main price answer once every price group has departed — the flat-price
   // fall-through used to drop it, so the same trip answered "Үнэгүй" to
   // "нярай үнэ?" but omitted infants entirely from "үнэ хэд вэ?".
+  // The trip still departs after its September price row has passed: the card falls back to
+  // the trip's own fares for that departure, the trip-level free infant included.
   const freeInfantTrip = trip({
     id: "free-infant-departed",
     route_name: "Тест аялал З",
     adult_price: 1000000,
     child_price: 900000,
+    departure_dates: ["2026-09-12", "2026-12-27"],
     extra: {
-      price_groups: [{ dates: ["9 сарын 12"], adult_price: 1000000, child_price: 900000, infant_price: 0, infant_age: "0-2 нас" }],
+      price_groups: [{ dates: ["2026-09-12"], adult_price: 1000000, child_price: 900000, infant_price: 0, infant_age: "0-2 нас" }],
       child_rules: [{ note: "Үнэгүй", label: "Нярай", price: 0, age_range: "0-2 нас" }],
     },
   });
 
   const afterDeparture = new Date("2026-12-20T04:00:00.000Z");
-  const reply = buildStructuredTripReply(
-    [freeInfantTrip.route_name, "үнэ хэд вэ?"].join("\n"),
-    [freeInfantTrip],
-    afterDeparture,
-  );
-  assert.match(reply || "", /Том хүн: 1,000,000₮/);
-  assert.match(reply || "", /Нярай:\s*Үнэгүй/);
+  const ask = [freeInfantTrip.route_name, "үнэ хэд вэ?"].join("\n");
+  const reply = buildStructuredTripReply(ask, [freeInfantTrip], afterDeparture) || "";
+  assert.match(reply, /Том хүн: 1,000,000₮/);
+  assert.match(reply, /Нярай[^:\n]*:\s*Үнэгүй/);
+  assert.equal(verifyTripReply({ reply, trips: [freeInfantTrip], now: afterDeparture }), reply);
+  // Every departure passed (the live bot archives such a trip): no fare at all, never last
+  // season's fares read from the raw fields. The webhook turns it into silence and a staff lead.
+  const archived = buildStructuredTripReply(ask, [freeInfantTrip], new Date("2027-01-05T04:00:00.000Z")) || "";
+  assert.match(archived, /Үнийн мэдээлэл одоогоор тодорхойгүй байна/);
+  assert.doesNotMatch(archived, /1,000,000₮/);
+  assert.ok(shouldSilenceNoDataReply(archived));
 });
 
 test("a free-infant note never zeroes out a real, separately-priced child fare", () => {
@@ -2267,11 +2281,14 @@ test("a free-infant note never zeroes out a real, separately-priced child fare",
   // ("Хүүхэд") for both the genuine child tier (1,070,000₮) and a mislabeled
   // infant tier (0₮, "Үнэгүй", age 2024-2026 = 0-2yo) — matching on label alone
   // made the real child price disappear as "Үнэгүй" too.
+  // Departs every day: a schedule the calendar cannot date, so the card is read from the
+  // undated fares (the "Өдөр бүр" row), whatever the clock says.
   const mixedTrip = trip({
     id: "mixed-labels",
     route_name: "Тест аялал Г",
     adult_price: 1100000,
     child_price: 1070000,
+    departure_dates: ["Өдөр бүр"],
     extra: {
       price_groups: [{
         dates: ["Өдөр бүр"],
@@ -2306,6 +2323,8 @@ test("a free-infant note never zeroes out a real, separately-priced child fare",
     /Хүүхэд[^:]*:\s*Үнэгүй/,
     "a 0/Үнэгүй rule for a different age band must never make the real child tier free",
   );
+  assert.match(reply || "", /📅 Гарах өдрүүд: Өдөр бүр/);
+  assert.equal(verifyTripReply({ reply: reply || "", trips: [mixedTrip] }), reply);
 });
 
 test("distinct age-banded child fares are broken out instead of one flat price", () => {
@@ -2327,13 +2346,16 @@ test("distinct age-banded child fares are broken out instead of one flat price",
     },
   });
 
+  // Pinned before the trip's departures (on the real clock they have passed: no fare to quote).
   const reply = buildStructuredTripReply(
     [tieredTrip.route_name, "үнэ хэд вэ?"].join("\n"),
     [tieredTrip],
+    NOW,
   );
   assert.match(reply || "", /1,160,000₮/);
   assert.match(reply || "", /1,130,000₮/);
-  assert.match(reply || "", /Нярай:\s*Үнэгүй/);
+  assert.match(reply || "", /Нярай[^:\n]*:\s*Үнэгүй/);
+  assert.equal(verifyTripReply({ reply: reply || "", trips: [tieredTrip], now: NOW }), reply);
 });
 
 test("poster passenger tiers drive age-specific and generic child answers", () => {
@@ -2434,9 +2456,11 @@ test("compound photo+price question answers the price even when the trip has no 
     child_price: 1320000,
     photo_urls: [],
   });
+  // Pinned before the trip's departures (on the real clock they have passed: no fare to quote).
   const result = buildProgramOrStructuredReply(
     `${noPhotoTrip.route_name} үнэ хэд вэ, мөн зураг үзүүлээч`,
     [noPhotoTrip],
+    NOW,
   );
   assert.ok(result, "must not return null/silence when a real answer exists");
   assert.match(result?.reply || "", /1,420,000₮/);

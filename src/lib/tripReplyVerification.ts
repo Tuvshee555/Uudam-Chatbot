@@ -1,18 +1,27 @@
 import type { TravelTrip } from "./travelTypes";
 import type { TripSelection } from "./tripRequest";
-import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply, replySectionTrips } from "./reply";
-import { tripDurationDays } from "./travelFastPathsSearch";
+import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply, replySectionTrips, withoutOwnTripWords } from "./reply";
+import { tripDurationDays, tripIdentityName } from "./travelFastPathsSearch";
 import { tripTransport, isTripOfferPrice } from "./tripFacts";
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type PassengerKind } from "./tripOffers";
 import { parseDepartureDateText } from "./travelDates";
+import { withoutHolidaySpans } from "./holidayCalendar";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 
 const AMOUNT = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(?:₮|төгрөг|MNT)(?![\p{L}])/giu;
 
-/** "2-12 нас" / "2 – 12 нас" → "2-12нас"; "" when there is no band. */
+/**
+ * "2-12 нас" / "2 – 12 нас" → "2-12нас"; an open band as the trip writes it ("2 нас хүртэл", "12-оос доош
+ * нас", "12-оос дээш нас", "12+") → "2нас:хүртэл", "12нас:доош", "12нас:дээш"; "" when there is no band.
+ * A card prints the trip's own band text, so the same key means the same fare (2026-11-11: "Нярай /2 нас
+ * хүртэл/: Үнэгүй" was read as a 2-year-old, who is also in the 2-12 child band, and the answer was refused).
+ */
 function bandKey(text: string): string {
   const match = /(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(нас|сар|years?|months?)?/i.exec(text);
-  return match ? `${match[1]}-${match[2]}${/сар|month/i.test(match[3] || "") ? "сар" : "нас"}` : "";
+  if (match) return `${match[1]}-${match[2]}${/сар|month/i.test(match[3] || "") ? "сар" : "нас"}`;
+  const open = /(\d{1,2})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(нас|сар)?\s*(хүртэл|доош|дээш)|(\d{1,2})\s*\+/i.exec(text);
+  if (!open) return "";
+  return open[4] ? `${open[4]}нас:дээш` : `${open[1]}${/сар/i.test(open[2] || "") ? "сар" : "нас"}:${open[3].toLowerCase()}`;
 }
 
 const FARE_LINE = /том\s*хүн|хүүх(?:эд|дийн)|нярай|adult|child|infant|нийт\s*:/i;
@@ -25,6 +34,9 @@ function tripOwnText(trip: TravelTrip): string {
   return squash([
     ...list(extra.itinerary_days), ...list(extra.included_items), ...list(extra.excluded_items), ...list(extra.important_notes),
     typeof extra.important_notes === "string" ? extra.important_notes : "",
+    // A departure the operator wrote as words ("12/15-аас өмнөх өдрүүдэд хамт олны захиалгаар") is printed
+    // as written; it is their own text, not a departure the bot invented (live 2026-11-11).
+    ...(Array.isArray(trip.departure_dates) ? trip.departure_dates.filter((text) => typeof text === "string" && /\p{L}{4,}/u.test(text)) : []),
   ].join(" | "));
 }
 
@@ -41,7 +53,7 @@ function withoutOwnText(reply: string, trips: TravelTrip[]): string {
     const named = replySectionTrips(line, trips);
     if (named.length) active = named;
     const own = active.map(tripOwnText).join(" | ");
-    const core = squash(line.replace(/^\s*[•\-*]\s*/, "").replace(/^\d{1,2}-р өдөр:\s*[^—]*—\s*/, ""));
+    const core = squash(line.replace(/^\s*[•\-*]\s*/, "").replace(/^\d{1,2}-р өдөр:\s*[^—]*—\s*/, "").replace(/^\s*(?:📅\s*)?Гарах өдрүүд:\s*/u, ""));
     // Fare lines are always checked: a stale price in the program text must never pass as a fare.
     return core.length < 12 || FARE_LINE.test(line) || !own.includes(core);
   }).join("\n");
@@ -89,12 +101,28 @@ function withoutAddedUpTotals(text: string): string {
  * window phrase is dropped — every departure listed under it is still checked.
  */
 function withoutAskedWindows(text: string): string {
-  return text
+  return withoutHolidaySpans(text)
     .replace(/\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*\d{1,2}\s*[–—-]\s*(?:\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*)?\d{1,2}\s*(?:-?\s*(?:ны|ний|нд|ний))?\s*(?:хооронд|хүртэл)/giu, " ")
     .replace(/\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*\d{1,2}\s*-?\s*(?:ны|ний)?\s*-?(?:аас|ээс|оос|өөс|наас|нээс)\s*(?:\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*)?\d{1,2}\s*-?\s*(?:ны|ний)?\s*(?:хооронд|хүртэл)/giu, " ");
 }
 
 /** Shared final check for AI and code-generated replies in both channels. */
+/**
+ * The reply with the digits of a trip title's NOTE masked: the part of a title that is a staff instruction
+ * (tripIdentityName drops it for matching: "… - 2026-12-15-с өмнөх өдрүүдэд … авна"). Ordinary names are
+ * left exactly as typed, since the guards tell trips apart by them.
+ */
+function withoutTripNameDigits(text: string, trips: TravelTrip[]): string {
+  let out = text;
+  for (const trip of trips) {
+    const name = trip.route_name || "";
+    const identity = tripIdentityName(name);
+    if (identity === name || !/\d/.test(name.slice(identity.length))) continue;
+    out = out.split(name).join(identity + name.slice(identity.length).replace(/\d/g, "x"));
+  }
+  return out;
+}
+
 export function verifyTripReply(input: {
   reply: string; trips: TravelTrip[]; selection?: TripSelection | null; now?: Date;
 }): string {
@@ -104,39 +132,56 @@ export function verifyTripReply(input: {
   if (!trips.length) return [...reply.matchAll(AMOUNT)].length ? "REFER" : reply;
   // Links (a poster PDF id is full of digits) are not prices or dates.
   const checked = withoutAskedWindows(withoutAddedUpTotals(withoutOwnText(reply.replace(/https?:\/\/\S+/g, " "), trips)));
-  const priceChecked = guardUnverifiedPrices(checked, trips, now);
+  // A trip's own name is its data: digits in it ("… - 2026-12-15-с өмнөх …", live 2026-11-11) are not a quoted
+  // price or a departure. They are masked for the price and date guards only; section detection below keeps the name.
+  const guarded = withoutTripNameDigits(checked, trips);
+  const priceChecked = guardUnverifiedPrices(guarded, trips, now);
   if (isReferReply(priceChecked)) return "REFER";
-  const datesChecked = guardUnverifiedDates(checked, trips, undefined, now);
+  const datesChecked = guardUnverifiedDates(guarded, trips, undefined, now);
   if (isReferReply(datesChecked)) return "REFER";
   if (isReferReply(guardInventedBookingTerms(checked, "", trips))) return "REFER";
   let active = trips;
   let date = selection?.date || null;
   let hotel = selection?.hotel || null;
   let packageId = selection?.package || null;
+  let packageFromLine = false;
   // A header listing several departures ("12/19, 12/22:") scopes the fare lines under it.
   let dateSet: string[] = [];
-  for (const line of checked.split(/\r?\n|[|;]/)) {
+  const maskedLines = guarded.split(/\r?\n|[|;]/);
+  for (const [lineIndex, line] of checked.split(/\r?\n|[|;]/).entries()) {
+    // Numbers are read from the masked line (a title's note is not a fare); sections from the line as typed.
+    const numbersLine = maskedLines[lineIndex] ?? line;
     const named = replySectionTrips(line, trips);
     if (named.length) {
       active = named;
       date = selection?.tripId === named[0].id ? selection.date : null;
       hotel = selection?.tripId === named[0].id ? selection.hotel : null;
       packageId = selection?.tripId === named[0].id ? selection.package || null : null;
+      packageFromLine = false;
       dateSet = [];
     }
     if (isReferReply(guardInventedBookingTerms(line, "", active))) return "REFER";
-    const dates = parseDepartureDateText(line, now);
+    const dates = parseDepartureDateText(withoutOwnTripWords(numbersLine, trips), now);
     if (dates.length === 1) { date = dates[0]; dateSet = []; } else if (dates.length > 1) { date = null; dateSet = dates; }
+    // A new date heading starts its own block: a package an earlier block named ("Багц: Шинэ жил" under
+    // 12/25) is not the package of the next dates (2026-11-11: the next block's fares were refused).
+    if (dates.length && packageFromLine) { packageId = selection?.package || null; packageFromLine = false; }
     // Longest name first: "Lotus + Pearl" must not be read as "Lotus" (same rule as mentionedOfferHotel).
     const hotels = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.hotel))
       .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
     const mentioned = hotels.find((value) => line.toLowerCase().includes(value.toLowerCase()));
+    // A newly named hotel starts its own block: a package an earlier line of this reply named
+    // belongs to the previous hotel, not this one (the customer's own choice still holds).
+    if (mentioned && packageFromLine && mentioned !== hotel) {
+      packageId = selection?.package || null;
+      packageFromLine = false;
+    }
     if (mentioned) hotel = mentioned;
     const packages = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.packageId))
       .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
     const mentionedPackage = packages.find((value) => line.toLowerCase().includes(value.toLowerCase()));
-    if (mentionedPackage) packageId = mentionedPackage;
-    for (const fragment of line.split(/(?=том\s*хүн|насанд\s*хүрэгч|adult|нярай|infant|хүүх(?:эд|дийн)|child)/i)) {
+    if (mentionedPackage) { packageId = mentionedPackage; packageFromLine = true; }
+    for (const fragment of numbersLine.split(/(?=том\s*хүн|насанд\s*хүрэгч|adult|нярай|infant|хүүх(?:эд|дийн)|child)/i)) {
       const kind = /том\s*хүн|насанд\s*хүрэгч|adult/i.test(fragment) ? "adult" : /нярай|infant/i.test(fragment) ? "infant" : /хүүх(?:эд|дийн)|child/i.test(fragment) ? "child" : null;
       const amounts = [...fragment.matchAll(AMOUNT)].map((match) => Number(match[1].replace(/[.,]/g, "")));
       const freeFare = /^(?:том\s*хүн|насанд\s*хүрэгч|adults?|нярай|infants?|хүүх(?:эд|дийн)|child(?:ren)?)(?:\s*(?:\([^)]*\)|\/[^/]*\/))?\s*(?:x\s*\d+)?\s*:?\s*(?:үнэгүй|free)\s*[.!]?\s*$/iu.test(fragment.trim());
@@ -151,7 +196,8 @@ export function verifyTripReply(input: {
       // A band printed exactly as one of the trip's own fares ("Хүүхэд /2-12 нас/:
       // 3,250,000₮") is that fare. Turning the band into one age broke wherever a
       // trip's bands touch ("2-12" next to "12+", "0-2" next to "2-8").
-      const printedBand = ageMatch?.[2] ? bandKey(ageMatch[0]) : null;
+      // An open band printed in the label ("Нярай /2 нас хүртэл/") is matched the same way.
+      const printedBand = ageMatch?.[2] ? bandKey(ageMatch[0]) : (bandKey(/[/(][^/)]*[/)]/.exec(fragment)?.[0] || "") || null);
       if ((kind || packageId || amounts.some((amount) => amount < 1_000)) && amounts.length) {
         for (const amount of amounts) {
           // Asked of the resolver, so a hotel row that inherits the trip's infant
@@ -178,9 +224,13 @@ export function verifyTripReply(input: {
               && (!offer.dateScoped || possibleDates.some((departure) => offer.dates.includes(departure)))
               && offer.supplementalFares.some(({ fare }) => fare.kind === "range" ? amount >= fare.min && amount <= fare.max : fare.kind !== "unknown" && fare.amount === amount))) return true;
             if (!possibleDates.length) {
-              return offers.some((offer) => (!hotel || offer.hotel === hotel)
+              if (offers.some((offer) => (!hotel || offer.hotel === hotel)
                 && (!packageId || offer.packageId === packageId)
-                && offer.fares.some((fare) => (!kind || fare.kind === kind) && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount));
+                && offer.fares.some((fare) => (!kind || fare.kind === kind) && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount))) return true;
+              // A trip with no dated departure (sold on request, "12/15-аас өмнөх өдрүүдэд хамт олны захиалгаар")
+              // prints its own base fares; those are its data, not an invented price (live 2026-11-11).
+              const base: Record<PassengerKind, number | null | undefined> = { adult: trip.adult_price, child: trip.child_price, infant: trip.infant_price };
+              return (kind ? [kind as PassengerKind] : (["adult", "child", "infant"] as PassengerKind[])).some((fareKind) => { const value = base[fareKind]; return typeof value === "number" && value > 0 && value === amount; });
             }
             const kinds: PassengerKind[] = kind ? [kind] : ["adult", "child", "infant"];
             return possibleDates.some((departure) => kinds.some((fareKind) => isTripOfferPrice(trip, { date: departure, hotel, packageId,

@@ -3,6 +3,7 @@ import test from "node:test";
 import { auditTripCatalog, auditTripFacts, assertValidTripDataChange, TripDataValidationError, validateTripDataChange, type TripFactInput } from "../src/lib/tripDataValidation";
 import { normalizeExtra, normalizeExtraPatch } from "../src/lib/tripExtraSchema";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 
 const NOW = new Date("2026-10-02T00:00:00Z");
 const group = (adult_price: number, fields: Record<string, unknown> = {}) => ({ dates: ["2026-11-01"], hotel: "Alpha Bay", adult_price, ...fields });
@@ -304,8 +305,8 @@ test("DB save boundary rejects conflicts before writes and preserves unrelated l
     assert.deepEqual(fields, before);
 
     const { default: handler } = await import("../src/pages/api/admin/trips");
-    const request = (method: string, body: unknown = {}, secret = "test-admin-secret") => ({
-      method, body, query: { action: "fact-audit" }, headers: { "x-admin-secret": secret },
+    const request = (method: string, body: unknown = {}, signedIn = true) => ({
+      method, body, query: { action: "fact-audit" }, headers: signedIn ? adminCookieHeaders() : { cookie: "uudam_admin=v2.forged.token.value.sig" },
       url: "/api/admin/trips?action=fact-audit", socket: { remoteAddress: "203.0.113.70" },
     }) as unknown as import("next").NextApiRequest;
     const response = () => ({ statusCode: 200, body: undefined as unknown,
@@ -313,7 +314,7 @@ test("DB save boundary rejects conflicts before writes and preserves unrelated l
       json(body: unknown) { this.body = body; return this; }, end() { return this; }, setHeader() {} });
     queries.length = 0;
     const unauthorized = response();
-    await handler(request("GET", {}, "wrong-secret"), unauthorized as never);
+    await handler(request("GET", {}, false), unauthorized as never);
     assert.equal(unauthorized.statusCode, 401);
     assert.equal(queries.length, 0);
 

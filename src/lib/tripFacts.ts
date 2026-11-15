@@ -168,8 +168,8 @@ export function isTripOfferPrice(
   if (result.status === "needs_selection" && result.fields.includes("hotel") && !selection.hotel && !selection.hotelId) {
     return result.options.some((option) => isTripOfferPrice(trip, { ...selection, hotel: option }, kind, amount, now));
   }
-  // The same for a hotel sold as several packages: Санья's "Phoenix Island +
-  // Paxton" fares were rejected for lacking a package, and the trip card went silent.
+  // The same for a hotel sold as several packages: a partner trip's "Sarnai Island +
+  // Altara" fares were rejected for lacking a package, and the trip card went silent.
   if (result.status === "needs_selection" && result.fields.includes("package") && !selection.packageId && !selection.package) {
     return result.options.some((packageId) => isTripOfferPrice(trip, { ...selection, packageId }, kind, amount, now));
   }

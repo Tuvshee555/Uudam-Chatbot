@@ -1,5 +1,12 @@
 /** Pure catalog audit. No normalization, persistence, or inferred passenger defaults. */
 import { itineraryEndsInUlaanbaatar, itineraryStartsInUlaanbaatar } from "./tripItineraryBoundaries";
+import { passengerLabelCondition } from "./passengerCondition";
+
+/** A child/infant fare's condition from its label ("Хүүхэд ор эзлэхгүй" → "ор эзлэхгүй"); "" for none. */
+function labelCondition(label: unknown): string {
+  const value = typeof label === "string" ? label : "";
+  return (passengerLabelCondition(value, "child") ?? passengerLabelCondition(value, "infant") ?? "").toLowerCase();
+}
 
 export type TripFactInput = {
   id?: unknown;
@@ -36,7 +43,9 @@ export type TripFactAudit = {
 type Row = Record<string, unknown>;
 type CalendarDate = { year: number | null; month: number; day: number };
 type AgeBand = { min: number; max: number; basis: "months" | "birth_year"; step?: number };
-type Fare = { scope: string; band: AgeBand | null; price: number; max: number; currency: string; path: string };
+// condition: what the label says besides the age ("ортой", "ор эзлэхгүй", a height). Two fares for the same
+// ages with different conditions are two categories (a child with a bed and without), not a conflict.
+type Fare = { scope: string; band: AgeBand | null; price: number; max: number; currency: string; path: string; condition?: string };
 type Group = { path: string; hotel: string; packageId: string; dates: CalendarDate[]; fares: Fare[] };
 
 const TRIP_STATUSES = new Set(["active", "paused", "cancelled", "sold_out", "draft", "archived"]);
@@ -215,7 +224,7 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
     return found;
   }
 
-  function checkAges(entries: Array<{ band: AgeBand | null; path: string; label: string }>, scope: unknown) {
+  function checkAges(entries: Array<{ band: AgeBand | null; path: string; label: string; condition?: string }>, scope: unknown) {
     for (const entry of entries) {
       if (entry.band && (entry.band.basis === "months" ? entry.band.min >= entry.band.max : entry.band.min > entry.band.max)) {
         add("invalid_age_range", "error", [entry.path], `${entry.path}: age range is reversed. Correct its lower and upper bounds.`, [scope, entry.label, entry.band]);
@@ -224,6 +233,8 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
     for (let i = 0; i < entries.length; i++) for (let j = i + 1; j < entries.length; j++) {
       const a = entries[i], b = entries[j];
       if (!a.band || !b.band || !overlap(a.band, b.band)) continue;
+      // The same ages with and without a bed (or of different heights) are two categories.
+      if ((a.condition || "") !== (b.condition || "")) continue;
       // Repeated compatibility tiers represent one category, not two categories.
       if (bandKey(a.band) === bandKey(b.band) && a.label === b.label) continue;
       const boundary = sharedAgeBoundary(a.band, b.band);
@@ -307,9 +318,9 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
     const currency = text(row.currency || trip.currency).toUpperCase() || "MNT";
     const fares: Fare[] = [];
     const passengers = rows(row.passenger_prices);
-    const addFare = (key: string, price: unknown, band: AgeBand | null, path: string, fareCurrency = currency, maxPrice?: unknown) => {
+    const addFare = (key: string, price: unknown, band: AgeBand | null, path: string, fareCurrency = currency, maxPrice?: unknown, condition = "") => {
       const n = amount(price);
-      if (n !== null) fares.push({ scope: key, band, price: n, max: amount(maxPrice) ?? n, path, currency: fareCurrency });
+      if (n !== null) fares.push({ scope: key, band, price: n, max: amount(maxPrice) ?? n, path, currency: fareCurrency, condition });
     };
     const adultRange = record(row.adult_price_range);
     addFare("adult", adultRange.min ?? row.adult_price, null, `${path}.adult_price`, currency, adultRange.max);
@@ -323,23 +334,24 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
     }
     passengers.forEach((p, j) => {
       const band = ageBand(p.age_range);
-      addFare(band ? `age:${bandKey(band)}` : norm(p.label), p.price, band, `${path}.passenger_prices[${j}].price`, text(p.currency).toUpperCase() || currency);
+      const condition = labelCondition(p.label);
+      addFare(band ? `age:${bandKey(band)}${condition ? `|${condition}` : ""}` : norm(p.label), p.price, band, `${path}.passenger_prices[${j}].price`, text(p.currency).toUpperCase() || currency, undefined, condition);
     });
-    const ageEntries = passengers.length ? passengers.map((p, j) => ({ band: ageBand(p.age_range), label: norm(p.label), path: `${path}.passenger_prices[${j}].age_range` }))
+    const ageEntries = passengers.length ? passengers.map((p, j) => ({ band: ageBand(p.age_range), label: norm(p.label), condition: labelCondition(p.label), path: `${path}.passenger_prices[${j}].age_range` }))
       : ["child", "infant"].map(label => ({ band: ageBand(row[`${label}_age`]), label, path: `${path}.${label}_age` }));
     checkAges(ageEntries, scope);
     return { path, hotel, packageId, dates: groupDates, fares };
   });
 
   function compareFares(a: Fare, b: Fare, scope: unknown, checkOverlap = false) {
-    if (checkOverlap && a.band && b.band && bandKey(a.band) !== bandKey(b.band) && overlap(a.band, b.band)) {
+    if (checkOverlap && a.band && b.band && (a.condition || "") === (b.condition || "") && bandKey(a.band) !== bandKey(b.band) && overlap(a.band, b.band)) {
       const boundary = sharedAgeBoundary(a.band, b.band);
       add("overlapping_age_categories", boundary ? "warning" : "error", [a.path, b.path], boundary
         ? `${a.path} and ${b.path}: age categories share an endpoint for the same offer. Staff must confirm inclusive/exclusive boundaries.`
         : `${a.path} and ${b.path}: passenger age bands overlap for the same hotel and departure. Correct the category boundaries.`, [scope, [bandKey(a.band), bandKey(b.band)].sort()]);
       return;
     }
-    const matchingPassenger = a.band && b.band ? bandKey(a.band) === bandKey(b.band) : a.scope === b.scope;
+    const matchingPassenger = a.band && b.band ? bandKey(a.band) === bandKey(b.band) && (a.condition || "") === (b.condition || "") : a.scope === b.scope;
     if (!matchingPassenger || a.currency !== b.currency || a.price === b.price && a.max === b.max) return;
     const intersects = Math.max(a.price, b.price) <= Math.min(a.max, b.max);
     add("conflicting_price_groups", intersects ? "warning" : "error", [a.path, b.path],
