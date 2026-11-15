@@ -86,8 +86,9 @@ function hardChecks(reply: string, customerText: string): string[] {
       if (!truth.numbers.has(amountOf(match[1]))) problems.push(`invented amount ${match[1]}₮`);
     }
   }
-  // Lines that quote a window or a condition ("3 сарын 1-ээс өмнө захиалбал") name days that are not departures.
-  const withoutWindows = reply.replace(/[^\n]*(?:хооронд|-с хойш|-ээс хойш|хуваарь байхгүй|өмнө|хямдрал|нөхцөл)[^\n]*/g, "");
+  // Lines that quote a window, a condition ("3 сарын 1-ээс өмнө захиалбал") or the customer's own date
+  // with "no trip then" ("7 сарын 7-нд гарах аялал алга") name days that are not departures.
+  const withoutWindows = reply.replace(/[^\n]*(?:хооронд|-с хойш|-ээс хойш|хуваарь байхгүй|аялал алга|өмнө|хямдрал|нөхцөл)[^\n]*/g, "");
   for (const match of withoutWindows.matchAll(/(?<![\d,.])(\d{1,2})\/(\d{1,2})(?![\d,])|(\d{1,2}) сарын (\d{1,2})(?![\d])/g)) {
     const day = match[1] ? `${Number(match[1])}/${Number(match[2])}` : `${Number(match[3])}/${Number(match[4])}`;
     if (!truth.days.has(day)) problems.push(`date ${day} is not a catalogue departure`);
