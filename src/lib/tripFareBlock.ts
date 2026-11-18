@@ -24,6 +24,8 @@
 import type { TravelTrip } from "./travelTypes";
 import { isPlaceholderDepartureText, parseDepartureDateText } from "./travelDates";
 import { passengerLabelCondition } from "./passengerCondition";
+import { ageRulesFromExtra } from "./ageRules";
+import { INFANT_FARE_ASK } from "./infantFareAsk";
 import { tripSupportsDate } from "./tripFacts";
 import { lowSeatDates } from "./departureAvailability";
 import { normalizeTripOffers, renderTripOfferReply, resolveTripOffer, resolveTripOfferFareCard, resolveUndatedFareCard, type CanonicalTripOffer, type NormalizedPassengerFare, type OfferFare, type PassengerKind, type ResolvedTripOffer, type TripOfferResult, type TripOfferSelection } from "./tripOffers";
@@ -169,6 +171,11 @@ export function fareLines(fares: NormalizedPassengerFare[], currency: string, tr
       const line = `• ${LABEL[kind]}${band}: ${price}`;
       if (!seen.has(line)) { seen.add(line); lines.push(line); }
     }
+  }
+  // No infant fare on this card: said beside the others, not left out (infantFareAsk.ts).
+  if (lines.length && !fares.some((fare) => fare.kind === "infant")) {
+    const infantBand = trip ? ageRulesFromExtra(trip.extra).infant : "";
+    lines.push(`• ${LABEL.infant}${infantBand ? ` /${displayAgeBand(infantBand)}/` : ""}: ${INFANT_FARE_ASK}`);
   }
   return lines;
 }

@@ -91,12 +91,13 @@ export function presentAssistantReply(input: {
       ["adult", /том\s*хүн|насанд\s*хүрэгч|adult/i],
       ["child", /хүүх(?:эд|дийн)|child/i], ["infant", /нярай|infant/i],
     ];
+    // «тодруулж мэдээлэл аваарай» stands where an infant fare would (infantFareAsk.ts): a fare line too.
     const canFocus = !/нийт\s*:|total\s*:|\bx\s*\d|×\s*\d/i.test(reply) && lines.some((line) =>
-      labels.some(([kind, pattern]) => preferences.fareKinds.includes(kind) && pattern.test(line) && /₮|MNT|үнэгүй|free/i.test(line)));
+      labels.some(([kind, pattern]) => preferences.fareKinds.includes(kind) && pattern.test(line) && /₮|MNT|үнэгүй|free|тодруулж мэдээлэл/i.test(line)));
     if (canFocus) reply = lines.filter((line) => {
       const kinds = labels.filter(([, pattern]) => pattern.test(line)).map(([kind]) => kind);
       const standalone = /^\s*(?:[•*-]\s*)?(?:том\s*хүн|насанд\s*хүрэгч|adult|хүүх(?:эд|дийн)|child|нярай|infant)/i.test(line)
-        && /[:：]/.test(line) && /₮|MNT|үнэгүй|free/i.test(line);
+        && /[:：]/.test(line) && /₮|MNT|үнэгүй|free|тодруулж мэдээлэл/i.test(line);
       return !standalone || kinds.length !== 1 || preferences.fareKinds.includes(kinds[0]);
     }).join("\n");
   }

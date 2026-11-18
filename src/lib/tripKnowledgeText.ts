@@ -172,6 +172,9 @@ export function tripKnowledgeModule(rawTrip: TravelTrip, now = new Date()): Prog
   }
   if (typeof trip.infant_price === "number") {
     details.push(`Infant price: ${trip.infant_price}`);
+  } else {
+    // The owner's wording for an infant fare the trip does not give (infantFareAsk.ts).
+    details.push("Infant price: not given — when fares are listed or the infant price is asked, write «Нярай: тодруулж мэдээлэл аваарай»; never guess one.");
   }
   // Emit structured price groups so the bot can answer per-date pricing questions
   const extra = (trip.extra || {}) as Record<string, unknown>;

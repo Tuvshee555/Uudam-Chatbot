@@ -3,6 +3,7 @@ import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
 import { replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/messenger";
+import { withInfantAskButton } from "../../lib/infantFareAsk";
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
@@ -533,7 +534,8 @@ async function handleMessageTurn(
     recordReplyPresentation({ reply, userText: text, path: "webhook_code", latencyMs: Date.now() - replyStartedAt });
     await assertLockHealthy();
     let delivered: boolean;
-    const buttons = input.buttons?.filter(Boolean).slice(0, replyPreferences(text).full ? 10 : 3) || [];
+    // A fare whose infant price is not given leads with «Нярайн үнэ тодруулах» (infantFareAsk.ts).
+    const buttons = withInfantAskButton(reply, input.buttons || []).slice(0, replyPreferences(text).full ? 10 : 3);
     if (token && buttons.length > 0) {
       try {
         if (platform === "facebook") {
@@ -2291,7 +2293,7 @@ async function handleMessageTurn(
     } catch {
     }
   }
-  replyButtons = replyButtons.slice(0, replyPreferences(text).full ? 10 : 3);
+  replyButtons = withInfantAskButton(safeReply, replyButtons).slice(0, replyPreferences(text).full ? 10 : 3);
   await assertLockHealthy();
   let delivered: boolean;
   if (token && replyButtons.length > 0) {

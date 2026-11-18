@@ -1530,7 +1530,9 @@ test("a 0₮ infant fare is never quoted as a free seat", () => {
   );
   assert.match(fullPrice || "", /Том хүн: 1,000,000₮/);
   assert.doesNotMatch(fullPrice || "", /:\s*0₮/);
-  assert.doesNotMatch(fullPrice || "", /Нярай/);
+  // Never free: the owner's wording stands where the unknown infant fare would (2026-11-18).
+  assert.doesNotMatch(fullPrice || "", /Нярай[^\n]*Үнэгүй/);
+  assert.match(fullPrice || "", /• Нярай[^\n]*: тодруулж мэдээлэл аваарай/);
 
   // Asking specifically about infants must still answer the question asked,
   // rather than silently returning an adult/child block.
@@ -1539,7 +1541,7 @@ test("a 0₮ infant fare is never quoted as a free seat", () => {
     [zeroInfantTrip],
     NOW,
   );
-  assert.match(infantAsk || "", /Нярайн үнэ тодорхойгүй/);
+  assert.match(infantAsk || "", /Нярай[^\n]*: тодруулж мэдээлэл аваарай/);
   assert.doesNotMatch(infantAsk || "", /:\s*0₮/);
   assert.doesNotMatch(infantAsk || "", /null|undefined/);
 });
@@ -2066,7 +2068,7 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
   assert.match(reply as string, /300.*CNY/);
   // The trip card prints the fee under its prices, before the dates, as the price card does.
   const card = buildStructuredTripReply("Саргол хотын шинжилгээтэй - газрын аялал", [withFee], NOW) || "";
-  assert.match(card, /• Хүүхэд: 1,060,000₮\n⚠️ Дээрх үнэ дээр нэмэлт төлбөр орно: Шинжилгээний төлбөр \(том хүн\): 600 CNY; Шинжилгээний төлбөр \(хүүхэд\): 300 CNY\n\n📅 Гарах өдрүүд:/);
+  assert.match(card, /• Хүүхэд: 1,060,000₮\n• Нярай: тодруулж мэдээлэл аваарай\n⚠️ Дээрх үнэ дээр нэмэлт төлбөр орно: Шинжилгээний төлбөр \(том хүн\): 600 CNY; Шинжилгээний төлбөр \(хүүхэд\): 300 CNY\n\n📅 Гарах өдрүүд:/);
   assert.equal(verifyTripReply({ reply: card, trips: [withFee], now: NOW }), card);
   // A trip with no fare to quote takes no "on top of the price above" line.
   const unpriced = trip({ ...withFee, id: "sargol-no-fare", adult_price: null, child_price: null });

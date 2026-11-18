@@ -7,6 +7,7 @@
 
 import { departureMatchesScope, filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, requestedDepartureScope, type RequestedDepartureScope, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
+import { INFANT_FARE_ASK } from "./infantFareAsk";
 import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import { buildFarePriceLines, displayAgeBand, onSaleDepartureText, shortDate, upcomingDepartures } from "./tripFareBlock";
 import { verifyTripReply } from "./tripReplyVerification";
@@ -184,6 +185,8 @@ export function formatPassengerPriceLines(input: {
   if (adult) lines.push(`• Том хүн: ${adult}`);
   if (child) lines.push(`• Хүүхэд${childAge}: ${child}`);
   if (infant) lines.push(`• Нярай${infantAge}: ${infant}`);
+  // No infant fare given: said, not left out (infantFareAsk.ts).
+  else if (adult || child) lines.push(`• Нярай${infantAge}: ${INFANT_FARE_ASK}`);
   return lines;
 }
 
@@ -752,6 +755,11 @@ export function buildPassengerTypePriceReply(
         : group.adult_price;
     return typeof value === "number";
   });
+  // "Нярайн үнэ хэд?" and the trip gives none: said plainly, with the button (infantFareAsk.ts).
+  if (target === "infant") {
+    const band = tripAgeBands(trip).infant;
+    return `✈️ ${trip.route_name}\n💰 Нярай${band ? ` /${band}/` : ""}: ${INFANT_FARE_ASK}`;
+  }
   if (claimsFare) {
     const possessive = possessiveLabel.charAt(0).toUpperCase() + possessiveLabel.slice(1);
     return `✈️ ${trip.route_name}\n💰 ${possessive} үнэ тодорхойгүй байгаа тул аяллын зөвлөх тодруулж хэлэх болно. Холбогдох дугаараа үлдээгээрэй 🙏`;
@@ -1282,6 +1290,7 @@ export function formatPriceLine(group: {
   if (adult) parts.push(`Том хүн: ${adult}`);
   if (child) parts.push(`Хүүхэд: ${child}`);
   if (infant) parts.push(`Нярай: ${infant}`);
+  else if (parts.length) parts.push(`Нярай: ${INFANT_FARE_ASK}`);
 
   return parts.join(" | ");
 }
@@ -1546,6 +1555,7 @@ export function formatSpecificDatePrice(
   if (adult) parts.push(`Том хүн: ${adult}`);
   if (child) parts.push(`Хүүхэд: ${child}`);
   if (infant) parts.push(`Нярай: ${infant}`);
+  else if (parts.length) parts.push(`Нярай: ${INFANT_FARE_ASK}`);
   const suffix = parts.length ? parts.join(" | ") : "Аяллын зөвлөхтэй холбогдоорой.";
   return `💰 ${label}: ${suffix}`;
 }
@@ -1680,7 +1690,7 @@ export function buildAmbiguousTripReply(
     const fare = [
       full || asksAdult || (!asksChild && !asksInfant) ? fareLine("adult", "Том хүн", adultText) : "",
       full || asksChild || (asksPrice && !asksAdult && !asksInfant) ? fareLine("child", "Хүүхэд", childText) : "",
-      full || asksInfant ? fareLine("infant", "Нярай", infantText) : "",
+      full || asksInfant ? fareLine("infant", "Нярай", infantText || (adultText || childText ? INFANT_FARE_ASK : null)) : "",
       ...((adultText || childText || infantText) ? listed.qualifications || [] : []),
     ].filter(Boolean).join(" · ");
     // Next departures: customers pick by date, and a "none that month" re-ask
@@ -1820,6 +1830,7 @@ export function buildSameTripPriceComparisonReply(
       if (adultStr) priceParts.push(`Том хүн: ${adultStr}`);
       if (childStr) priceParts.push(`Хүүхэд: ${childStr}`);
       if (infantStr) priceParts.push(`Нярай: ${infantStr}`);
+      else if (priceParts.length) priceParts.push(`Нярай: ${INFANT_FARE_ASK}`);
       const priceStr = priceParts.length ? priceParts.join(" | ") : "Үнийн мэдээлэл алга байна.";
       lines.push(`💰 ${entry.label}: ${priceStr}`);
     }

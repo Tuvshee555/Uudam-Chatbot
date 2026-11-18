@@ -19,6 +19,8 @@ export function isFrustratedHandoffRequest(text: string): boolean {
     /арчаагүй|archaag(?:ui|umda|u?mda)?|archaagumda/i,
     /уур\s+хүр|уурлуул|дургүй\s+хүр/i,
     /оператор|operator|хүнтэй\s+холбо|зөвлөхтэй\s+холбо/i,
+    // The «Нярайн үнэ тодруулах» button under a fare whose infant price is not given (infantFareAsk.ts).
+    /нярайн\s+үнэ\s+тодруул|nyarain\s+une\s+todruul/i,
     // "Хүнтэй ярьмаар байна", "huntei yarimaar", "ажилтантай ярья": wanting to TALK to a person.
     // "ярих" alone is not enough ("хүүхэдтэй ярих" is about a child); the person word must lead.
     /(?:хүнтэй|huntei|hvntei|ажилтантай|ajiltantai|зөвлөхтэй|zuvluhtei|zovlohtei|менежертэй|menejertei)\s+(?:ярь|яри|ярилц|уулз|yari|yarii|yarilts|uulz)/i,

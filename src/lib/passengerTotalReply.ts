@@ -2,6 +2,7 @@
  * "2 том хүн 1 хүүхэд 8 настай, нийт хэд болох вэ?" — the total price for a
  * party on one named trip. Split out of travelFastPaths.ts (size cap).
  */
+import { INFANT_FARE_ASK } from "./infantFareAsk";
 import { filterFutureDepartureDates } from "./travelDates";
 import {
   childFareTiers,
@@ -81,6 +82,7 @@ function totalForGroup(trip: TravelTrip, selected: Record<string, unknown> | nul
   const rows: string[] = [];
   let total = 0;
   let spread = 0;
+  let infantAsked = false;
   const add = (label: string, count: number, price: number | null | undefined, free: boolean) => {
     if (count <= 0) return;
     if (free) {
@@ -90,6 +92,12 @@ function totalForGroup(trip: TravelTrip, selected: Record<string, unknown> | nul
     // 0₮ means the poster never carried this fare — report it as unknown rather
     // than billing the passenger nothing.
     if (typeof price !== "number" || price <= 0) {
+      // An infant fare the trip does not give: said plainly, left out of the total (infantFareAsk.ts).
+      if (label === "Нярай") {
+        infantAsked = true;
+        rows.push(`• ${label} ${count}: ${INFANT_FARE_ASK}`);
+        return;
+      }
       rows.push(`• ${label} ${count}: үнэ тодорхойгүй`);
       return;
     }
@@ -121,9 +129,9 @@ function totalForGroup(trip: TravelTrip, selected: Record<string, unknown> | nul
   }
   add("Нярай", counts.infant, infantPrice, isDocumentedFreeFare(trip, "infant"));
   const money = (value: number) => formatMoney(value, currency) || `${value}₮`;
-  const totalText: string = spread > 0
+  const totalText: string = (spread > 0
     ? `${money(total)} – ${money(total + spread)} (хүүхдийн насаас хамаарна)`
-    : money(total);
+    : money(total)) + (infantAsked ? " (нярайн үнэ ороогүй)" : "");
   return { total, totalText, rows };
 }
 

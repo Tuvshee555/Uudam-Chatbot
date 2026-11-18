@@ -11,6 +11,7 @@
  *   - travelFastPathsPricing.ts  — date/price parsing + price formatting
  */
 
+import { hasInfantFareAsk, withInfantAskButton } from "./infantFareAsk";
 import { buildPassengerTotalReply } from "./passengerTotalReply";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
@@ -952,7 +953,8 @@ export function buildClarificationButtons(trips: TravelTrip[]): string[] {
 export { SMART_BUTTON_LABELS, SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
-  if (!replyText.includes(AMBIGUOUS_REPLY_MARKER)) return null;
+  // A fare whose infant price is not given carries the «Нярайн үнэ тодруулах» button (infantFareAsk.ts).
+  if (!replyText.includes(AMBIGUOUS_REPLY_MARKER)) return hasInfantFareAsk(replyText) ? withInfantAskButton(replyText) : null;
   // Same order as the numbered list on screen, so button "2." is the list's 2.
   const listed = trips.filter((trip) => replyText.includes(trip.route_name))
     .sort((a, b) => replyText.indexOf(a.route_name) - replyText.indexOf(b.route_name));

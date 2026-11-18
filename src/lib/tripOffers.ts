@@ -2,6 +2,7 @@ import { nearestOccurrenceOfYearless, parseTripDepartureDateText } from "./trave
 import { customerDate } from "./customerDate";
 import { labelWithoutAge, passengerLabelCondition } from "./passengerCondition";
 import type { TravelTrip } from "./travelTypes";
+import { INFANT_FARE_ASK } from "./infantFareAsk";
 
 export type PassengerKind = "adult" | "child" | "infant";
 export type PassengerSelection = {
@@ -708,7 +709,9 @@ export function renderTripOfferReply(result: TripOfferResult, options: { fareKin
     const rows = new Map<string, number>();
     for (const p of offer.passengerPrices) {
       const scope = [p.ageRange, p.condition].filter(Boolean).join(", ");
-      const key = `${labels[p.kind]}${scope ? ` (${scope})` : ""}\u0000${renderFare(p.fare, offer.currency)}`;
+      // An infant with no infant fare: said plainly (infantFareAsk.ts); the total leaves it out.
+      const fareText = p.kind === "infant" && p.fare.kind === "unknown" ? INFANT_FARE_ASK : renderFare(p.fare, offer.currency);
+      const key = `${labels[p.kind]}${scope ? ` (${scope})` : ""}\u0000${fareText}`;
       rows.set(key, (rows.get(key) || 0) + p.count);
     }
     for (const [key, count] of rows) {
@@ -724,7 +727,13 @@ export function renderTripOfferReply(result: TripOfferResult, options: { fareKin
     const scope = [f.ageRange, f.condition].filter(Boolean).join(", ");
     if (f.fare.kind !== "unknown") lines.push(`${labels[f.kind]}${scope ? ` (${scope})` : ""}: ${renderFare(f.fare, offer.currency)}`);
   }
-  if (!offer.passengerPrices.length && options.fareKinds?.length && !offer.fares.some((fare) => options.fareKinds!.includes(fare.kind) && fare.fare.kind !== "unknown")) return null;
+  // No infant fare: «Нярай: тодруулж мэдээлэл аваарай» beside the others, or alone when only the infant was asked.
+  const infantKnown = offer.fares.some((fare) => fare.kind === "infant" && fare.fare.kind !== "unknown");
+  const infantWanted = !options.fareKinds?.length || options.fareKinds.includes("infant");
+  const faresShown = lines.some((line) => /^(?:Том хүн|Хүүхэд)/u.test(line));
+  if (!offer.passengerPrices.length && !infantKnown && infantWanted && (faresShown || options.fareKinds?.includes("infant"))) lines.push(`${labels.infant}: ${INFANT_FARE_ASK}`);
+  const askedInfantOnly = Boolean(options.fareKinds?.length) && options.fareKinds!.every((kind) => kind === "infant");
+  if (!offer.passengerPrices.length && options.fareKinds?.length && !askedInfantOnly && !offer.fares.some((fare) => options.fareKinds!.includes(fare.kind) && fare.fare.kind !== "unknown")) return null;
   if (offer.total && options.showTotal !== false) lines.push(`Нийт: ${renderFare(offer.total, offer.currency)}`);
   lines.push(...offer.conditions);
   return unique(lines).join("\n");

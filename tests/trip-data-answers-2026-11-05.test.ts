@@ -68,8 +68,8 @@ test("the duration answer keeps the nights the trip states (C2)", () => {
 test("the shared fare card prints each hotel's own single supplement, and the checker accepts it (C4)", () => {
   const t = hotelTrip();
   const card = (buildFareSection(t, NOW) || []).join("\n");
-  assert.match(card, /Буудал: Vestarbay\+Orlin · Хөтөлбөргүй\n• Том хүн: 2,111,000₮\n• Ганцаараа явах \(өрөөндөө ганцаараа\): 611,000₮/);
-  assert.match(card, /Буудал: Orlin · Хөтөлбөргүй\n• Том хүн: 2,511,000₮\n• Ганцаараа явах \(өрөөндөө ганцаараа\): 911,000₮/);
+  assert.match(card, /Буудал: Vestarbay\+Orlin · Хөтөлбөргүй\n• Том хүн: 2,111,000₮\n• Нярай: тодруулж мэдээлэл аваарай\n• Ганцаараа явах \(өрөөндөө ганцаараа\): 611,000₮/);
+  assert.match(card, /Буудал: Orlin · Хөтөлбөргүй\n• Том хүн: 2,511,000₮\n• Нярай: тодруулж мэдээлэл аваарай\n• Ганцаараа явах \(өрөөндөө ганцаараа\): 911,000₮/);
   assert.equal(verifyTripReply({ reply: card, trips: [t], now: NOW }), card);
   // The supplement is not the trip's price: a "611,000₮ trip" search does not find it.
   assert.deepEqual(tripsAtPrice([t], 611_000, NOW), []);
@@ -334,7 +334,7 @@ test("dates at one fare stay one group when only the single supplement differs",
   // The trip card counts these lines to choose its full form.
   assert.equal(section.filter((line) => /^\s*•\s*Том хүн/.test(line)).length, 1);
   const card = section.join("\n");
-  assert.match(card, /💰 Үнэ:\n• Том хүн: 2,111,000₮\n• Хүүхэд: 1,511,000₮\n• Ганцаараа явах \(өрөөндөө ганцаараа\) — 12\/2: 611,000₮\n• Ганцаараа явах \(өрөөндөө ганцаараа\) — 12\/9: 622,000₮/);
+  assert.match(card, /💰 Үнэ:\n• Том хүн: 2,111,000₮\n• Хүүхэд: 1,511,000₮\n• Нярай: тодруулж мэдээлэл аваарай\n• Ганцаараа явах \(өрөөндөө ганцаараа\) — 12\/2: 611,000₮\n• Ганцаараа явах \(өрөөндөө ганцаараа\) — 12\/9: 622,000₮/);
   assert.equal(verifyTripReply({ reply: card, trips: [t], now: NOW }), card);
   // The named trip gets its full card with prices, not "Аль гарах өдрөөр аялах вэ?".
   const reply = buildStructuredTripReply("Норвел аялал", [t], NOW) || "";
@@ -347,7 +347,7 @@ test("dates at one fare stay one group when only the single supplement differs",
   assert.match(four, /— 12\/2, 12\/16: 611,000₮\n• Ганцаараа явах \(өрөөндөө ганцаараа\) — 12\/9, 12\/23: 622,000₮/);
   // One supplement for every date of the group is printed once, without dates.
   const same = (buildFareSection(supplementTrip([611_000, 611_000]), NOW) || []).join("\n");
-  assert.match(same, /• Хүүхэд: 1,511,000₮\n• Ганцаараа явах \(өрөөндөө ганцаараа\): 611,000₮\n\n📅/);
+  assert.match(same, /• Хүүхэд: 1,511,000₮\n• Нярай: тодруулж мэдээлэл аваарай\n• Ганцаараа явах \(өрөөндөө ганцаараа\): 611,000₮\n\n📅/);
   // A date with no supplement is not given another date's.
   const partial = (buildFareSection(supplementTrip([611_000, 0]), NOW) || []).join("\n");
   assert.match(partial, /— 12\/2: 611,000₮/);
