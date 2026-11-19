@@ -101,7 +101,8 @@ const ACTION_ITEM = {
 
 export const AGENT_TOOLS: ToolDefinition[] = [
   fn("search_trips", "Find trips in the catalogue (every status) by the admin's words: name, place, alias, Latin spelling. With date (YYYY-MM-DD or as typed) only trips that leave that day. Empty query + date = every trip leaving that day.",
-    { query: { type: "string" }, date: { type: "string" } }),
+    { query: { type: "string" }, date: { type: "string" },
+      status: { type: "string", enum: ["draft", "active", "paused", "sold_out", "archived", "cancelled"], description: "Only trips in this state: draft = «ноорог», paused = «түр зогссон», sold_out = «дүүрсэн», archived = «архив». With an empty query: every trip in that state." } }),
   fn("get_trip", "Full detail of one trip: version, departures with per-date state, price rows, age bands, program days with meals and photos, photo positions, poster photos, visibility, website link, partner flag. Call it before proposing any change to that trip.",
     { trip_id: { type: "string" } }, ["trip_id"]),
   fn("resolve_link", "Which trip a link names: uudamtravel.mn trip pages, uudamtravel.mn short links, poster PDF links. A foreign link names no trip (read it with read_web_page instead).",

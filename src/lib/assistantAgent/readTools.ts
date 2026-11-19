@@ -95,8 +95,37 @@ function summaryOf(trip: TravelTrip, now: Date, date?: string | null): TripSumma
 }
 
 /** Trips matching the admin's words (every status), narrowed to those leaving on `date` when one is given. */
-export function searchTrips(trips: TravelTrip[], input: { query?: string; date?: string }, now: Date): { results: TripSummaryView[]; note?: string } {
-  const query = withoutUrls(stripAnswerTags(String(input.query || ""))).trim();
+const STATUS_WORDS: Record<string, string> = { draft: "ноорог", active: "идэвхтэй", paused: "түр зогссон", sold_out: "дүүрсэн", archived: "архивласан", cancelled: "цуцалсан" };
+// «ноорогт байгаа тайландын аялал»: the word names a state, not a trip (2026-11-17 "no draft trips found" with 6 drafts).
+const DRAFT_WORDS = /(?:^|[^\p{L}])(?:ноорог\p{L}*|noorog\p{L}*|draft\p{L}*)/giu;
+
+/**
+ * The admin's editor of one trip («бүрэн засварлах линк»): /admin?edit=<id> opens it (pages/admin.tsx).
+ * Absolute on Vercel (its production address), relative elsewhere.
+ */
+export function adminEditorUrl(tripId: string): string {
+  const host = (process.env.ADMIN_SITE_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "")).replace(/\/+$/, "");
+  return `${host}/admin?edit=${encodeURIComponent(tripId)}#trips`;
+}
+
+export function searchTrips(trips: TravelTrip[], input: { query?: string; date?: string; status?: string }, now: Date): { results: TripSummaryView[]; note?: string } {
+  let rawQuery = withoutUrls(stripAnswerTags(String(input.query || ""))).trim();
+  let status = input.status && STATUS_WORDS[input.status] ? input.status : "";
+  const withoutDraft = rawQuery.replace(DRAFT_WORDS, " ");
+  if (withoutDraft !== rawQuery) {
+    status = status || "draft";
+    rawQuery = withoutDraft.replace(/(?:^|\s)(?:байгаа|bga|baigaa|бүх|buh|харуул\p{L}*|аял\p{L}*|ayl\p{L}*|ayal\p{L}*)(?=\s|$)/giu, " ").replace(/\s+/g, " ").trim();
+  }
+  if (status) {
+    // Only trips in that state; the rest of the words narrow them as an ordinary search would.
+    const inState = trips.filter((trip) => trip.status === status);
+    const found = rawQuery
+      ? searchTrips(inState, { query: rawQuery, date: input.date }, now).results
+      : inState.map((trip) => summaryOf(trip, now, null));
+    if (!found.length) return { results: [], note: `${rawQuery ? `«${rawQuery}» нэртэй ` : ""}${STATUS_WORDS[status]} төлөвтэй аялал олдсонгүй.` };
+    return { results: found.slice(0, MAX_SEARCH_RESULTS), ...(found.length > MAX_SEARCH_RESULTS ? { note: `${found.length} ${STATUS_WORDS[status]} аялал байна; эхний ${MAX_SEARCH_RESULTS}-г харууллаа.` } : {}) };
+  }
+  const query = rawQuery;
   const date = input.date ? isoDateOf(input.date, now) : null;
   if (input.date && !date) return { results: [], note: `«${input.date}» огноо уншигдсангүй (ж: 12/2, 12 сарын 2, 2026-12-02).` };
   let pool: TravelTrip[];
@@ -194,6 +223,8 @@ export function tripDetailView(trip: TravelTrip, now: Date, poster: PosterPhotoV
     version: trip.updated_at,
     status: trip.status,
     visible_on_site: isVisible(trip),
+    // «бүрэн засварлах линк»: the admin's own editor of this trip, for every status (prompt rule).
+    admin_editor_url: adminEditorUrl(trip.id),
     website: {
       published: trip.extra?.website_published === true,
       // An unpublished page answers "not found": its address is never handed out as a link (2026-11-11,

@@ -175,7 +175,7 @@ export function tripOptionHint(trip: TravelTrip, now: Date): string {
 }
 
 async function searchTool(state: TurnState, args: Args): Promise<string> {
-  const result = searchTrips(state.trips, { query: str(args.query), date: str(args.date) || undefined }, state.now);
+  const result = searchTrips(state.trips, { query: str(args.query), date: str(args.date) || undefined, status: str(args.status) || undefined }, state.now);
   for (const entry of result.results) state.seen.add(entry.trip_id);
   return json(result);
 }

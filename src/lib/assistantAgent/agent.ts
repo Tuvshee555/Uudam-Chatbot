@@ -150,16 +150,25 @@ function guardActions(rawActions: unknown, state: TurnState): { actions: Args[];
 function askOutcome(args: Args, state: TurnState): AgentOutcome {
   const question = str(args.question).slice(0, 1_200);
   if (!question) return { kind: "note", text: "Тодруулах зүйл байна, гэвч асуултаа гаргаж чадсангүй. Зааврыг дэлгэрэнгүй бичнэ үү.", reason: "reply" };
-  const options = (Array.isArray(args.options) ? args.options : []).slice(0, MAX_OPTIONS).flatMap((raw) => {
+  // A question about ONE trip (which child tier, which date): every option carries that trip, so a
+  // tap stays on it even when the option's words do not name it. On 2026-11-14 a tapped
+  // «12/9…12/28-ны хүүхэд ор эзлэхгүй…» named no trip and the next turn edited another Chongqing trip.
+  // Never on a "which trip?" question: its options are the trips.
+  const rawOptions = Array.isArray(args.options) ? args.options : [];
+  const asksWhichTrip = /аль\s+(?:\S+\s+){0,2}аял/iu.test(question)
+    || rawOptions.some((raw) => raw && typeof raw === "object" && str((raw as Args).trip_id));
+  const focusIds = state.chosen.size === 1 ? [...state.chosen] : state.fetched.size === 1 ? [...state.fetched.keys()] : [];
+  const focus = !asksWhichTrip && focusIds.length === 1 ? state.byId.get(focusIds[0]) : undefined;
+  const options = rawOptions.slice(0, MAX_OPTIONS).flatMap((raw) => {
     const option = raw && typeof raw === "object" ? (raw as Args) : {};
     const label = str(option.label).slice(0, 120);
-    const trip = state.byId.get(str(option.trip_id));
+    const trip = state.byId.get(str(option.trip_id)) ?? focus;
     const answer = cleanOptionAnswer(str(option.answer) || label).slice(0, 1_500);
     if (!label || !answer) return [];
     return [{
       label,
       answer: trip ? `${answer} ${agentTripTag(trip)}` : answer,
-      ...(trip ? { hint: tripOptionHint(trip, state.now) } : {}),
+      ...(trip && trip !== focus ? { hint: tripOptionHint(trip, state.now) } : {}),
     }];
   });
   const ask: AssistantAskPayload = {

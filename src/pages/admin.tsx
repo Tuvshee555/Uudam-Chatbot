@@ -38,6 +38,8 @@ const TAB_KEYS = new Set<string>(NAV_GROUPS.flatMap((group) => group.items.map((
 /** The section named in the URL (#leads), so a refresh or a shared link opens the same place. */
 function tabFromLocation(): TabKey | null {
   if (typeof window === "undefined") return null;
+  // «/admin?edit=<trip id>» (the assistant's «бүрэн засварлах линк») opens on the trips list.
+  if (new URLSearchParams(window.location.search).get("edit")) return "trips";
   const key = decodeURIComponent(window.location.hash.replace(/^#/, ""));
   return TAB_KEYS.has(key) ? (key as TabKey) : null;
 }
@@ -186,6 +188,19 @@ export default function AdminPage() {
     onSaved: () => loadTrips(searchRef.current, statusFilterRef.current, { showLoading: true }),
   });
   const { editingTrip, isNewTrip, openingTripId, beginCreateTrip, beginEditTrip, openTripEditorForDraft, closeTripModal } = tripEditor;
+  // «/admin?edit=<trip id>»: once signed in, that trip's full editor opens; the address loses the id
+  // so a refresh does not reopen it (the assistant hands this link out, assistantAgent/readTools.ts).
+  const editLinkOpened = useRef(false);
+  useEffect(() => {
+    if (authState !== "signed_in" || editLinkOpened.current || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const id = url.searchParams.get("edit");
+    if (!id) return;
+    editLinkOpened.current = true;
+    url.searchParams.delete("edit");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}#trips`);
+    void beginEditTrip(trips.find((trip) => trip.id === id) ?? ({ id, route_name: "" } as TravelTrip));
+  }, [authState, beginEditTrip, trips]);
   /** Every trip, unfiltered and unpaginated — for the full-catalogue export.
    *  Deliberately ignores search/status so the downloaded file is the whole
    *  catalogue regardless of what the screen is filtered to. */
