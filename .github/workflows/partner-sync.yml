@@ -1,8 +1,8 @@
 name: Partner trip sync
 
+# Stopped 2026-11-19: no partner tour is copied any more (src/lib/partnerSync/run.ts TOURS is empty;
+# the owner keeps the Hainan trip by hand). Manual dispatch only, for when a tour is added back.
 on:
-  schedule:
-    - cron: '7,37 * * * *'
   workflow_dispatch:
 
 permissions: {}

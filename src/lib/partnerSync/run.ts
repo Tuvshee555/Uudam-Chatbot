@@ -6,11 +6,17 @@ import { isDeepStrictEqual } from "node:util";
 
 export type TourConfig = { slug: string; posterId: string; tripId: string };
 
-export const TOURS: TourConfig[] = [{
-  slug: "hainan-aylal",
-  posterId: "poster-5bf8e4a6-55cc-4074-bcbf-669527e2530c",
-  tripId: "trip-poster-5bf8e4a6-55cc-4074-bcbf-669527e2530c",
-}];
+/**
+ * Partner tours copied on a schedule. EMPTY since 2026-11-19: the owner stopped the Global Travel
+ * copy of the Hainan trip and keeps it by hand ("leave the data how it is, from now on manually").
+ * The trip's `extra.partner_sync` was renamed `partner_sync_stopped` (history kept), so it is an
+ * ordinary trip again: editable in the assistant and the editor, its seats from its own website rows.
+ * To copy a partner tour again, add its entry back here and restore `extra.partner_sync` on the trip.
+ * The Hainan entry was:
+ *   { slug: "hainan-aylal", posterId: "poster-5bf8e4a6-55cc-4074-bcbf-669527e2530c",
+ *     tripId: "trip-poster-5bf8e4a6-55cc-4074-bcbf-669527e2530c" }
+ */
+export const TOURS: TourConfig[] = [];
 
 export type SyncResult = {
   slug: string;
