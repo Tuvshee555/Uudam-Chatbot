@@ -332,6 +332,17 @@ export function tripIdentityName(routeName: string): string {
   return out;
 }
 
+/**
+ * The title with the digits of its staff-note segments (the ones tripIdentityName drops) replaced by "x":
+ * "… нислэгтэй - 12 сарын 15, 20, 25" → "… нислэгтэй - xx сарын xx, xx, xx". Ordinary titles come back unchanged.
+ */
+export function tripTitleWithMaskedNote(routeName: string): string {
+  const name = String(routeName || "");
+  const pieces = name.split(/(\s+[-–—]\s+)/u);
+  if (pieces.length < 3) return name;
+  return pieces.map((piece, index) => index >= 2 && index % 2 === 0 && TITLE_NOTE_SEGMENT.test(piece) ? piece.replace(/\d/g, "x") : piece).join("");
+}
+
 export function getTripNameHaystack(trip: TravelTrip): string {
   return normText([tripIdentityName(trip.route_name), ...getAliases(trip)].join(" "));
 }
@@ -439,6 +450,9 @@ function extractQueryMonthDays(text: string): MonthDay[] {
   };
 
   const scope = requestedDepartureScope(text);
+  // "1 сарын 2-10-ны хооронд": a span, not its first day. Read as 1/2 it singled out the one trip leaving that day
+  // out of every trip leaving in the span. Two dates typed side by side ("10/28 11/3") still name departures.
+  if (scope?.kind === "range" && /хооронд|хүртэл|hoorond|hurtel|дотор|dotor|сарын\s*\d{1,2}\s*[-–]\s*\d{1,2}(?!\d)/iu.test(text)) return [];
   if (scope?.kind === "dates" && scope.dates.length > 1) {
     for (const date of scope.dates) push(Number(date.slice(5, 7)), Number(date.slice(8, 10)));
   }
@@ -475,10 +489,12 @@ function textHasMonthDay(text: string, date: MonthDay): boolean {
     `${month}/${dayPadded}`,
     `${monthPadded}/${dayPadded}`,
   ];
-  return variants.some((variant) => normalized.includes(normText(variant)));
+  // Whole numbers only: "1/10" (normalised "1 10") sat inside "2026 11 10", so a trip leaving 11/10 got the
+  // date bonus for a customer asking about 1/10 and outranked every trip of the destination (live 2026-11-17).
+  return variants.some((variant) => new RegExp(`(?<!\\d)${normText(variant).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\d)`).test(normalized));
 }
 
-function tripHasMonthDay(trip: TravelTrip, date: MonthDay): boolean {
+export function tripHasMonthDay(trip: TravelTrip, date: MonthDay): boolean {
   const dateTexts = [
     ...trip.departure_dates,
     ...getStructuredPriceGroups(trip).flatMap(getGroupDateTexts),
@@ -838,6 +854,18 @@ function multiPlaceScore(named: string[], trip: TravelTrip): number {
  * here knows any destination.
  */
 function splitGluedWords(words: string[], trips: TravelTrip[]): string[] {
+  // Two adjacent words of one name typed as one: "Натранг" for "НА ТРАНГ" (live 2026-11-15) — the customer picked
+  // the trip the bot had just suggested and got silence. The short half ("на") is no keyword of its own.
+  const joined: string[] = [];
+  for (const trip of trips) {
+    const raw = normText(tripIdentityName(trip.route_name)).split(/\s+/).filter(Boolean);
+    for (let index = 0; index + 1 < raw.length; index += 1) {
+      const key = raw[index] + raw[index + 1];
+      if (key.length < 6 || !/^\p{L}+$/u.test(key)) continue;
+      if (words.some((word) => word.startsWith(key) && word.length - key.length <= 4)) joined.push(...keywordTokens(`${raw[index]} ${raw[index + 1]}`));
+    }
+  }
+  if (joined.length) words = unique([...words, ...joined]);
   if (!words.some((word) => word.length >= 8)) return words;
   const vocabulary = unique(trips.flatMap((trip) => keywordTokens(trip.route_name)));
   const known = new Set(vocabulary);
@@ -860,9 +888,37 @@ function splitGluedWords(words: string[], trips: TravelTrip[]): string[] {
   return extra.length > 0 ? unique([...words, ...extra]) : words;
 }
 
+/**
+ * One-word aliases that are a word of ANOTHER trip's name: a destination several trips share, not a nickname
+ * of this one. Staff gave one full Hainan trip the aliases "Hainan" and "Sanya"; a full alias hit is worth 80,
+ * so every "hainan …" message named that one trip, far ahead of the open trips with "Хайнан" in their names,
+ * and customers were told it was full or inactive (live 2026-11-11..17). Such an alias keeps its weight unless
+ * another candidate of the same search matched that word by its own name ("Sanya shuud nisleg" leaves one direct
+ * Sanya trip, which keeps its lead).
+ */
+function sharedDestinationAliases(trips: TravelTrip[]): Map<string, Set<string>> {
+  const nameWords = trips.map((trip) => {
+    const name = tripIdentityName(trip.route_name);
+    return { id: trip.id, words: new Set([...keywordTokens(name), ...phoneticKeywordTokens(name)]) };
+  });
+  const shared = new Map<string, Set<string>>();
+  for (const trip of trips) {
+    for (const alias of getAliases(trip)) {
+      const tokens = unique(keywordTokens(alias));
+      if (tokens.length !== 1) continue;
+      const forms = [tokens[0], ...unique(phoneticKeywordTokens(alias))];
+      if (!nameWords.some((other) => other.id !== trip.id && forms.some((form) => other.words.has(form)))) continue;
+      if (!shared.has(trip.id)) shared.set(trip.id, new Set());
+      shared.get(trip.id)!.add(alias);
+    }
+  }
+  return shared;
+}
+
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   // The understanding step already decided this message names no trip.
   if (isNoTripText(text)) return [];
+  const sharedAliases = sharedDestinationAliases(trips);
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
   const vocabulary = catalogVocabulary(trips);
@@ -881,6 +937,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
   const requestedMonthDays = extractQueryMonthDays(text);
 
   const matches: TripMatch[] = [];
+  const sharedHits = new Map<TripMatch, string[]>();
   for (const trip of trips) {
     if (!canMatchTripStatus(trip, options)) continue;
     if (wantsCombo && !tripMatchesLandFlightComboIntent(trip)) continue;
@@ -919,24 +976,31 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     // its own: "уулын аялал" (a mountain trip) is inside "<city> - <peak> уулын аялал" and got that
     // one trip's card.
     const distinctQuery = queryWords.some((word) => word.length >= 3 && !DESCRIPTIVE_NOUN_RE.test(word));
+    let sharedHit: string[] | null = null;
     for (const alias of aliases) {
       const aliasNorm = normText(alias);
+      const before = aliasHit;
+      let full = false;
       // An alias counts as a WORD of the message (aliasMatch.ts): inside a longer word it named
       // trips by accident ("санал" held a four-letter alias and a thanks got a trip list).
       if (aliasOccursInQuery(alias, query, queryPhonetic) || (distinctQuery && aliasNorm.includes(query))) {
         aliasHit = 1;
-        break;
+        full = true;
+      } else {
+        const aliasPhonetic = phoneticLatinText(alias);
+        if (aliasPhonetic && queryPhonetic && distinctQuery && aliasPhonetic.includes(queryPhonetic)) {
+          aliasHit = 1;
+          full = true;
+        } else if (distinctQuery && hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords)) {
+          const aliasTokenCount = Math.max(1, unique(keywordTokens(alias)).length);
+          const looseStrength = aliasTokenCount <= 2 ? 1 : Math.min(1, 2 / aliasTokenCount);
+          aliasHit = Math.max(aliasHit, looseStrength);
+        }
       }
-      const aliasPhonetic = phoneticLatinText(alias);
-      if (aliasPhonetic && queryPhonetic && distinctQuery && aliasPhonetic.includes(queryPhonetic)) {
-        aliasHit = 1;
-        break;
-      }
-      if (distinctQuery && hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords)) {
-        const aliasTokenCount = Math.max(1, unique(keywordTokens(alias)).length);
-        const looseStrength = aliasTokenCount <= 2 ? 1 : Math.min(1, 2 / aliasTokenCount);
-        aliasHit = Math.max(aliasHit, looseStrength);
-      }
+      // The hit came from a destination word other trips' names hold (sharedDestinationAliases).
+      if (aliasHit > before && sharedAliases.get(trip.id)?.has(alias)) sharedHit = unique([...keywordTokens(alias), ...phoneticKeywordTokens(alias)]);
+      else if (aliasHit > before) sharedHit = null;
+      if (full) break;
     }
 
     const matchedWords = unique([
@@ -1006,12 +1070,13 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
       examFeeIntentScore(text, trip) -
       queryTripTokenCoveragePenalty(queryWords, trip);
 
-    matches.push({
-      trip,
-      matchedWords,
-      keywordCoverage: coverage,
-      score,
-    });
+    const match = { trip, matchedWords, keywordCoverage: coverage, score };
+    if (sharedHit) sharedHits.set(match, sharedHit);
+    matches.push(match);
+  }
+  // A shared-destination alias gives no lead over another candidate that the same word matched by its own name.
+  for (const [match, forms] of sharedHits) {
+    if (matches.some((other) => other !== match && other.matchedWords.some((word) => forms.includes(word)))) match.score -= 72;
   }
 
   return matches.sort((a, b) => {

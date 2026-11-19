@@ -372,6 +372,10 @@ export function buildTripAnswerPlan(input: {
   const incomplete = new Map<TripTopic, string[]>();
   const missingFact = (topic: TripTopic, field: string) => incomplete.set(topic, [...(incomplete.get(topic) || []), `${topic}.${field}`]);
   const asksSeats = hasSeatsIntent(intentText);
+  // "suudal bga yu" on a date marked open with no seat count: the date is open, the seats are not known. Staff found
+  // such dates full the next day (live 2026-11-12/16), so the count is left to the consultant instead of implied.
+  const unknownSeatsNote = (availability: { seatsLeft: number | null; low?: boolean }) =>
+    asksSeats && availability.seatsLeft === null ? " Үлдсэн суудлын тоог аяллын зөвлөх баталгаажуулна." : "";
   let result: TripOfferResult | null = null;
   let needsSelection = false;
   // This turn asked for a date or a window the trip does not depart in. A departed or sold-out
@@ -455,7 +459,7 @@ export function buildTripAnswerPlan(input: {
         sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
       }
       if (request.topics.includes("availability")) {
-        if (result.offer.availability.status === "open") sections.availability = `${mnDate(result.offer.date)}: ${openDateWording(result.offer.availability)}.`;
+        if (result.offer.availability.status === "open") sections.availability = `${mnDate(result.offer.date)}: ${openDateWording(result.offer.availability)}.${unknownSeatsNote(result.offer.availability)}`;
         else if (asksSeats) missingFact("availability", "seats");
         else sections.availability = `${mnDate(result.offer.date)}: гарах хуваарьтай.`;
       }
@@ -463,7 +467,7 @@ export function buildTripAnswerPlan(input: {
       if (request.topics.includes("availability") && result.status === "missing" && result.reason === "fare_missing" && offers.every((offer) => offer.source === "base")) {
         const date = selection.date || (dates.length === 1 ? dates[0] : null);
         const availability = date ? offers[0]?.availability.find((row) => row.date === date) : null;
-        if (availability?.status === "open") sections.availability = `${mnDate(date ?? "")}: ${openDateWording(availability)}.`;
+        if (availability?.status === "open") sections.availability = `${mnDate(date ?? "")}: ${openDateWording(availability)}.${unknownSeatsNote(availability)}`;
         else if (availability?.status === "unknown") {
           if (asksSeats) missingFact("availability", "seats");
           else sections.availability = `${mnDate(date ?? "")}: гарах хуваарьтай.`;

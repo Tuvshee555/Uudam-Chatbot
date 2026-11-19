@@ -180,6 +180,15 @@ export function classifyThread(messages: ThreadMessage[], context: ClassifyConte
     if (text) earlierPageTexts.add(text);
     classified.push({ message, at, origin });
   }
+  // Meta's notice can come AFTER the part it announces: on 2026-11-10/12/14 a returning customer's
+  // personalised welcome greeting and the "replied to your automated welcome message" notice shared
+  // one second, the greeting sorted first, and it read as a consultant — 5 customers were muted and
+  // never answered. A `source:web` message just before one of Meta's notices belongs to its burst.
+  const noticeTimes = classified.filter(({ message, origin }) => origin === "automation"
+    && message.from?.id === context.pageId && META_NOTICE.test(String(message.message ?? ""))).map(({ at }) => at);
+  for (const entry of classified) {
+    if (entry.origin === "staff_web" && noticeTimes.some((at) => at - entry.at >= 0 && at - entry.at < AUTOMATION_BURST_MS)) entry.origin = "automation";
+  }
   return classified;
 }
 

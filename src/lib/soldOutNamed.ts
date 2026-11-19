@@ -28,6 +28,11 @@ function unavailableTripSharingTheWords(text: string, chosen: TravelTrip, trips:
   if (!unavailable) return null;
   // A date or a number is not a name (see buildSoldOutPrecedenceReply).
   if (!unavailable.matchedWords.some((word) => /\p{L}{4,}/u.test(word))) return null;
+  // A nickname two trips share, not the destination many open trips share: "Hi hainan aylal 1/10 naas" (live
+  // 2026-11-17) matched seven open trips by "hainan", and the customer was told about the one full trip first.
+  const openSharing = matches.filter((match) => match.trip.status === "active"
+    && match.matchedWords.some((word) => unavailable.matchedWords.includes(word))).length;
+  if (openSharing > 2) return null;
   return chosenScore > unavailable.score + CLEAR_LEAD ? null : unavailable.trip;
 }
 

@@ -197,6 +197,25 @@ test("staff takeover journeys on Facebook", async (context) => {
       assert.equal(harness.pauseState("greeted"), null, "and not paused for three days");
     });
 
+    // Live 2026-11-10/12/14 (5 customers): a returning customer taps the ad again; Meta re-sends its
+    // personalised welcome greeting in the SAME second as its "replied to your automated welcome
+    // message" notice, and the greeting sorts first. Only an automation BEFORE a message opened the
+    // burst window, so the greeting read as a consultant on a computer and muted the bot; the
+    // customers' questions were never answered.
+    await context.test("15b. a returning customer's welcome greeting, in the same second as Meta's notice, does not silence the bot", async () => {
+      harness.thread("regreeted", { messages: [
+        { from: "customer", text: "Сайн уу", agoMs: 9 * 86_400_000 },
+        { from: "page", id: "m_regreet", source: "web", text: "Сайн байна уу, Бат! Манай хуудаст тавтай морилно уу! 😊", agoMs: 4_000 },
+        { from: "page", id: "m_regreet_notice", source: "web", text: "Бат Дорж replied to your automated welcome message. To change or remove it, go to settings.", agoMs: 4_000 },
+        { from: "page", id: "m_regreet_call", source: "web", text: "Call now for faster service.", agoMs: 3_000 },
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 0 },
+      ] });
+      const first = await fb("regreeted", "Норвел хотын аялал үнэ", one);
+      assert.equal(first.sends.length, 1, "the returning customer is answered");
+      assert.match(answeredPrice(first), /1,791,000₮/);
+      assert.equal(harness.pauseState("regreeted"), null, "and not handed to staff");
+    });
+
     await context.test("16. a consultant's photo from the phone right after a bot reply silences the bot", async () => {
       const botMid = await opened("photo");
       // The consultant's photo (no text) comes 60 s after the bot's reply was stored.

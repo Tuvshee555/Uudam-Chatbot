@@ -1156,7 +1156,10 @@ export function parseLooseMonthDays(text: string): MonthDay[] {
   for (const match of text.matchAll(/(?:^|[^\d])(\d{1,2})\/(\d{1,2})(?!\d)/g)) {
     results.push({ month: parseInt(match[1], 10), day: parseInt(match[2], 10) });
   }
-  for (const match of text.matchAll(/(\d{1,2})\s*[^\d\s,./-]{2,12}\s*(\d{1,2})/g)) {
+  // "12 сарын 25", "1 sariin 9": only a month word joins the two numbers. Any word used to — "10 хүн 1 сард"
+  // (ten people, in January) was read as the 1st of October and answered "10/1 — Захиалга авах боломжгүй"
+  // (live 2026-11-14).
+  for (const match of text.matchAll(/(\d{1,2})\s*(?:-?\s*р\s*)?(?:сарын|сарийн|сар|sariin|sarin|sar)\s*(\d{1,2})(?!\d)/giu)) {
     results.push({ month: parseInt(match[1], 10), day: parseInt(match[2], 10) });
   }
   return results;

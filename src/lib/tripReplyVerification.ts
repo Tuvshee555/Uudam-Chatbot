@@ -1,7 +1,7 @@
 import type { TravelTrip } from "./travelTypes";
 import type { TripSelection } from "./tripRequest";
 import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply, replySectionTrips, withoutOwnTripWords } from "./reply";
-import { tripDurationDays, tripIdentityName } from "./travelFastPathsSearch";
+import { tripDurationDays, tripTitleWithMaskedNote } from "./travelFastPathsSearch";
 import { tripTransport, isTripOfferPrice } from "./tripFacts";
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type PassengerKind } from "./tripOffers";
 import { parseDepartureDateText } from "./travelDates";
@@ -116,11 +116,22 @@ function withoutTripNameDigits(text: string, trips: TravelTrip[]): string {
   let out = text;
   for (const trip of trips) {
     const name = trip.route_name || "";
-    const identity = tripIdentityName(name);
-    if (identity === name || !/\d/.test(name.slice(identity.length))) continue;
-    out = out.split(name).join(identity + name.slice(identity.length).replace(/\d/g, "x"));
+    const masked = tripTitleWithMaskedNote(name);
+    if (masked !== name) out = out.split(name).join(masked);
   }
   return out;
+}
+
+/**
+ * The trips as the masked reply names them. The price and date guards find each section by the trip's title;
+ * given the original titles they no longer found a masked one, read its fares under the trip listed before it,
+ * and refused the whole destination list (live 2026-11-16..18: "Хайнаны аялал бна уу" got silence).
+ */
+function withMaskedTitles(trips: TravelTrip[]): TravelTrip[] {
+  return trips.map((trip) => {
+    const masked = tripTitleWithMaskedNote(trip.route_name || "");
+    return masked === trip.route_name ? trip : { ...trip, route_name: masked };
+  });
 }
 
 export function verifyTripReply(input: {
@@ -135,9 +146,10 @@ export function verifyTripReply(input: {
   // A trip's own name is its data: digits in it ("… - 2026-12-15-с өмнөх …", live 2026-11-11) are not a quoted
   // price or a departure. They are masked for the price and date guards only; section detection below keeps the name.
   const guarded = withoutTripNameDigits(checked, trips);
-  const priceChecked = guardUnverifiedPrices(guarded, trips, now);
+  const maskedTrips = withMaskedTitles(trips);
+  const priceChecked = guardUnverifiedPrices(guarded, maskedTrips, now);
   if (isReferReply(priceChecked)) return "REFER";
-  const datesChecked = guardUnverifiedDates(guarded, trips, undefined, now);
+  const datesChecked = guardUnverifiedDates(guarded, maskedTrips, undefined, now);
   if (isReferReply(datesChecked)) return "REFER";
   if (isReferReply(guardInventedBookingTerms(checked, "", trips))) return "REFER";
   let active = trips;

@@ -4,6 +4,29 @@ Open customer-experience failures confirmed by conversation replay. Each one sta
 the test suite where possible, until a journey proves it fixed. Evidence: `docs/chatbot-forensic-audit.md`,
 `docs/chatbot-conversation-quality.md`.
 
+## Review of every real chat, 2026-11-08 .. 11-18 (192 conversations, 890 customer messages)
+Five reviewers read every thread; each failure on current code was replayed on the live catalogue (mocked model).
+**Fixed (journeys in `tests/review-1118-journeys.test.ts`, `staff-takeover-journeys` 15b):**
+- Meta's welcome greeting in the same second as its "replied to your automated welcome message" notice muted the
+  bot for returning customers (5 live; some never answered).
+- A destination list was refused by the bot's own fact checker whenever it held a trip whose title carries a dated
+  note: "Хайнаны аялал бна уу", a bare "Хайнань", "… үнэ хэд вэ 12.25 ноос" got silence and a lead.
+- "12/30 ямар үнэтэй бна" read as a price complaint ("Төсөв хэд вэ?").
+- "10 хүн 1 сард" read as 10/1; "1-р сарын 5- наас хойш", "1/10 naas", "12-20ноос", "12.1с" read as one day.
+- A full trip carrying a destination alias ("Hainan") named by every "hainan …" message, "1/10" matched inside
+  "…-11-10", and full dates next to copied-year cancelled rows read as "идэвхгүй".
+- "suudal bga yu" (Latin) was no seats question; an open date with no seat count now says the consultant confirms it.
+- "Натранг" for "НА ТРАНГ"; "16нд" under the bot's own date question.
+**Still open:**
+- Staff-muted chats (owner rule 2026-10-31: until «Ботод буцаах»): 357 of 890 customer messages were muted; staff
+  answer fast (median 2 min) but 18 chats got no reply at all, several 2–10 days after the last staff message.
+- Two office addresses: the bot's contact reply and Meta's saved reply give different ones (data, owner to decide).
+- "бээжингээр дамжаад" (via) does not reach the "ДАМЖИН НИСЛЭГТЭЙ" trip; a party size after a date question repeats
+  the question; the follow-up asks the party before a trip is chosen; "Каталогийг одоо шинэчилж байна" wording; an
+  English-speaking partner is told "Зөвхөн монголоор"; a same-day departure is offered in the evening.
+- Seat states are not kept by staff: dates staff call full are still marked open in the data.
+- The date guard does not read "📅 2/25"-style lines (a model reply could print an invented short date).
+
 ## P0-1 — OpenAI balance exhausted — RESTORED; safeguards on branch `fix/ai-billing-safeguards`
 From about 07:43 UTC on 2026-10-30, every OpenAI call failed with 429 `credits_exhausted` (production logs
 tagged f441aaf). Deterministic paths still answered; every AI-dependent turn ended in silence plus a staff

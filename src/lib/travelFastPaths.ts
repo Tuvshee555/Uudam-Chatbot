@@ -56,6 +56,7 @@ import {
   getPriceValuesFromGroup,
   isStructuredTripQuestion,
   tripIsDirectFlight,
+  tripHasMonthDay,
   tripIsLandFlightCombo,
   unique,
   withFutureDepartureDates,
@@ -312,8 +313,10 @@ export function hasPriceObjectionIntent(text: string): boolean {
   ) {
     return true;
   }
-  // "Нярай хүүхэд үнэтэй юу?" and "ямар үнэтэй вэ?" are real price questions.
-  if (/[?？]/.test(text) || /\b(хэд|hed|ямар|yamar)\b/i.test(normalized) || /юу|уу|үү|вэ|ve/i.test(normalized)) {
+  // "Нярай хүүхэд үнэтэй юу?" and "ямар үнэтэй вэ?" are real price questions. `\b` is an ASCII boundary that
+  // never fires beside a Cyrillic letter, so "12/30 ямар үнэтэй бна" (no "?", live 2026-11-17) was read as a
+  // complaint and answered "Төсөв хэд вэ?"; the boundaries are letter-aware.
+  if (/[?？]/.test(text) || /(?<!\p{L})(хэд|хэдэн|hed|heden|ямар|yamar|ymar)(?!\p{L})/iu.test(normalized) || /юу|уу|үү|вэ|ve/i.test(normalized)) {
     return false;
   }
   return (
@@ -437,7 +440,8 @@ const SEATS_KEYWORDS_MN = [
   "бий эсэх",
   "хүрэлцэх",
 ];
-const SEATS_KEYWORDS_EN = ["seat", "seats", "available", "left", "space", "vacancy"];
+// "suudal bga yu" (live 2026-11-12, 11-15): the Latin spelling of "суудал" was no seats question.
+const SEATS_KEYWORDS_EN = ["seat", "seats", "available", "left", "space", "vacancy", "suudal", "suudl", "sudal"];
 
 export function hasSeatsIntent(text: string): boolean {
   const normalized = normText(text);
@@ -1532,6 +1536,16 @@ export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): 
   const namedFully = fullName.length >= 8 && normText(text).includes(fullName);
   const clearlyBeatsActive = !topActive || topUnavailable.score > topActive.score + 5;
   if (!namedFully && !clearlyBeatsActive) return null;
+  // A score lead from an alias is not the customer naming that trip: "Hi hainan aylal 1/10 naas" (live 2026-11-17)
+  // matched an open trip by the same one word, but a full trip carrying "Hainan" as an alias scored far ahead, and the
+  // customer was told about that full trip instead of getting the destination's open trips. More specific means a
+  // word the open trips do not match, or an asked day only the full trip leaves on ("10 сарын 8-ны <trip>").
+  const activeWords = new Set(topActive?.matchedWords ?? []);
+  const askedDays = extractStructuredDates(text);
+  const dayOnlyThere = askedDays.some((day) => tripHasMonthDay(topUnavailable.trip, day))
+    && !(topActive && askedDays.some((day) => tripHasMonthDay(topActive.trip, day)));
+  if (!namedFully && topActive && !dayOnlyThere
+    && !topUnavailable.matchedWords.some((word) => /\p{L}{4,}/u.test(word) && !activeWords.has(word))) return null;
   return buildUnavailableTripReply(
     text,
     trips,

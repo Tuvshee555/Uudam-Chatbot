@@ -27,9 +27,13 @@ export function withBookableDepartureDates(trip: TravelTrip, now = new Date()): 
   });
   const future = rows.filter((row) => row.date >= now.toISOString().slice(0, 10));
   const allClosed = trip.status === "active" && future.length > 0 && future.every(departureIsClosed);
+  // Cancelled rows do not decide between full and paused: copied-year rows (a weekly trip's September dates
+  // repeated into later years, all CANCELLED) next to departures that are all SOLD_OUT read as "paused", and the
+  // customer was told the trip was inactive while staff said it was full (live 2026-11-17).
+  const held = future.filter((row) => row.status !== "CANCELLED");
   const status = !allClosed ? trip.status
-    : future.every((row) => row.status === "SOLD_OUT" || row.seatsLeft === 0) ? "sold_out"
-      : future.every((row) => row.status === "CANCELLED") ? "cancelled" : "paused";
+    : !held.length ? "cancelled"
+      : held.every((row) => row.status === "SOLD_OUT" || row.seatsLeft === 0) ? "sold_out" : "paused";
   return { ...trip, departure_dates: dates,
     status };
 }

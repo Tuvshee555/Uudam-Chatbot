@@ -408,9 +408,16 @@ const FROM_DATE_ONWARD_DAYS = 120;
  * (2026-10-26), and "сарын 1-ээс хойш" was taken as that single day.
  */
 function fromDateOnward(text: string, now: Date): RequestedDepartureScope | null {
-  const match = /(?<![\d.])(\d{1,2})\s*(?:[./]\s*(\d{1,2})|сарын\s*(\d{1,2}))\s*-?\s*(?:ны|ний|ны\s*өдр)?\s*-?\s*(?:аас|ээс|оос|өөс|наас|нээс|с|aas|ees|oos|s)\s+(?:хойш\p{L}*|эхл\p{L}*|эхэл\p{L}*|hoish\p{L}*|ehl\p{L}*|ehel\p{L}*)/iu.exec(text.normalize("NFKC"));
+  const normalized = text.normalize("NFKC");
+  // "1-р сарын 5- наас хойш" (live 2026-11-17) has "-р" after the month and a space after the hyphen; "12-20ноос"
+  // writes the month and day with a hyphen; "1/10 naas" (live 2026-11-17) has no "хойш" at all. Each was read as
+  // that single day and answered "no trip on 1/5".
+  const match = /(?<![\d.])(\d{1,2})\s*(?:[./]\s*(\d{1,2})|-(\d{1,2})(?=\s*-?\s*(?:ноос|нөөс|наас|нээс|аас|ээс|оос|өөс|naas|nees|noos|aas|ees|oos)(?!\p{L}))|(?:-?\s*р)?\s*сарын\s*(\d{1,2}))\s*-?\s*(?:ны|ний|ны\s*өдр)?\s*-?\s*(?:аас|ээс|оос|өөс|наас|нээс|ноос|нөөс|с|aas|ees|oos|naas|nees|noos|s)(?!\p{L})(\s+(?:хойш\p{L}*|эхл\p{L}*|эхэл\p{L}*|hoish\p{L}*|hoysh\p{L}*|ehl\p{L}*|ehel\p{L}*))?/iu.exec(normalized);
   if (!match) return null;
-  const start = parseDepartureDateText(`${Number(match[1])} сарын ${Number(match[2] || match[3])}`, now)[0];
+  // Without "хойш"/"эхлэх" the suffix alone is "from" only when no end follows: "11/28-аас 12/15 хүртэл" is a
+  // range and "12/15-аас өмнө" is before.
+  if (!match[5] && /^\s*(?:\d|хүртэл|hurtel|hvrtel|дотор|dotor|хооронд|hoorond|өмнө|omno|umnu)/iu.test(normalized.slice(match.index + match[0].length))) return null;
+  const start = parseDepartureDateText(`${Number(match[1])} сарын ${Number(match[2] || match[3] || match[4])}`, now)[0];
   if (!start) return null;
   const [year, month, day] = start.split("-").map(Number);
   const end = new Date(Date.UTC(year, month - 1, day + FROM_DATE_ONWARD_DAYS)).toISOString().slice(0, 10);

@@ -38,3 +38,26 @@ export function optionChosenByNumber(history: Array<{ role: string; text: string
   if (!last) return null;
   return selectionOptions(last.text)[Number(picked[1]) - 1] ?? null;
 }
+
+const DATE_QUESTION = /Аль\s+гарах\s+өдрөөр\s+аялах\s+вэ\?/u;
+const DAY_ONLY = /^\s*(\d{1,2})\s*-?\s*(нд|ны|ний|nd|nii|ni|d)?\s*(?:өдөр|udur|гарна|garna)?\s*[.!?]?\s*$/iu;
+
+/**
+ * "16нд" answering "Аль гарах өдрөөр аялах вэ? • 11 сарын 18 • 12 сарын 2 • 12 сарын 16": the listed departure on
+ * that day. It used to get the same date question again (live 2026-11-12), because a day without a month is
+ * no date. A bare number is a position (optionChosenByNumber) unless no option has that position.
+ */
+export function dayOfOfferedDate(history: Array<{ role: string; text: string }>, text: string): string | null {
+  const picked = DAY_ONLY.exec(text);
+  if (!picked) return null;
+  const last = history.findLast((message) => message.role === "assistant");
+  if (!last || !DATE_QUESTION.test(last.text)) return null;
+  const options = selectionOptions(last.text);
+  const day = Number(picked[1]);
+  if (!picked[2] && day <= options.length) return null;
+  const onDay = options.filter((option) => {
+    const written = /(\d{1,2})\s*сарын\s*(\d{1,2})/u.exec(option) ?? /(\d{1,2})[./](\d{1,2})/u.exec(option);
+    return written !== null && Number(written[2]) === day;
+  });
+  return onDay.length === 1 ? onDay[0] : null;
+}
