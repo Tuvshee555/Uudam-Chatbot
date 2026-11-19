@@ -76,7 +76,7 @@ export function partnerSourceUrl(trip: Pick<TravelTrip, "extra">): string {
   return text(record(trip.extra?.partner_sync).source_url);
 }
 
-export const PARTNER_EDIT_REASON = "хамтрагчийн сайтаас 30 минут тутам автоматаар шинэчлэгддэг тул үнэ, огноо, огнооны төлвийг гараар засахгүй (дараагийн шинэчлэлт буцааж дарна). Хамтрагч талдаа засуулна уу.";
+export const PARTNER_EDIT_REASON = "хамтрагчийн сайтаас 30 минут тутам автоматаар шинэчлэгддэг тул үнэ, огноо, огнооны төлвийг гараар засахгүй (дараагийн шинэчлэлт буцааж дарна). Хамтрагч талдаа засуулна уу. Хамтрагчийн мэдээлэл хоцорч байвал хуулахыг зогсоож, гараар хөтлөх боломжтой — үүнийг системийн хөгжүүлэгч хийнэ.";
 
 function rowLabel(row: Row): string {
   return [text(row.hotel), text(row.package_id)].filter(Boolean).join(" · ") || text(row.label) || "үнийн мөр";
