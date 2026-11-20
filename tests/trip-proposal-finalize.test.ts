@@ -128,3 +128,55 @@ test("a trip the program already writes from Ulaanbaatar is only tagged, never g
   assert.deepEqual([extra.transport_type, p.actions[0].fields!.duration_text], ["direct_flight", "3 өдөр 2 шөнө"]);
   assert.equal(p.needs_confirmation, false, "nothing was added and the type is certain");
 });
+
+// Dry run of a real poster, 2026-11-20 (invented places here): day 1 says the trip flies out of Ulaanbaatar,
+// the model still answered land+flight; day 8's garbled closing line came back as "суудал бүрэн дүүрсэн"; the
+// poster gives no departure, and a trip saved without one is archived (on neither the website nor the bot).
+test("a poster reading: the program's flight from Ulaanbaatar beats the model's land+flight; no seat state in a day; no-date warning", async () => {
+  const { finalizeNewTripActions } = await import("../src/lib/tripProposalFinalize");
+  const p = proposal();
+  const extra = p.actions[0].fields!.extra as Record<string, unknown>;
+  extra.transport_type = "land_flight";
+  extra.itinerary_days = [
+    { day: 1, title: "УЛААНБААТАР – НОРВЕЛ", description: "Улаанбаатар – Норвел чиглэлийн шууд нислэгээр аяллаа эхлүүлнэ. Зочид буудалдаа байрлана.", meals: { dinner: true } },
+    { day: 2, title: "НОРВЕЛ – УЛААНБААТАР", description: "Өглөөний цайны дараа Норвел – Улаанбаатар чиглэлийн нислэгээр суудал бүрэн дүүрсэн аялал өндөрлөнө.", meals: { breakfast: true } },
+  ];
+  await finalizeNewTripActions(p);
+  const after = p.actions[0].fields!.extra as Record<string, unknown>;
+  const days = after.itinerary_days as Array<{ description: string }>;
+  assert.equal(after.transport_type, "direct_flight", "the program's own first day decides");
+  assert.equal(days.length, 2, "no train days added");
+  const transport = p.conflict_items!.find((item) => item.type === "transport_choice");
+  assert.equal((transport?.data as { sure?: boolean })?.sure, false, "the admin is asked to confirm the overruled reading");
+  assert.equal(days[1].description, "Өглөөний цайны дараа Норвел – Улаанбаатар чиглэлийн нислэгээр аялал өндөрлөнө.");
+  const datesMissing = p.conflict_items!.find((item) => item.type === "dates_missing");
+  assert.match(datesMissing?.text || "", /вэбсайт, ботод харагдахгүй/u, "says a trip without a departure stays hidden");
+});
+
+// Dry runs 2026-11-20: the model applied the admin's "Оройн хоол орой бүр багтсан" on one reading and dropped it on
+// the next, and twice wrote "Өдрийн хоол өөрсдөө" into days of a poster that never said it.
+test("the admin's 'every night dinner' note is applied by code; an own-cost meal read from a picture is flagged", async () => {
+  const { finalizeNewTripActions, noteMealsEveryDay, withoutSeatState } = await import("../src/lib/tripProposalFinalize");
+  assert.deepEqual(noteMealsEveryDay("Оройн хоол орой бүр багтсан."), ["dinner"]);
+  assert.deepEqual(noteMealsEveryDay("Өглөөний цай, оройн хоол өдөр бүр орсон"), ["breakfast", "dinner"]);
+  assert.deepEqual(noteMealsEveryDay("Оройн хоол багтаагүй"), []);
+  assert.deepEqual(noteMealsEveryDay("Үнэ оруулахгүй"), []);
+  assert.equal(withoutSeatState("Нислэгээр суудалд бүрэн дүүрсэн аялал өндөрлөнө."), "Нислэгээр аялал өндөрлөнө.");
+  const p = proposal();
+  (p.actions[0].fields!.extra as Record<string, unknown>).itinerary_days = [
+    { day: 1, title: "УЛААНБААТАР – НОРВЕЛ", description: "Улаанбаатар – Норвел чиглэлийн шууд нислэгээр аяллаа эхлүүлнэ.", meals: {} },
+    { day: 2, title: "НОРВЕЛ ХОТ", description: "Хотын аялал. Өдрийн хоол өөрсдөө төлнө.", meals: { breakfast: true, lunch: false } },
+    { day: 3, title: "НОРВЕЛ – УЛААНБААТАР", description: "Нислэгээр буцна.", meals: { breakfast: true } },
+  ];
+  await finalizeNewTripActions(p, { note: "Оройн хоол орой бүр багтсан.", sourceText: "" });
+  const days = (p.actions[0].fields!.extra as Record<string, unknown>).itinerary_days as Array<{ meals: Record<string, unknown> }>;
+  assert.deepEqual(days.map((day) => day.meals.dinner), [true, true, null], "every evening with a hotel night; not the flight home");
+  assert.equal(p.actions[0].fields!.has_food, true);
+  const check = p.conflict_items!.find((item) => item.type === "meals_check");
+  assert.match(check?.text || "", /2-р өдөр өдрийн хоол/u, "the own-cost lunch read from a picture is put to the admin");
+  // Read from text (a document), the same lunch is the source's own word: no flag.
+  const q = proposal();
+  (q.actions[0].fields!.extra as Record<string, unknown>).itinerary_days = (p.actions[0].fields!.extra as Record<string, unknown>).itinerary_days;
+  await finalizeNewTripActions(q, { sourceText: "Хотын аялал. Өдрийн хоол өөрсдөө төлнө." });
+  assert.equal(q.conflict_items!.some((item) => item.type === "meals_check"), false);
+});

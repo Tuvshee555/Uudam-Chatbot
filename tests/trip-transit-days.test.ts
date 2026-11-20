@@ -68,3 +68,19 @@ test("the transport type is read from the program", () => {
   assert.deepEqual(detectTransportType({ title: "Лумиа", transportType: "cruise", days: partnerDays() }), { transport: "cruise", sure: true }, "a stated type wins");
   assert.equal(detectTransportType({ title: "Лумиа", days: [{ title: "Лумиа", description: "Хотын аялал." }] }).sure, false, "nothing to go on: a guess the admin confirms");
 });
+
+test("the model's transport is a hint: a first day that plainly leaves Ulaanbaatar by air or by train decides", () => {
+  const flyOut = [{ title: "УЛААНБААТАР – НОРВЕЛ", description: "Улаанбаатар – Норвел чиглэлийн шууд нислэгээр аяллаа эхлүүлнэ." }];
+  assert.deepEqual(detectTransportType({ title: "НОРВЕЛ", days: flyOut, transportType: "land_flight" }), { transport: "direct_flight", sure: false });
+  assert.deepEqual(detectTransportType({ title: "НОРВЕЛ", days: flyOut, transportType: "direct_flight" }), { transport: "direct_flight", sure: true });
+  assert.deepEqual(detectTransportType({ title: "НОРВЕЛ", days: partnerDays(), transportType: "direct_flight" }), { transport: "land_flight", sure: false });
+  // A first day that says nothing about how the trip leaves keeps the model's reading.
+  assert.deepEqual(detectTransportType({ title: "НОРВЕЛ", days: [{ title: "НОРВЕЛ ХОТ", description: "Хотын аялал." }], transportType: "land_flight" }), { transport: "land_flight", sure: true });
+});
+
+test("the admin's transport choice beats the program reading, and the marker is never saved", async () => {
+  assert.deepEqual(detectTransportType({ title: "НОРВЕЛ", days: partnerDays(), transportType: "direct_flight", chosen: true }), { transport: "direct_flight", sure: true });
+  const { withoutReviewOnly } = await import("../src/lib/tripReview");
+  const saved = withoutReviewOnly({ route_name: "НОРВЕЛ", extra: { transport_type: "direct_flight", transport_chosen: true } });
+  assert.deepEqual(saved.extra, { transport_type: "direct_flight" });
+});

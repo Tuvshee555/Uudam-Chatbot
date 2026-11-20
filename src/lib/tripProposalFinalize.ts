@@ -64,13 +64,50 @@ export function applyTransportChoice(clarification: string, proposal: AIChangePr
   for (const action of targets) {
     const fields = action.fields as Row;
     const extra = record(fields.extra);
-    fields.extra = { ...extra, transport_type: transport };
+    // Marked as the admin's own choice: it beats the program reading (tripTransitDays detectTransportType). Review only.
+    fields.extra = { ...extra, transport_type: transport, transport_chosen: true };
   }
   return targets.length > 0;
 }
 
 function dropConflictItem(proposal: AIChangeProposal, type: string, route: string) {
   proposal.conflict_items = (proposal.conflict_items || []).filter((entry) => !(entry.type === type && sameRoute(record(entry.data).route_name, route)));
+}
+
+/**
+ * A program day never states seat availability (that is each departure's state). "суудал бүрэн дүүрсэн" in a day's
+ * text is a misreading — a poster's garbled closing line ("… аялал өндөрлөнө") read as "seats fully booked" (dry
+ * run 2026-11-20) — and customers would read the trip as full. Only the phrase goes; the rest of the day stays.
+ */
+const SEAT_STATE_IN_PROGRAM = /\s*суудал\p{L}*(?:\s+(?:бүрэн|бүгд))?\s+(?:дүүрсэн|дууссан)(?!\p{L})/giu;
+export function withoutSeatState(description: string): string {
+  return description.replace(SEAT_STATE_IN_PROGRAM, "").replace(/[ \t]{2,}/g, " ");
+}
+
+type MealKey = "breakfast" | "lunch" | "dinner";
+const MEAL_WORDS: Array<[MealKey, RegExp]> = [
+  ["breakfast", /өглөөний\s+(?:цай|хоол)/iu], ["lunch", /(?:өдрийн|үдийн)\s+хоол/iu], ["dinner", /оройн\s+хоол/iu],
+];
+/**
+ * Meals the admin's note says every day includes ("Оройн хоол орой бүр багтсан"). The model applied such a note on
+ * one reading and dropped it on the next (dry runs 2026-11-20), so the admin's own words are applied by code.
+ */
+export function noteMealsEveryDay(note: string | undefined): MealKey[] {
+  const said = text(note);
+  if (!said || !/(?:өдөр|орой|өглөө)\s+(?:бүр|болгон)|бүх\s+өдөр/iu.test(said) || !/багтсан|багтана|орсон|орно/iu.test(said)) return [];
+  if (/багтаагүй|ороогүй|өөрсдөө|өөрийн\s+зардл/iu.test(said)) return [];
+  return MEAL_WORDS.filter(([, word]) => word.test(said)).map(([key]) => key);
+}
+
+/** Every evening with a hotel night gets dinner, every morning after one breakfast, every full day lunch. */
+function withNoteMeals(days: ItineraryDay[], meals: MealKey[]): ItineraryDay[] {
+  if (!meals.length || !days.length) return days;
+  const last = days.length - 1;
+  return days.map((day, index) => {
+    const applies = (meal: MealKey) => meal === "dinner" ? index < last : meal === "breakfast" ? index > 0 : index > 0 && index < last;
+    const set = meals.filter(applies);
+    return set.length ? { ...day, meals: { ...(day.meals || {}), ...Object.fromEntries(set.map((meal) => [meal, true])) } } : day;
+  });
 }
 
 const PRICE_FIELDS = ["adult_price", "child_price", "infant_price"] as const;
@@ -329,7 +366,9 @@ export function keptEvidence(raw: unknown, sourceText?: string): { source_eviden
  * Finalises every new trip in the proposal. `photos` turns on the photo search (the
  * initial proposal); a revision passes nothing and keeps the photos it carried over.
  */
-export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace; sourceText?: string; now?: Date } = {}): Promise<void> {
+const MEAL_NAMES: Record<MealKey, string> = { breakfast: "өглөөний цай", lunch: "өдрийн хоол", dinner: "оройн хоол" };
+
+export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace; sourceText?: string; now?: Date; /** The admin's note sent with the file. */ note?: string } = {}): Promise<void> {
   scrubPartnerPrices(proposal);
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Row;
@@ -347,11 +386,19 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
     if (!days.length || !route) continue;
     try {
       const detected = detectTransportType({ title: route, route: text(extra.route), notes: text(fields.notes), days,
-        transportType: isTransportType(extra.transport_type) ? extra.transport_type : undefined, transport: extra.transport });
+        transportType: isTransportType(extra.transport_type) ? extra.transport_type : undefined, chosen: extra.transport_chosen === true, transport: extra.transport });
       const rebuilt = applyTransport(fields, detected.transport);
       Object.assign(fields, rebuilt.fields);
       // Every day's meals as included / own cost / not stated, and the trip-level flag from them.
-      const built = { days: (record(fields.extra).itinerary_days as ItineraryDay[]).map((day) => ({ ...day, meals: dayMeals(day) })), added: rebuilt.added };
+      const built = { days: withNoteMeals((record(fields.extra).itinerary_days as ItineraryDay[]).map((day) => ({ ...day, meals: dayMeals(day),
+        ...(typeof day.description === "string" ? { description: withoutSeatState(day.description) } : {}) })), noteMealsEveryDay(options.note)), added: rebuilt.added };
+      // A meal "at your own cost" read from a picture cannot be checked against any text: twice a poster that never
+      // said it came back with "Өдрийн хоол өөрсдөө" (dry runs 2026-11-20). The admin is asked to look.
+      const ownCost = text(options.sourceText) ? [] : built.days.flatMap((day, index) =>
+        (["breakfast", "lunch", "dinner"] as const).filter((meal) => day.meals?.[meal] === false).map((meal) => `${index + 1}-р өдөр ${MEAL_NAMES[meal]}`));
+      dropConflictItem(proposal, "meals_check", route);
+      if (ownCost.length) setConflictItem(proposal, { text: `«${route}»: зурагнаас «өөрсдөө төлнө» гэж уншсан: ${ownCost.join(", ")}. Зурагт ингэж бичсэн эсэхийг шалгаад, бичээгүй бол хоосон үлдээнэ үү.`,
+        severity: "warning", type: "meals_check", data: { route_name: route } }, route);
       const { source_evidence: _unverified, ...withoutEvidence } = record(fields.extra);
       void _unverified;
       fields.extra = { ...withoutEvidence, itinerary_days: built.days, ...keptEvidence(extra.source_evidence, options.sourceText) };
@@ -397,7 +444,10 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
       const dates = Array.isArray(fields.departure_dates) ? fields.departure_dates.filter((date) => text(date)) : [];
       for (const type of ["dates_missing", "dates_check", DEPARTURE_SHIFT, DEPARTURE_CONFLICT]) dropConflictItem(proposal, type, route);
       if (!dates.length) {
-        setConflictItem(proposal, { text: `«${route}»: гарах өдөр файлд олдсонгүй — календариас сонгоно уу.`, severity: "info", type: "dates_missing", data: { route_name: route } }, route);
+        // Said in full: a trip saved without a departure is archived at once (tripScheduleMaintenance
+        // "no_departure_dates") and is on neither the website nor the bot until a date is added — the
+        // "it saved but is not on the site" surprise of 2026-10-23.
+        setConflictItem(proposal, { text: `«${route}»: гарах өдөр файлд олдсонгүй — календариас сонгоно уу. Гарах өдөргүй хадгалсан аялал вэбсайт, ботод харагдахгүй (архивт орно); өдөр нэмэхэд автоматаар нийтлэгдэнэ.`, severity: "info", type: "dates_missing", data: { route_name: route } }, route);
       } else {
         // The dates the source writes beside its own days decide whether the departure is the
         // day the train leaves Ulaanbaatar or the partner's first day at the border. Until

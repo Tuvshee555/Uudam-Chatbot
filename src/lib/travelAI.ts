@@ -1766,7 +1766,7 @@ export async function generateAIProposalFromContentBatched(input: {
       // missing photos — what makes a file-created trip equal to one added on the web.
       // The photo search only gets the time the batches left of the route's budget.
       const remainingMs = FILE_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt);
-      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined, sourceText: allSourceText });
+      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined, sourceText: allSourceText, note: input.note });
 
       return merged;
     },

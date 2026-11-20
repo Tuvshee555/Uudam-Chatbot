@@ -533,7 +533,8 @@ export function reviewIssues(fields: Row, now = new Date()): ReviewIssue[] {
 /* ------------------------------------------------------------------ save */
 
 /** Keys that exist only for the review and must never reach a saved trip. */
-const REVIEW_ONLY_EXTRA = ["source_evidence", "program_duration_text", "day_states"];
+// transport_chosen: the admin picked the transport on the review card (tripProposalFinalize applyTransportChoice).
+const REVIEW_ONLY_EXTRA = ["source_evidence", "program_duration_text", "day_states", "transport_chosen"];
 
 /**
  * The fields without what only the review needed: the source quotes, the

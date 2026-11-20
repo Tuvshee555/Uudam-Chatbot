@@ -91,8 +91,25 @@ export function isTransportType(value: unknown): value is TransportType {
  */
 export function detectTransportType(input: {
   title?: string; route?: string; notes?: string; days?: ItineraryDay[]; transportType?: unknown; transport?: unknown;
+  /** The admin chose transportType on the review card: it wins outright. */
+  chosen?: boolean;
 }): { transport: TransportType; sure: boolean } {
-  if (isTransportType(input.transportType)) return { transport: input.transportType, sure: true };
+  if (input.chosen && isTransportType(input.transportType)) return { transport: input.transportType, sure: true };
+  const fromProgram = transportFromProgram(input);
+  if (isTransportType(input.transportType)) {
+    // The model's transport is a hint; a first day that plainly leaves Ulaanbaatar by air (or by train or road)
+    // decides. A poster whose day 1 is "Улаанбаатар – <хот> чиглэлийн шууд нислэгээр" was read land+flight
+    // (dry run 2026-11-20): listed under the wrong kind, and land+flight adds the train days. The admin confirms.
+    // A cruise reached by train is still a cruise: the first day never overrules that reading.
+    if (fromProgram.decisive && input.transportType !== "cruise" && fromProgram.transport !== input.transportType) return { transport: fromProgram.transport, sure: false };
+    return { transport: input.transportType, sure: true };
+  }
+  return { transport: fromProgram.transport, sure: fromProgram.sure };
+}
+
+function transportFromProgram(input: {
+  title?: string; route?: string; notes?: string; days?: ItineraryDay[]; transport?: unknown;
+}): { transport: TransportType; sure: boolean; decisive?: boolean } {
   const days = input.days || [];
   const head = `${text(input.title)} ${text(input.route)}`;
   const first = dayText(days[0]);
@@ -104,10 +121,10 @@ export function detectTransportType(input: {
   // read as a cruise, 2026-11-05).
   const shipDays = days.filter((day) => CRUISE.test(dayText(day))).length;
   if (/каюта|cabin/i.test(everything) || shipDays >= 2) return { transport: "cruise", sure: false };
-  if (UB_AIRPORT.test(first) && !TRAIN_OR_LAND.test(first)) return { transport: "direct_flight", sure: true };
+  if (UB_AIRPORT.test(first) && !TRAIN_OR_LAND.test(first)) return { transport: "direct_flight", sure: true, decisive: true };
   const landStart = TRAIN_OR_LAND.test(first) || ERENHOT.test(first);
   const flightInside = FLIGHT.test(days.slice(1).map(dayText).join("\n")) || (landStart && FLIGHT.test(first));
-  if (landStart) return { transport: flightInside ? "land_flight" : "land", sure: true };
+  if (landStart) return { transport: flightInside ? "land_flight" : "land", sure: true, decisive: true };
   if (/шууд нислэг/i.test(head)) return { transport: "direct_flight", sure: true };
   if (TRAIN_OR_LAND.test(everything)) return { transport: FLIGHT.test(everything) ? "land_flight" : "land", sure: false };
   if (FLIGHT.test(first)) return { transport: "direct_flight", sure: false };
