@@ -1,5 +1,4 @@
-import { createHmac } from "node:crypto";
-import { appSecretForToken, getEnv } from "./env";
+import { appsecretProofFor, getEnv } from "./env";
 import { GRAPH_API_BASE } from "./metaGraph";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { BOT_MESSAGE_METADATA } from "./messenger";
@@ -504,8 +503,8 @@ export type FbFailureClass = "attachment_rejected" | "window_closed" | "permissi
 function graphUrl(path: string, token: string): string {
   const params = new URLSearchParams({ access_token: token });
   // The proof is only valid with the secret of the app that issued the token (env.ts).
-  const secret = appSecretForToken(token);
-  if (secret) params.set("appsecret_proof", createHmac("sha256", secret).update(token).digest("hex"));
+  const proof = appsecretProofFor(token);
+  if (proof) params.set("appsecret_proof", proof);
   return `${GRAPH_API_BASE}${path}?${params.toString()}`;
 }
 

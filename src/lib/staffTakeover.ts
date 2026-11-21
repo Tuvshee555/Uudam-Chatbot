@@ -205,10 +205,9 @@ export async function fetchThreadMessages(input: {
   senderId: string;
   timeoutMs: number;
 }): Promise<ThreadLookup> {
-  const { appSecretForToken } = await import("./env");
-  const { createHmac } = await import("node:crypto");
-  const secret = appSecretForToken(input.token);
-  const proof = secret ? `&appsecret_proof=${createHmac("sha256", secret).update(input.token).digest("hex")}` : "";
+  const { appsecretProofFor } = await import("./env");
+  const appsecretProof = appsecretProofFor(input.token);
+  const proof = appsecretProof ? `&appsecret_proof=${appsecretProof}` : "";
   const url = `${GRAPH_API_BASE}/me/conversations?platform=messenger&user_id=${encodeURIComponent(input.senderId)}`
     + `&fields=messages.limit(${THREAD_LOOKUP_LIMIT}){id,from,message,created_time,tags}&access_token=${encodeURIComponent(input.token)}${proof}`;
   let response: Response;

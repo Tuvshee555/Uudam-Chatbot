@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+import { lentProofFor, lentTokenFor } from "./lentPageTokens";
 import { logError, logStartupDiagnostics } from "./observability";
 import { parseAllowedEmails } from "./adminGoogleAuth";
 import { isWeakAdminKey } from "./adminSession";
@@ -302,12 +304,28 @@ export function appSecretForToken(token: string): string {
 }
 
 /**
+ * The Graph API `appsecret_proof` for this token: the hub's own proof for a token it lent
+ * (lentPageTokens.ts; this deployment never holds that app's secret), otherwise
+ * HMAC-SHA256(secret of the issuing app, token). Empty when no secret is known.
+ */
+export function appsecretProofFor(token: string): string {
+  const lent = lentProofFor(token);
+  if (lent) return lent;
+  const secret = appSecretForToken(token);
+  return secret ? createHmac("sha256", secret).update(token).digest("hex") : "";
+}
+
+/**
  * The page token to answer this customer with. META_NEXT_SEND=testers sends through the NEW
  * app only to the listed role users (an app in Development mode can message nobody else);
  * everyone else — and every page without a NEXT token — keeps the roster token. With
  * META_NEXT_SEND=all the roster itself already holds the new tokens (getEnv).
  */
 export function pageTokenForRecipient(pageId: string, recipientId: string): string | undefined {
+  // The Instagram account connected at the Ursgal hub answers with the token the hub lent for
+  // this delivery (ursgalHub.ts); no FACEBOOK_PAGES entry holds an Instagram account id.
+  const lent = lentTokenFor(pageId);
+  if (lent) return lent;
   const env = getEnv();
   if (env.metaNextSend === "testers" && env.metaNextTesterIds.includes(recipientId)) {
     const next = env.facebookPagesNext.find((page) => page.pageId === pageId)?.token;

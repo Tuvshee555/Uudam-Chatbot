@@ -38,7 +38,7 @@ export const ECHO_RECORD_RETRY_MS = 1500;
 export type EchoEvent = {
   pageId: string;
   /** Which app's webhook delivered this echo (the old "current" app or the "next" one). */
-  deliveredBy: "current" | "next";
+  deliveredBy: "current" | "next" | "hub";
   /** The customer the Page message went to. */
   recipientId: string;
   mid: string;

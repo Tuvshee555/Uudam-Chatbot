@@ -1,5 +1,8 @@
 # Meta-app migration: UUDAM Page → app `uudam-v2` (App ID 2959934047708039)
 
+> Instagram goes another way: the UUDAM Instagram account is answered through the Ursgal hub's
+> Meta app, which already holds the Instagram permissions. See `ursgal-hub-instagram.md`.
+
 The original Meta app is outside the owner's control (its ID is in no env var, its token holds
 only `pages_messaging` + `public_profile`, data access expired 2026-09-10, and `message_echoes`
 was never delivered). This code lets the old app and `uudam-v2` serve the same Page from the

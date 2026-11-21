@@ -94,6 +94,12 @@ async function run() {
   if (env.metaMigrationIssues.length) {
     throw new Error(`Preflight failed: invalid Meta-app migration settings: ${env.metaMigrationIssues.join("; ")}`);
   }
+  // Same for the Ursgal hub route (UUDAM's Instagram): half a setting refuses every delivery.
+  const { ursgalHubSettingsIssues } = await import("../src/lib/ursgalHub");
+  const hubIssues = ursgalHubSettingsIssues(process.env);
+  if (hubIssues.length) {
+    throw new Error(`Preflight failed: invalid Ursgal hub settings: ${hubIssues.join("; ")}`);
+  }
 
   const observabilityModule = await import("../src/lib/observability");
   const readinessModule = await import("../src/lib/readiness");

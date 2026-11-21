@@ -1,6 +1,5 @@
 import { tracedSend } from "./inboundTrace";
-import { createHmac } from "crypto";
-import { appSecretForToken, getEnv } from "./env";
+import { appsecretProofFor, getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
@@ -11,14 +10,10 @@ const env = getEnv();
 
 function graphMessagesEndpoint(igUserId: string, token: string) {
   const params = new URLSearchParams({ access_token: token });
-  // env.ts maps each page token to its issuing app's secret (the app migration runs two apps).
-  const secret = appSecretForToken(token);
-  if (secret) {
-    params.set(
-      "appsecret_proof",
-      createHmac("sha256", secret).update(token).digest("hex"),
-    );
-  }
+  // env.ts: the issuing app's proof (two apps during the migration; the hub's own proof for the
+  // token it lends for the Instagram account connected there).
+  const proof = appsecretProofFor(token);
+  if (proof) params.set("appsecret_proof", proof);
   return `${GRAPH_API_BASE}/${igUserId}/messages?${params.toString()}`;
 }
 

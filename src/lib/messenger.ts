@@ -1,6 +1,5 @@
 import { tracedSend } from "./inboundTrace";
-import { createHmac } from "crypto";
-import { appSecretForToken, getEnv } from "./env";
+import { appsecretProofFor, getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logInfo, logWarn } from "./observability";
 import { recordOutboundMessage } from "./outboundMessages";
@@ -107,25 +106,15 @@ function graphMessagesEndpoint(token: string) {
   const params = new URLSearchParams({ access_token: token });
   // The proof is only valid with the secret of the app that issued the token — during the
   // app migration the old and new page tokens belong to different apps (env.ts maps them).
-  const secret = appSecretForToken(token);
-  if (secret) {
-    params.set(
-      "appsecret_proof",
-      createHmac("sha256", secret).update(token).digest("hex"),
-    );
-  }
+  const proof = appsecretProofFor(token);
+  if (proof) params.set("appsecret_proof", proof);
   return `${GRAPH_API_BASE}/me/messages?${params.toString()}`;
 }
 
 function graphCommentEndpoint(commentId: string, token: string) {
   const params = new URLSearchParams({ access_token: token });
-  const secret = appSecretForToken(token);
-  if (secret) {
-    params.set(
-      "appsecret_proof",
-      createHmac("sha256", secret).update(token).digest("hex"),
-    );
-  }
+  const proof = appsecretProofFor(token);
+  if (proof) params.set("appsecret_proof", proof);
   return `${GRAPH_API_BASE}/${commentId}/comments?${params.toString()}`;
 }
 

@@ -1,4 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { waitUntil } from "@vercel/functions";
+import { isUrsgalHubDelivery, primeUrsgalHubToken, ursgalHubConfig, ursgalHubDeliveryProblem } from "../../lib/ursgalHub";
 import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
@@ -2557,7 +2559,21 @@ export default async function handler(
           : signatureHeader;
         // Two apps deliver during the Meta-app migration, each signing with its own secret; which
         // one signed is recorded on every receipt, so "did the new app deliver this?" is evidence.
-        const deliveredBy = matchMetaSignature(rawBody, signature, [["current", META_APP_SECRET], ["next", env.metaAppSecretNext]]);
+        // The Ursgal hub forwards UUDAM's Instagram events signed with this route's own secret
+        // instead (ursgalHub.ts); it never carries Meta's signature.
+        const hub = ursgalHubConfig(process.env, env.facebookPages[0]?.pageId ?? "");
+        let deliveredBy: "current" | "next" | "hub" | null;
+        if (isUrsgalHubDelivery(req.headers)) {
+          const problem = ursgalHubDeliveryProblem(rawBody, req.headers, hub);
+          if (problem) {
+            logWarn("webhook.hub_delivery_refused", { requestId: trace.requestId, correlationId: trace.correlationId, problem });
+            recordCounter("abuse.webhook_invalid_signature_total", 1, { source: "hub" });
+            return res.status(401).json({ error: "invalid_signature" });
+          }
+          deliveredBy = "hub";
+        } else {
+          deliveredBy = matchMetaSignature(rawBody, signature, [["current", META_APP_SECRET], ["next", env.metaAppSecretNext]]);
+        }
         if (!deliveredBy) {
           recordCounter("abuse.webhook_invalid_signature_total", 1);
           return res.status(401).json({ error: "invalid_signature" });
@@ -2609,11 +2625,30 @@ export default async function handler(
           correlationId: trace.correlationId,
           object: payload?.object,
           entryCount: Array.isArray(payload?.entry) ? payload.entry.length : 0,
+          deliveredBy,
         });
+        // The hub serves only UUDAM's Instagram account. Its Messenger events (the hub's app is
+        // subscribed to the Page too) are already delivered by the UUDAM app: acknowledged, dropped.
+        if (deliveredBy === "hub" && payload.object !== "instagram") {
+          logInfo("webhook.hub_event_ignored", { requestId: trace.requestId, correlationId: trace.correlationId, object: payload?.object ?? null });
+          return res.status(200).json({ ok: true });
+        }
+        const processPayload = async () => {
         if (payload.object === "page" || payload.object === "instagram") {
           for (const entry of payload.entry || []) {
             const pageId =
               typeof entry?.id === "string" ? entry.id : String(entry?.id || "");
+            // A hub delivery answers with the Page token the hub lends for this Instagram account
+            // (env.ts pageTokenForRecipient reads it). No token, no reply: never the UUDAM app's
+            // Messenger token, which has no Instagram permission.
+            if (deliveredBy === "hub") {
+              const lent = await primeUrsgalHubToken(pageId, hub);
+              if (lent !== "ok") {
+                logWarn("webhook.hub_token_unavailable", { requestId: trace.requestId, correlationId: trace.correlationId, pageId, reason: lent });
+                recordCounter("webhook.hub_token_unavailable_total", 1, { reason: lent });
+                continue;
+              }
+            }
             const botSettings = await getTravelBotSettings();
             const feedChanges = Array.isArray(entry?.changes) ? entry.changes : [];
             for (const change of feedChanges) {
@@ -3036,6 +3071,22 @@ export default async function handler(
         }
         // The follow-up and get-started sweeps also run on traffic (GitHub's schedule ran them hours late).
         scheduleSweepsFromTraffic();
+        };
+        if (deliveredBy === "hub") {
+          // The hub waits 8 seconds for an answer, then tells Meta to retry. Answer at once and
+          // finish the replies in the background (waitUntil, within maxDuration). Retries are
+          // absorbed by the mid memory as for Meta's own redeliveries.
+          waitUntil(processPayload().catch((error) => {
+            logError("webhook.hub_processing_failed", {
+              requestId: trace.requestId,
+              correlationId: trace.correlationId,
+              classification: classifyError(error),
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }));
+          return res.status(200).json({ ok: true });
+        }
+        await processPayload();
         return res.status(200).json({ ok: true });
       } catch (err) {
         if (isRetryableWebhookError(err)) {

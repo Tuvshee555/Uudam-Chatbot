@@ -71,6 +71,11 @@ const RESET_ONLY_ENV_KEYS = [
   "META_APP_ID",
   "ECHO_TAKEOVER_MODE",
   "ECHO_HUMAN_APP_IDS",
+  // The Ursgal hub route (src/lib/ursgalHub.ts): unset unless a test sets it.
+  "URSGAL_HUB_URL",
+  "URSGAL_HUB_ROUTE_ID",
+  "URSGAL_HUB_SECRET",
+  "URSGAL_HUB_PAGE_ID",
   "DATABASE_URL",
   "NEON_DATABASE_URL",
   "REDIS_URL",
