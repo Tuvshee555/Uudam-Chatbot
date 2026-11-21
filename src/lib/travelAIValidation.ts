@@ -478,7 +478,8 @@ export function validateAIChangeProposal(
             // A whole program read from a file is a new trip (see keepFileProgramsNew): said in
             // the review, in Mongolian, without a question that would cost another model call.
             sameNameNotes.push({
-              text: `«${fieldsRoute}»: ижил нэртэй аялал бүртгэлд аль хэдийн байна («${duplicateTrips[0].route_name}»). Хадгалбал ШИНЭ аялал болж нэмэгдэнэ, одоо байгаа аялал өөрчлөгдөхгүй. Давхардуулахгүй бол «Болих» дарна уу.`,
+              // «Ижил» only for the same name; a trip that shares its places is «төстэй» (a New Year special beside the weekly trip).
+              text: `«${fieldsRoute}»: ${fieldsRoute.trim().toLowerCase() === duplicateTrips[0].route_name.trim().toLowerCase() ? "ижил" : "төстэй"} нэртэй аялал бүртгэлд аль хэдийн байна («${duplicateTrips[0].route_name}»). Хадгалбал ШИНЭ аялал болж нэмэгдэнэ, одоо байгаа аялал өөрчлөгдөхгүй. Давхардуулахгүй бол «Болих» дарна уу. Харин одоо байгаа аяллаа энэ файлаар шинэчлэх гэсэн бол «Болих» дараад файлаа «${duplicateTrips[0].route_name} аяллын хөтөлбөрийг энэ файлаар шинэчил» гэсэн үгтэй дахин илгээнэ үү.`,
               severity: "warning",
               type: "same_name_exists",
             });

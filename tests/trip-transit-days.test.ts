@@ -84,3 +84,36 @@ test("the admin's transport choice beats the program reading, and the marker is 
   const saved = withoutReviewOnly({ route_name: "НОРВЕЛ", extra: { transport_type: "direct_flight", transport_chosen: true } });
   assert.deepEqual(saved.extra, { transport_type: "direct_flight" });
 });
+
+test("a last day that crosses the border itself only gains its train; a bus home can be dropped for the train return", async () => {
+  const { STANDARD_DAYS, stripStandardTransitDays, withStandardTransitDays, withoutBusReturn } = await import("../src/lib/tripTransitDays");
+  const partner = [
+    { day: 1, title: "Эрээн – Норвел", description: "Эрээн хотод аялагчдаа тосно. Эрээн → Норвел (4–5 цаг).", meals: { breakfast: null, lunch: null, dinner: true } },
+    { day: 2, title: "Норвел – Эрээн", description: "Өглөөний цай. Норвел → Эрээн (4–5 цаг).", meals: { breakfast: true, lunch: null, dinner: true } },
+    { day: 3, title: "Эрээн – Замын-Үүд", description: "Өглөөний цай\n13:00 – Замын-Үүд хил гарах\nАвтобусандаа сууж Улаанбаатар буцна", meals: { breakfast: true, lunch: null, dinner: null } },
+  ];
+  // As the file writes it, the trip "ends in Ulaanbaatar" by bus: only the departure day is added.
+  const byBus = withStandardTransitDays(partner, "land");
+  assert.equal(byBus.added, 1);
+  assert.equal(byBus.days.length, 4);
+
+  const byTrain = withStandardTransitDays(withoutBusReturn(partner), "land");
+  assert.equal(byTrain.added, 2, "the train day out and the arrival morning");
+  assert.equal(byTrain.days.length, 5);
+  const border = byTrain.days[3];
+  assert.equal(border.description, `Өглөөний цай\n13:00 – Замын-Үүд хил гарах\n${STANDARD_DAYS.trainHome}`, "the day keeps its own lines; no second border crossing is written");
+  assert.doesNotMatch(String(border.description), /Автобусандаа|Эрээнд ирээд/);
+  assert.equal(byTrain.days[4].description, STANDARD_DAYS.arrival.description);
+
+  // Rebuilding starts from the program itself: the same days again, never a second train line.
+  assert.deepEqual(withStandardTransitDays(byTrain.days, "land").days, byTrain.days);
+  assert.equal(stripStandardTransitDays(byTrain.days).at(-1)?.description, "Өглөөний цай\n13:00 – Замын-Үүд хил гарах");
+  // A last day that only reaches the border town still gets the whole standard ending.
+  const reaches = withStandardTransitDays(partner.slice(0, 2), "land");
+  assert.equal(reaches.days.at(-2)?.description, `Өглөөний цай. Норвел → Эрээн (4–5 цаг).\n${STANDARD_DAYS.borderOutboundSameDay}`);
+  // No bus line, nothing changes; an arrival written by other means stays.
+  const untouched = partner.slice(0, 2);
+  assert.equal(withoutBusReturn(untouched), untouched);
+  const flown = [{ day: 1, title: "Норвел – Улаанбаатар", description: "Норвелээс нисээд Улаанбаатарт 21:10 цагт ирснээр аялал өндөрлөнө." }];
+  assert.deepEqual(withoutBusReturn(flown), flown);
+});

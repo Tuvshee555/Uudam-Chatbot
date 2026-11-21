@@ -15,11 +15,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 import { uploadAdminMedia } from "@/lib/adminMediaUpload";
-import { MAX_AI_INPUT_CHARS, apiErrorMessage, mergeAIProposals, shortId, uid } from "@/lib/adminPageUtils";
+import { MAX_AI_INPUT_CHARS, apiErrorMessage, buildImageUploadUnit, fileToDataUrl, mergeAIProposals, shortId, uid } from "@/lib/adminPageUtils";
 import { hasPlannedLines } from "@/lib/adminProposalUtils";
 import type { AIProposal, AIProposalResponse, AttachedFile, ProposalQuestionOption, TravelTrip } from "@/lib/adminTypes";
 import {
-  THREAD_KEY, agentProgressStages, answerToOf, attachmentRoute, displayText, instructionBody, openAskOf, openNewTripProposals,
+  THREAD_KEY, agentProgressStages, answerToOf, attachmentRoute, displayText, instructionBody, isImageAttachment, openAskOf, openNewTripProposals,
   proposalMessage, replyToMessage, restoreThread, serializeThread, unlockSave, zeroActionMessage, type ProgressStage,
 } from "./assistantChatLogic";
 import type { AssistantAskMsg, AssistantAttachment, AssistantChatMessage, AssistantProposalMsg, AssistantResponse } from "./assistantChatTypes";
@@ -27,6 +27,15 @@ import { MAX_AI_SOURCE_TEXT_CHARS, createFileParser } from "./assistantFileParse
 import { useProposalActions } from "./useProposalActions";
 
 const SESSION_KEY = "uudam.admin.assistant.session";
+// One file per request to /api/admin/file-text; its base64 stays under Vercel's 4.5 MB body cap.
+const DOCUMENT_MAX_BYTES = 3_000_000;
+// A turn that compares files with saved trips runs longer than a typed edit (up to about two minutes).
+const DOCUMENT_STAGES = [
+  { at: 0, label: "Файлыг ойлгож байна…" },
+  { at: 4, label: "Хадгалсан аяллыг шалгаж байна…" },
+  { at: 14, label: "Файлыг аялалтай харьцуулж байна…" },
+  { at: 40, label: "Өөрчлөлтийг бэлдэж байна… (урт жагсаалт бол 1–2 минут)" },
+];
 const MAX_DETAIL_TRIPS = 6;
 
 export const ASSISTANT_INTRO: AssistantChatMessage = {
@@ -35,7 +44,7 @@ export const ASSISTANT_INTRO: AssistantChatMessage = {
   kind: "note",
   tone: "info",
   text:
-    "Сайн байна уу! Аяллын мэдээллээ энд шуурхай өөрчилнө. Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй (ж: «<Аяллын нэр> 12/27 дүүрсэн, 1/3-ны үнийг 100 мянгаар нэм»), зураг хавсаргаж «3-р өдрийн зургийг соль» гэж бичих, аяллын холбоос буулгах, эсвэл прайс жагсаалт (Excel, PDF, зураг) оруулж болно. Би өөрчлөлтийг санал болгоно — та хянаад хадгална, буцаах боломжтой.",
+    "Сайн байна уу! Аяллын мэдээллээ энд шуурхай өөрчилнө. Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй (ж: «<Аяллын нэр> 12/27 дүүрсэн, 1/3-ны үнийг 100 мянгаар нэм»), зураг хавсаргаж «3-р өдрийн зургийг соль» гэж бичих, аяллын холбоос буулгах, эсвэл прайс жагсаалт (Excel, PDF, зураг) оруулж болно. Хадгалсан аяллаа файлаар шинэчлэх бол файлаа хавсаргаад «<Аяллын нэр> аяллын хөтөлбөрийг энэ файлаар шинэчил», «энэ жагсаалтыг <Аяллын нэр> аялалд нэмэлт мэдээлэл болгож нэм», «<Аяллын нэр> аяллыг сэргээ» гэж бичнэ (Word .doc/.docx, Excel, PDF, зураг). Би өөрчлөлтийг санал болгоно — та хянаад хадгална, буцаах боломжтой.",
 };
 
 type Toast = { success: (message: string) => void; error: (message: string) => void };
@@ -91,6 +100,9 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
   const tripsRef = useRef(trips);
   const detailsRef = useRef(tripDetails);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // The files' text of the last message about saved trips: an answer to the assistant's question
+  // about them (typed or tapped) carries it again, so the question never loses the file.
+  const askDocuments = useRef<Array<{ name: string; text: string }> | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { tripsRef.current = trips; }, [trips]);
   useEffect(() => { detailsRef.current = tripDetails; }, [tripDetails]);
@@ -204,6 +216,35 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
     return urls;
   }
 
+  /**
+   * The files of a message about saved trips, each read as text by the server (Word, Excel, PDF, a
+   * price photo). A file that cannot be read is named in a toast and left out; the rest still go.
+   */
+  async function readDocuments(files: AttachedFile[]): Promise<Array<{ name: string; text: string }>> {
+    const documents: Array<{ name: string; text: string }> = [];
+    for (const [index, file] of files.entries()) {
+      setBusyLabel(files.length > 1 ? `«${file.name}» уншиж байна… ${index + 1}/${files.length}` : `«${file.name}» уншиж байна…`);
+      try {
+        // A photo is shrunk to fit one request; a document must fit as it is.
+        const image = isImageAttachment(file);
+        if (!image && file.file.size > DOCUMENT_MAX_BYTES) throw new Error(`файл ${(file.file.size / 1_048_576).toFixed(1)} MB — 3 MB-аас бага байх ёстой (PDF эсвэл .docx болгож жижигрүүлнэ үү)`);
+        const dataUrl = image ? (await buildImageUploadUnit(file.file, DOCUMENT_MAX_BYTES)).dataUrl : await fileToDataUrl(file.file);
+        const res = await fetchWithAdmin("/api/admin/file-text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: file.name, mimeType: file.mimeType, dataBase64: dataUrl.slice(dataUrl.indexOf(",") + 1) }),
+        });
+        const data = (await readJsonSafe(res)) as { ok?: boolean; message?: string; document?: { name?: string; text?: string } };
+        if (!res.ok || !data.document?.text) throw new Error(data.message || "уншиж чадсангүй");
+        documents.push({ name: data.document.name || file.name, text: data.document.text });
+      } catch (error) {
+        const reason = error instanceof Error && error.message ? error.message : "уншиж чадсангүй";
+        toast.error(reason.includes(file.name) ? reason : `«${file.name}»: ${reason}`);
+      }
+    }
+    return documents;
+  }
+
   async function postAssistant(body: Record<string, unknown>): Promise<AssistantResponse> {
     const res = await fetchWithAdmin("/api/admin/ai-change", {
       method: "POST",
@@ -287,11 +328,23 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
         patchMessage(adminId, { imageUrls: urls });
         attachments = urls.map((url) => ({ url, kind: "image" as const }));
       }
+      let documents: Array<{ name: string; text: string }> = [];
+      if (route.kind === "agent_files") {
+        documents = await readDocuments(route.files);
+        if (!documents.length) throw new Error("Файлаас уншигдах зүйл гарсангүй, тиймээс зааврыг илгээсэнгүй. Файлаа шалгаад дахин оролдоно уу.");
+        if (route.skipped > 0) toast.error(`Нэг удаад ${route.files.length} хүртэл файл илгээнэ — үлдсэн ${route.skipped}-г алгаслаа.`);
+        askDocuments.current = documents;
+      } else if (askDocuments.current && (override?.answers || (ask && !override))) {
+        documents = askDocuments.current;
+      } else {
+        askDocuments.current = null;
+      }
       setBusyLabel("");
-      setBusyStages(agentProgressStages(text));
+      setBusyStages(documents.length ? DOCUMENT_STAGES : agentProgressStages(text));
       const data = await postAssistant(instructionBody({
         instruction: text,
         sessionId: session.current,
+        documents,
         // A tapped option travels with the question and its first instruction, like a typed answer: on
         // 2026-11-14 a tapped «хүүхэд ор эзлэхгүй» was read alone and the adult price and «the other
         // departures like 12/4» from the first message were lost.

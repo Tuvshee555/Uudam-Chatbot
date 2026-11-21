@@ -289,6 +289,7 @@ function actionVerb(action: AIAction): string {
     case "patch_itinerary_day": return "Хөтөлбөрийн өдөр";
     case "set_age_bands": return "Насны ангилал";
     case "replace_photo": return row.remove === true ? "Зураг хасах" : "Зураг солих";
+    case "append_notes": return "Тайлбарт нэмэх";
     case "fare_change_all": return "Олон аяллын үнэ";
     case "upsert": return action.trip_id ? "Шинэчлэх" : "Шинэ аялал нэмэх";
     case "patch": return "Шинэчлэх";
@@ -988,9 +989,18 @@ export type ActionView = {
   lines: string[];
   warnings: string[];
   thumbs?: { before?: string; after?: string };
+  /** append_notes: the lines the section adds to the description, to be read before saving. */
+  preview?: { title: string; lines: string[] };
 };
 
-const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo"]);
+const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "append_notes"]);
+
+/** The section an append_notes action writes: its heading and its lines. */
+function notesPreviewOf(action: AIAction): ActionView["preview"] {
+  const row = action as AIAction & { heading?: unknown; text?: unknown };
+  const lines = typeof row.text === "string" ? row.text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  return lines.length ? { title: typeof row.heading === "string" ? row.heading.trim() : "", lines } : undefined;
+}
 
 /** True for the actions whose card lines come from actionView (the rest keep the field diff). */
 export function hasPlannedLines(action: AIAction): boolean {
@@ -1044,16 +1054,18 @@ export function actionView(action: AIAction, trip: TravelTripLike | null | undef
     return { ...split(describeChange(action as unknown as AITripAction, null, now).lines) };
   }
   const thumbsFallback = verb === "replace_photo" ? photoThumbsOf(action, trip) : undefined;
+  const preview = verb === "append_notes" ? notesPreviewOf(action) : undefined;
   const fallback = (warnings: string[] = []): ActionView => ({
     lines: stored.length ? stored : describeChange(action as unknown as AITripAction, null, now).lines,
     warnings,
     ...(thumbsFallback ? { thumbs: thumbsFallback } : {}),
+    ...(preview ? { preview } : {}),
   });
   if (!options.live || !trip || needsFullTrip(action, trip)) return fallback();
   const planned = planTripEdit(trip as unknown as TripRecord, action as unknown as AITripAction, null, now);
   if (!planned.ok) return fallback([`Одоогийн мэдээллээр: ${planned.reason}`]);
   const thumbs = planned.plan.thumbs && (planned.plan.thumbs.before || planned.plan.thumbs.after) ? planned.plan.thumbs : thumbsFallback;
-  return { lines: planned.plan.lines.filter((line) => !isUnchangedLine(line)), warnings: planned.plan.warnings, ...(thumbs ? { thumbs } : {}) };
+  return { lines: planned.plan.lines.filter((line) => !isUnchangedLine(line)), warnings: planned.plan.warnings, ...(thumbs ? { thumbs } : {}), ...(preview ? { preview } : {}) };
 }
 
 /** "Зургийн тоо: 6 → 6" says nothing: the value stays as it is. */

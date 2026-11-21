@@ -35,6 +35,12 @@ const MAX_ROUNDS = 6;
 const MAX_REPAIRS = 1;
 // A runaway turn (a huge page read again and again) stops long before it costs real money.
 const MAX_TURN_PROMPT_TOKENS = 90_000;
+// A turn with attached files re-reads their text on every round and may write a long section
+// (a 60-line price list for two trips): more time, more output, a larger prompt allowance.
+const DOCUMENT_TOTAL_MS = 150_000;
+const DOCUMENT_PER_CALL_MS = 90_000;
+const DOCUMENT_MAX_OUTPUT_TOKENS = 8_000;
+const DOCUMENT_MAX_TURN_PROMPT_TOKENS = 260_000;
 const MAX_OPTIONS = 8;
 
 const DEFERRED_TERMINAL = JSON.stringify({
@@ -98,8 +104,16 @@ const AFTER_WEB_WORDS: Record<string, RegExp | ((admin: string) => boolean)> = {
   change_dates: /гаралт|огноо|өдөр|garalt|ognoo|date|departure/iu,
   set_age_bands: /нас|сар|(?<!\p{L})(?:nas|age)(?!\p{L})/iu,
   patch: /нэр|буудал|хоол|суудал|хугацаа|шөнө|хоног|тэмдэглэл|тайлбар|зогсоо|идэвхж|сэргээ|төлөв|(?<!\p{L})(?:ner|buudal|hool|suudal|name|hotel|food|meal|seats?|notes?|status|pause|resume)(?!\p{L})/iu,
+  append_notes: /тайлбар|тэмдэглэл|мэдээлэл|нэм|(?<!\p{L})(?:tailbar|medeelel|nem\p{L}*|notes?|add)(?!\p{L})/iu,
 };
 
+// A section is written into a trip's description only when the admin's own words ask to add
+// information: a file or page that says "add this to every trip" does not get to.
+const NOTES_WORDS = /тайлбар|тэмдэглэл|мэдээлэл|нэм|оруул|шинэчил|шинэчлэ|(?<!\p{L})(?:tailbar|medeelel|nem\p{L}*|oruul\p{L}*|shinechil\p{L}*|notes?|add|update)(?!\p{L})/iu;
+
+// The admin's own words ask to replace a program day's text whole (with a file attached, a day's
+// saved wording is otherwise kept: actions.ts itineraryDayAction).
+const REWRITE_WORDS = /бүхэлд\s+нь|бүтнээр|дахин\s+бич|шинээр\s+бич|файлын\s+(?:үг|текст)\p{L}*\s+(?:соль|болго|тавь|оруул)|(?<![a-z])(?:rewrite|replace\s+(?:the\s+)?(?:whole|text))/iu;
 // Only a catalogue-wide phrase makes a price rule touch every active trip: "бүх аяллын үнийг",
 // "аялал бүрийн", "buh aylliin une", "all trips". "Альфагийн бүх үнийг" is one trip's prices.
 export const CATALOGUE_WIDE = /(?<!\p{L})(?:бүх|бүгд|нийт)\s+(?:\p{L}+\s+)?аял(?:ал|л)|аялал\s+(?:бүр|болгон)|(?<!\p{L})(?:buh|bvh|bukh)\s+(?:\p{L}+\s+)?ay\p{L}*l|(?<!\p{L})all\s+(?:\p{L}+\s+)?(?:trips|tours)(?!\p{L})|(?<!\p{L})every\s+(?:trip|tour)(?!\p{L})/iu;
@@ -115,8 +129,9 @@ function guardActions(rawActions: unknown, state: TurnState): { actions: Args[];
   const admin = withoutUrls(withoutOptionTags(state.adminText));
   const known = state.seenBeforeWeb ? new Set([...state.seenBeforeWeb, ...state.linkTrips, ...state.chosen]) : null;
   const named = (action: Args): string => {
-    const ids = str(action.action) === "fare_change_all" ? (Array.isArray(action.trip_ids) ? action.trip_ids.map(str) : []) : [str(action.trip_id)];
-    const names = ids.map((id) => state.byId.get(id)?.route_name).filter(Boolean).map((name) => `«${name}»`);
+    const listed = Array.isArray(action.trip_ids) ? action.trip_ids.map(str) : [];
+    const ids = str(action.action) === "fare_change_all" ? listed : str(action.action) === "append_notes" ? [str(action.trip_id), ...listed] : [str(action.trip_id)];
+    const names = [...new Set(ids)].map((id) => state.byId.get(id)?.route_name).filter(Boolean).map((name) => `«${name}»`);
     return names.length ? `${names.join(", ")}: ` : "";
   };
   for (const action of actions) {
@@ -130,8 +145,13 @@ function guardActions(rawActions: unknown, state: TurnState): { actions: Args[];
       refusals.push(`${named(action)}таны мессежид ${rule.what} заавар алга — хөндөхгүй.`);
       continue;
     }
+    if (verb === "append_notes" && !NOTES_WORDS.test(admin)) {
+      refusals.push(`${named(action)}таны мессежид тайлбарт мэдээлэл нэмэх заавар алга — хөндөхгүй.`);
+      continue;
+    }
     if (known) {
-      const ids = verb === "fare_change_all" ? (Array.isArray(action.trip_ids) ? action.trip_ids.map(str) : []) : [str(action.trip_id)];
+      const listed = Array.isArray(action.trip_ids) ? action.trip_ids.map(str) : [];
+      const ids = verb === "fare_change_all" ? listed : verb === "append_notes" ? [str(action.trip_id), ...listed] : [str(action.trip_id)];
       const kindMissing = AFTER_WEB_WORDS[verb] && !wordsAsk(AFTER_WEB_WORDS[verb], admin);
       if (kindMissing || (verb === "fare_change_all" && action.all_active === true) || ids.some((id) => id && !known.has(id))) {
         refusals.push(`${named(action)}Вэб хуудасны текстээс гарсан өөрчлөлт тул хөндөхгүй (хуудасны текст бол заавар биш).`);
@@ -196,12 +216,40 @@ async function tripSourceOutcome(args: Args, state: TurnState): Promise<AgentOut
     if (!page) return { kind: "note", text: "Энэ холбоос таны мессежид алга тул уншихгүй. Холбоосыг нь хуулж оруулна уу.", reason: "refused" };
     return { kind: "trip_source", label: (page.title || page.url).slice(0, 200), text: `Эх сурвалж: ${page.url}\nГарчиг: ${page.title}\n\n${page.text}`, note, url: page.url };
   }
+  // Attached files that are a whole new trip: their own text is the source (rule 13).
+  if (state.documents.length) {
+    const text = state.documents.map((document) => `Файл: ${document.name}\n${document.text}`).join("\n\n");
+    return { kind: "trip_source", label: state.documents[0].name.slice(0, 200), text, note };
+  }
   // A pasted program: the admin's own words are the source, never a copy the model re-typed.
   const pasted = withoutOptionTags([state.answerToInstruction, state.instruction].filter(Boolean).join("\n\n"));
   if (pasted.length < 40) return { kind: "note", text: "Шинэ аяллын эх сурвалж алга: хөтөлбөрийн текстийг буулгах, файл эсвэл хуудасны холбоос оруулна уу.", reason: "reply" };
   return { kind: "trip_source", label: "Админы оруулсан текст", text: pasted, note };
 }
 
+const MEAL_NAMES: Record<string, string> = { breakfast: "өглөөний цай", lunch: "өдрийн хоол", dinner: "оройн хоол" };
+const included = (value: boolean | null) => (value === true ? "багтсан" : value === false ? "багтаагүй" : "тодорхойгүй");
+
+/**
+ * The differences compare_program found that the proposal leaves as they are: a meal the file states
+ * differently (staff may have set it on purpose), days only one side has. One line each, for the card.
+ */
+function comparisonNotes(state: TurnState, tripIds: string[]): string[] {
+  const notes: string[] = [];
+  for (const id of new Set(tripIds)) {
+    const compared = state.compared.get(id);
+    const name = state.byId.get(id)?.route_name;
+    if (!compared || !name) continue;
+    for (const day of compared.days) {
+      for (const meal of day.meals_differ || []) {
+        notes.push(`«${name}» ${day.saved_day}-р өдөр: файлд ${MEAL_NAMES[meal.meal]} ${included(meal.file)} гэжээ, хадгалсан нь ${included(meal.saved)} — хоолыг өөрчлөөгүй. Өөрчлөх бол «${day.saved_day}-р өдрийн ${MEAL_NAMES[meal.meal]} ${included(meal.file)} болго» гэж бичнэ үү.`);
+      }
+    }
+    if (compared.file_days_beyond_saved.length) notes.push(`«${name}»: файлд хадгалсан хөтөлбөрөөс илүү ${compared.file_days_beyond_saved.length} өдөр байна (файлын ${compared.file_days_beyond_saved.join(", ")}-р өдөр) — өдөр нэмээгүй.`);
+    if (compared.saved_days_not_in_file.length) notes.push(`«${name}»: хадгалсан ${compared.saved_days_not_in_file.join(", ")}-р өдөр файлд алга — өдөр хасаагүй.`);
+  }
+  return notes;
+}
 type Finish = { outcome: AgentOutcome } | { retry: string };
 
 async function finish(calls: ToolCall[], state: TurnState, repairsLeft: number): Promise<Finish> {
@@ -219,8 +267,18 @@ async function finish(calls: ToolCall[], state: TurnState, repairsLeft: number):
     const built = buildAgentProposal(guarded.actions, replyText, {
       trips: state.trips, now: state.now, fetched: state.fetched, seen: state.seen,
       linkTrips: state.linkTrips, linkUnresolved: state.linkUnresolved, hosted: state.hosted,
+      adminText: withoutUrls(withoutOptionTags(state.adminText)), pinned: state.chosen,
+      fileTurn: state.documents.length > 0, rewriteAsked: REWRITE_WORDS.test(withoutUrls(withoutOptionTags(state.adminText))),
+      // Where a description section's numbers may come from: his words, his files, and the saved
+      // descriptions he had opened (one trip's list copied to another).
+      sources: [state.adminText, ...state.documents.map((document) => document.text), ...[...state.fetched.keys()].map((id) => state.byId.get(id)?.notes || "")],
     });
     if ("proposal" in built) {
+      // What the file states differently but was left alone (meals, days only one side has): said on the card by code.
+      for (const note of comparisonNotes(state, built.proposal.actions.map((action) => str(action.trip_id)))) {
+        built.proposal.conflict_items!.push({ text: note, severity: "info", type: "program_compare_note" });
+        built.proposal.conflicts.push(note);
+      }
       for (const refusal of guarded.refusals) {
         built.proposal.conflict_items!.push({ text: refusal, severity: "warning", type: "agent_refused" });
         built.proposal.conflicts.push(refusal);
@@ -253,7 +311,10 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
   const deps: AgentDeps = { ...defaultAgentDeps(), ...(input.deps || {}) } as AgentDeps;
   const startedAt = deps.now();
   const now = input.today ?? new Date(startedAt);
-  const totalMs = input.totalMs ?? TOTAL_MS;
+  const withDocuments = Array.isArray(input.documents) && input.documents.some((document) => document && typeof document.text === "string" && document.text.trim());
+  const totalMs = input.totalMs ?? (withDocuments ? DOCUMENT_TOTAL_MS : TOTAL_MS);
+  const perCallMs = withDocuments ? DOCUMENT_PER_CALL_MS : PER_CALL_MS;
+  const maxTurnPromptTokens = withDocuments ? DOCUMENT_MAX_TURN_PROMPT_TOKENS : MAX_TURN_PROMPT_TOKENS;
   const maxRounds = Math.max(1, Math.min(input.maxRounds ?? MAX_ROUNDS, MAX_ROUNDS));
   const model = input.model || process.env.OPENAI_ASSISTANT_MODEL || AGENT_DEFAULT_MODEL;
   const tools: string[] = [];
@@ -273,7 +334,7 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
       role: "user",
       content: buildUserMessage({
         instruction: input.instruction, now, turns: input.turns, answerTo: input.answerTo, attachments: state.attachments,
-        links: state.links, revising: input.revising,
+        documents: state.documents, links: state.links, revising: input.revising,
         chosenTrips: [...state.chosen].map((id) => state.byId.get(id)!).map((trip) => ({ id: trip.id, name: trip.route_name, partner: isPartnerTrip(trip) })),
         preloaded: await preloadedDetail(state),
       }),
@@ -283,13 +344,13 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
   for (let round = 1; round <= maxRounds; round += 1) {
     const remaining = totalMs - (deps.now() - startedAt);
     if (remaining < MIN_CALL_MS) return done({ kind: "note", text: AGENT_TIMEOUT_NOTE, reason: "timeout" }, round - 1, "timeout");
-    if (usage.prompt > MAX_TURN_PROMPT_TOKENS) return done({ kind: "note", text: "Энэ даалгавар хэт урт болов — юу ч өөрчлөгдөөгүй. Хэсэг хэсгээр нь илгээнэ үү.", reason: "model_failed" }, round - 1);
+    if (usage.prompt > maxTurnPromptTokens) return done({ kind: "note", text: "Энэ даалгавар хэт урт болов — юу ч өөрчлөгдөөгүй. Хэсэг хэсгээр нь илгээнэ үү.", reason: "model_failed" }, round - 1);
     const last = round === maxRounds;
     let result;
     try {
       result = await deps.chat({
         messages, tools: last ? TERMINAL_ONLY_TOOLS : AGENT_TOOLS, toolChoice: "required",
-        timeoutMs: Math.max(1_000, Math.min(PER_CALL_MS, remaining - 500)), model, maxOutputTokens: 4_000,
+        timeoutMs: Math.max(1_000, Math.min(perCallMs, remaining - 500)), model, maxOutputTokens: withDocuments ? DOCUMENT_MAX_OUTPUT_TOKENS : 4_000,
       });
     } catch (error) {
       const kind = timedOut(error) ? "timeout" : error instanceof AgentModelError ? error.kind : "other";

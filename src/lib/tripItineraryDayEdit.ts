@@ -64,7 +64,11 @@ export function planItineraryDay(trip: TravelTrip, input: ItineraryDayInput): { 
     next.title = patch.title;
   }
   if ("description" in patch && patch.description !== text(current.description)) {
-    lines.push(`${prefix}: тайлбар шинэчлэгдэнэ («${clip(String(patch.description), 80)}»)`);
+    // Text added after what is already there is shown as what it adds; the card says "everything else stays".
+    const before = text(current.description);
+    const after = String(patch.description);
+    const added = before && after.startsWith(before) ? after.slice(before.length).trim() : "";
+    lines.push(added ? `${prefix}: тайлбарын төгсгөлд нэмнэ «${clip(added, 220)}»` : `${prefix}: тайлбар шинэчлэгдэнэ («${clip(after, 80)}»)`);
     next.description = patch.description;
   }
   if ("hotel" in patch && patch.hotel !== text(current.hotel)) {

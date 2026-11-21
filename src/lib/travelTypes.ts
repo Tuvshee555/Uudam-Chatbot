@@ -108,7 +108,7 @@ export type FareAmount = { set: number } | { delta: number };
 export type DayMealsPatch = { breakfast?: boolean | null; lunch?: boolean | null; dinner?: boolean | null };
 
 /** Verbs that change one part of one existing trip, planned in code from the trip itself. */
-export const TRIP_EDIT_VERBS = ["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo"] as const;
+export const TRIP_EDIT_VERBS = ["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "append_notes"] as const;
 export type TripEditVerb = (typeof TRIP_EDIT_VERBS)[number];
 
 export type AITripAction = {
@@ -116,8 +116,8 @@ export type AITripAction = {
    * upsert/patch/cancel edit the trip record. set_date_state changes ONE departure day's
    * availability on the website (date + state), delete archives the trip (hidden from the
    * website and the bot, the record and its history kept, restorable by rollback).
-   * set_date_price / set_visibility / patch_itinerary_day / set_age_bands / replace_photo
-   * change exactly one part of one trip (see src/lib/tripActionPlan.ts). fare_change_all is
+   * set_date_price / set_visibility / patch_itinerary_day / set_age_bands / replace_photo /
+   * append_notes change exactly one part of one trip (see src/lib/tripActionPlan.ts). fare_change_all is
    * a rule over many trips; it is expanded into one patch per trip before it is proposed
    * (expandFareChangeAll), never applied as it is.
    */
@@ -183,6 +183,9 @@ export type AITripAction = {
   new_url?: string;
   /** replace_photo: remove the photo instead of replacing it. */
   remove?: boolean;
+  /** append_notes: the heading of the section added to the trip's description, and its lines (tripNotesAppend.ts). */
+  heading?: string;
+  text?: string;
   /** fare_change_all: the fare rule (as applyFareChange takes it) and which trips. */
   change?: { adult?: { set?: number; delta?: number; belowAdult?: number }; child?: { set?: number; delta?: number; belowAdult?: number }; infant?: { set?: number; delta?: number; belowAdult?: number }; everyone?: number };
   filter?: { trip_ids?: string[]; all_active?: boolean };

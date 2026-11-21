@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   RELOAD_DURING_DIRECT_SAVE_TEXT, RELOAD_DURING_SAVE_TEXT, THREAD_TTL_MS, agentProgressStages, answerToOf, attachmentRoute, displayText,
-  instructionBody, isPhotoInstruction, isSaveLocked, openAskOf, proposalMessage, replyCaption, replyMetaOf, replyToMessage, restoreThread,
+  instructionBody, isPhotoInstruction, isSaveLocked, isSavedTripInstruction, openAskOf, proposalMessage, replyCaption, replyMetaOf, replyToMessage, restoreThread,
   serializeThread, stageAt, unlockSave,
 } from "../src/components/admin/assistantChatLogic";
 import type { AssistantAskMsg, AssistantChatMessage, AssistantProposalMsg } from "../src/components/admin/assistantChatTypes";
@@ -217,4 +217,40 @@ test("save: a long save is waited for past the route's limit, and every answer r
   assert.match(applyOutcome(null, {}, { stored: false }).text, /Давхар хадгалахгүй/, "an unsaved proposal is never saved twice blindly");
   assert.equal(applyOutcome(409, { ok: false, retry: true, results: ["Үнэ дутуу"] }).kind, "retry");
   assert.deepEqual(applyOutcome(409, { ok: false, results: ["«A» өөрчлөгдсөн байна"] }), { kind: "failed", text: "«A» өөрчлөгдсөн байна" });
+});
+
+test("files sent with words about a SAVED trip go to the agent as text; new trips and price lists keep the file reader", () => {
+  const word = file("program.doc", "application/msword");
+  const sheet = file("extras.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  // A restore, added information, a named program: about a saved trip whatever the file is.
+  for (const words of [
+    "«Вэлмор» аяллыг сэргээ, огноо нь зурган дээр байгаа", "Вэлмор аяллыг идэвхжүүл: 12/5, 12/12-нд гарна, том хүн 1,590,000",
+    "энэ бол хоёр эрүүл мэндийн аяллын нэмэлт мэдээлэл, хоёуланд нь оруул", "энэ жагсаалтыг «Вэлмор» аяллын тайлбарт нэм",
+    "«Вэлмор» аялалд энэ огноонуудыг нэм", "Вэлмор аялалд 12/5, 12/12 гэсэн гаралт нэм", "одоо байгаа Вэлмор аяллын мэдээллийг энэ файлаар засаарай",
+    "«Вэлмор» аяллын хөтөлбөрийг энэ зургаар шинэчил", "velmor aylliig sergee", "nemelt medeelel bolgoj 2 ayland oruul", "velmor ayliin hutulbur shinechil",
+  ]) {
+    assert.equal(isSavedTripInstruction(words, [photoA]), true, words);
+    assert.equal(attachmentRoute(words, [photoA]).kind, "agent_files", words);
+  }
+  // A plain "шинэчил" is about a saved trip when a document is sent and no price is named.
+  assert.equal(attachmentRoute("«Вэлмор» аяллыг энэ файлаар шинэчил", [word]).kind, "agent_files");
+  assert.equal(attachmentRoute("update the Velmor trip with this file", [word, photoA]).kind, "agent_files");
+  assert.equal(attachmentRoute("«Вэлмор» аяллыг энэ файлаар шинэчил", [photoA]).kind, "files", "a photo alone is a poster or price list to read");
+  assert.equal(attachmentRoute("«Вэлмор» аяллын үнийг энэ файлаар шинэчил", [sheet]).kind, "files", "a price list updates every trip it names: the reader's job");
+  // A new trip is a new trip, whatever else is said; no words, no saved trip.
+  for (const words of ["Солонгос аялал нэм", "энэ файлыг шинэ аялал болгон нэм", "шинээр нэм, хуучин аяллыг бүү хөнд", "энэ аяллыг манай аяллуудад нэм", "shine aylal nem", "", "энэ юу вэ"]) {
+    assert.equal(isSavedTripInstruction(words, [word]), false, words);
+    assert.equal(attachmentRoute(words, [word]).kind, "files", words);
+  }
+  assert.equal(attachmentRoute("«Вэлмор» аяллыг сэргээ", []).kind, "none", "no file, a typed instruction as always");
+
+  const many = Array.from({ length: 8 }, (_, index) => file(`f${index}.doc`, "application/msword"));
+  const capped = attachmentRoute("эдгээр файлаар аяллуудыг сэргээ", many);
+  assert.ok(capped.kind === "agent_files" && capped.files.length === 6 && capped.skipped === 2, "at most six files per instruction");
+
+  const body = instructionBody({
+    instruction: "«Вэлмор» аяллыг энэ файлаар шинэчил", sessionId: "s-1",
+    documents: [{ name: "program.doc", text: "1 дэх өдөр …" }, { name: "empty.doc", text: "  " }],
+  });
+  assert.deepEqual(body, { instruction: "«Вэлмор» аяллыг энэ файлаар шинэчил", session_id: "s-1", documents: [{ name: "program.doc", text: "1 дэх өдөр …" }] }, "only files with text travel");
 });

@@ -362,3 +362,11 @@ Full results: `docs/chatbot-accuracy-cost-report-2026-11.md`. Still open after t
   now ignores a fact whose evidence is the whole question or a hotel property with no property word, and a
   topic only the model read; a partial-span flag still hands off. Watch `answer_plan` hand-offs with
   `other.unsupported` after deploying.
+
+## P2-8 — A verb that sounds like a place is echoed as a place in a list headline — OPEN (seen 2026-11-21)
+
+A question that names a place and then says "… ордог … аялал" (a trip "that goes to" it) gets the right
+list, but the headline counts the verb as a second place when it sounds like the place before it
+("<Place>, Ордог чиглэлд аялах боломжтой аяллууд"). The trips listed and their prices are right; only the
+headline wording is off. Seen in a local replay on the live catalogue (mock model) while checking new
+trips; not fixed in that change because it is reply wording (needs `npm run gate` and one `qa:live` run).

@@ -179,6 +179,17 @@ function isOfficeDocFile(file: File): boolean {
   return /\.(xlsx|xlsm|xls|docx)$/i.test(file.name.trim());
 }
 
+/** A Word 97–2003 .doc: no browser reader exists, so the server reads it (fileParse legacyDocToText). */
+function isLegacyWordFile(file: File): boolean {
+  return /\.doc$/i.test(file.name.trim()) || file.type === "application/msword";
+}
+
+/**
+ * The largest .doc sent whole: its base64 must stay under the parse route's 4.5 MB body (Vercel's cap). Partner
+ * programs with their photos run 1–2 MB; until 2026-11-21 any file over 850 KB that no reader knew was skipped.
+ */
+const LEGACY_DOC_MAX_BYTES = 3_200_000;
+
 function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
   let binary = "";
   const chunkSize = 0x8000;
@@ -1806,7 +1817,7 @@ export {
   fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage,
   getTestBotConversationId, handoffDurationSelectValue, isEditableElement,
   isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure,
-  isZipFile,
+  isZipFile, isLegacyWordFile, LEGACY_DOC_MAX_BYTES,
   settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows,
   uid,
 };

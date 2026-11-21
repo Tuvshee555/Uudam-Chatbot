@@ -7,7 +7,7 @@
 import {
   MAX_PARSE_UPLOAD_BYTES, apiErrorMessage, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits,
   buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl,
-  groupDocumentWithImages, isImageFile, isOfficeDocFile, isPdfFile, isStaleBundleError, isTextLikeFile,
+  groupDocumentWithImages, isImageFile, isLegacyWordFile, isOfficeDocFile, isPdfFile, isStaleBundleError, isTextLikeFile, LEGACY_DOC_MAX_BYTES,
   isTransientAiFailure, isZipFile, mergeAIProposals, shortId, STALE_BUNDLE_MESSAGE,
 } from "@/lib/adminPageUtils";
 import type { AIProposal, AIProposalResponse, AttachedFile, ParseUploadUnit } from "@/lib/adminTypes";
@@ -127,7 +127,14 @@ export function createFileParser({ fetchWithAdmin, readJsonSafe, toastError, set
         else if (isTextLikeFile(file.file)) uploadUnits.push(...(await buildTextUploadUnits(file.file)));
         else if (isImageFile(file.file)) uploadUnits.push(await buildImageUploadUnit(file.file));
         else if (isZipFile(file.file)) uploadUnits.push(...(await buildZipImageUploadUnits(file.file)));
-        else {
+        else if (isLegacyWordFile(file.file)) {
+          // A partner's .doc goes whole; the server reads it (fileParse.ts). Too big to send, say what to do.
+          if (file.file.size > LEGACY_DOC_MAX_BYTES) {
+            skippedFiles.push(`${file.name}: .doc файл ${(file.file.size / 1_048_576).toFixed(1)} MB тул шууд уншиж чадахгүй — Word дээр нээгээд .docx эсвэл PDF болгож хадгалаад дахин оруулна уу.`);
+            continue;
+          }
+          uploadUnits.push({ displayName: file.name, filename: file.name, mimeType: "application/msword", dataUrl: await fileToDataUrl(file.file) });
+        } else {
           if (file.file.size > MAX_PARSE_UPLOAD_BYTES) {
             skippedFiles.push(file.name);
             continue;

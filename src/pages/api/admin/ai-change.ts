@@ -11,7 +11,8 @@ import { answeredInstruction, generateAssistantReply, reviseStoredProposal } fro
 import { logAssistantEvent, recentAssistantTurns } from "../../../lib/assistantLog";
 import { EXPIRED_PROPOSAL_MESSAGE, expireStaleProposals, loadChangeRequest } from "../../../lib/assistantAgent/requests";
 import { parseOpenProposals } from "../../../lib/assistantAgent/openProposals";
-import type { AgentAttachment, AnswerTo } from "../../../lib/assistantAgent/types";
+import type { AgentAttachment, AgentDocument, AnswerTo } from "../../../lib/assistantAgent/types";
+import { turnDocuments } from "../../../lib/assistantAgent/turn";
 import { createQuickProposal, type QuickActionRequest } from "../../../lib/assistantQuickActions";
 import {
   beginRequestTrace,
@@ -45,6 +46,11 @@ function parseAttachments(value: unknown): AgentAttachment[] {
     return typeof url === "string" && /^https:\/\/\S+$/.test(url.trim()) && url.length <= 2_048 && (kind === undefined || kind === "image")
       ? [{ url: url.trim(), kind: "image" as const }] : [];
   }).slice(0, MAX_ATTACHMENTS);
+}
+
+/** `documents: [{name, text}]`: files sent with an instruction about saved trips, already read as text (/api/admin/file-text). */
+function parseDocuments(value: unknown): AgentDocument[] {
+  return turnDocuments(value);
 }
 
 /** `answer_to: {id?, question, instruction?}`: the open question a typed answer belongs to (echoed from the ask). */
@@ -103,6 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       req.body || {};
     const answerTo = parseAnswerTo(req.body?.answer_to);
     const attachments = parseAttachments(req.body?.attachments);
+    const documents = parseDocuments(req.body?.documents);
     const resultText = (result: { results?: unknown; message?: unknown }) =>
       Array.isArray(result.results) ? result.results.join(" • ") : String(result.message || "");
 
@@ -194,9 +201,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     void expireStaleProposals();
     const turns = await recentAssistantTurns(session_id);
     await logAssistantEvent({ sessionId: session_id, role: "admin", kind: answerTo ? "clarification" : "instruction",
-      text: [answerTo ? `(хариулт: ${answerTo.question.slice(0, 200)})` : "", trimmedInstruction, attachments.length ? `[${attachments.length} зураг]` : ""].filter(Boolean).join(" ") });
+      text: [answerTo ? `(хариулт: ${answerTo.question.slice(0, 200)})` : "", trimmedInstruction, attachments.length ? `[${attachments.length} зураг]` : "",
+        documents.length ? `[файл: ${documents.map((document) => document.name).join(", ").slice(0, 300)}]` : ""].filter(Boolean).join(" ") });
     const openProposals = parseOpenProposals(req.body?.open_proposals);
-    const reply = await generateAssistantReply(trimmedInstruction, { turns, answerTo, attachments, openProposals });
+    const reply = await generateAssistantReply(trimmedInstruction, { turns, answerTo, attachments, documents, openProposals });
     if (reply.kind === "ask") {
       // One question with real choices (which trip, which day, which amount); nothing is saved yet.
       // answer_to is what the page sends back with a TYPED answer, so it is read as the answer.

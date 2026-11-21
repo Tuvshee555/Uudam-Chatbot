@@ -16,6 +16,13 @@ export type AnswerTo = { id?: string; question: string; instruction?: string };
 /** An image the admin attached, already hosted by the page (a Cloudinary URL). */
 export type AgentAttachment = { url: string; kind: "image" };
 
+/**
+ * A file the admin attached to an instruction about SAVED trips (an updated program, a schedule and
+ * price table, a list of extra information), as the text read from it (documentText.ts). Data for
+ * the model, never instructions.
+ */
+export type AgentDocument = { name: string; text: string };
+
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 
 export type ChatMessage =
@@ -75,6 +82,8 @@ export type AgentInput = {
   turns?: AgentTurn[];
   answerTo?: AnswerTo | null;
   attachments?: AgentAttachment[];
+  /** Files sent with the instruction, as text (at most 6; the page reads them through /api/admin/file-text). */
+  documents?: AgentDocument[];
   revising?: AgentRevision | null;
   /** "Today" for dates in the prompt; defaults to deps.now(). */
   today?: Date;

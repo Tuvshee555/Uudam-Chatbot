@@ -248,8 +248,12 @@ export function applyTransport(fields: Row, transport: TransportType): { fields:
   // On a second pass `duration_text` already holds the door-to-door length: count the program's days instead.
   const generated = input.filter(isTransitDay).length;
   const written = text(fields.duration_text);
-  const programDuration = text(extra.program_duration_text)
+  const stated = text(extra.program_duration_text)
     || (generated > 0 && Number(/(\d+)\s*өдөр/i.exec(written)?.[1]) === input.length ? durationForDays(input.length - generated).duration_text : written);
+  // The program's own length is what its days count: a 6-day file once came back as "7 өдөр 6 шөнө" (2026-11-21),
+  // and the review said "the file's 7 days plus the train days make 7 days".
+  const statedDays = Number(/(\d+)\s*өдөр/i.exec(stated)?.[1]);
+  const programDuration = built.added > 0 && programDays > 0 && statedDays > 0 && statedDays !== programDays ? durationForDays(programDays).duration_text : stated;
   const duration = built.added > 0 ? durationForDays(built.days.length) : null;
   const next: Row = {
     ...fields,

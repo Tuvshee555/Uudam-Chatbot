@@ -277,7 +277,7 @@ export function AssistantTab({
       : stepPhase === "value" ? "Үлдсэн суудлын тоо…"
         : "Дээрх сонголтоос нэгийг нь дарна уу"
     : openAsk ? (openAsk.customPlaceholder || "Хариултаа бичээрэй…")
-      : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй (ж: «3-р өдрийн зургийг соль»)…" : "Юуг өөрчлөх вэ? Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй…";
+      : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй (ж: «шинэ аялал болгон нэм», «… аяллын хөтөлбөрийг энэ файлаар шинэчил»)…" : "Юуг өөрчлөх вэ? Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй…";
 
   useEffect(() => {
     const input = inputRef.current;
@@ -454,7 +454,7 @@ export function AssistantTab({
         )}
 
         {busy && (
-          <div className="mx-auto mt-4 flex w-full max-w-6xl justify-start">
+          <div data-assistant-busy="" className="mx-auto mt-4 flex w-full max-w-6xl justify-start">
             {progress != null ? (
               <FileProgress label={busyLabel} reported={Math.round(progress)} />
             ) : busyStages?.some((stage) => stage.long) ? (

@@ -62,10 +62,50 @@ export function isImageAttachment(file: Pick<AttachedFile, "name" | "mimeType">)
   return mime.startsWith("image/") || /\.(png|jpe?g|webp|gif|heic|heif)$/i.test(String(file.name || "").trim());
 }
 
+/** The most files one instruction hands the agent as text (the route keeps six). */
+export const MAX_AGENT_FILES = 6;
+
+// An instruction about trips ALREADY saved, sent with files. The files then go to the agent as
+// text and it proposes exact edits of those trips (assistantAgent rule 13). Until 2026-11-21 a
+// document always made a NEW trip, so a partner's updated program, a schedule for an archived
+// trip or a price list of optional services could not be used on the trip it belonged to.
+// (No lookbehind, as above.)
+//
+// Always about a saved trip: bringing one back ("сэргээ", "идэвхжүүл"), adding information to
+// trips ("нэмэлт мэдээлэл", "тайлбарт нэм", "… аялалд нэм"), "одоо байгаа / хадгалсан аялал".
+const SAVED_TRIP_WORDS = new RegExp([
+  "сэргээ", "идэвхжүүл", "нэмэлт\\s+мэдээлэл", "мэдээл\\p{L}*\\s+(?:\\p{L}+\\s+){0,2}(?:нэм|оруул)", "тайлбар\\p{L}*\\s+(?:\\p{L}+\\s+){0,2}(?:нэм|оруул)",
+  "(?:аял(?:ал|л[аы])д|аялал\\s+(?:дээр|руу))\\s+(?:[\\p{L}\\d/.,-]+\\s+){0,5}(?:нэм|оруул)", "одоо\\s+байгаа", "хадгалсан\\s+аял", "хуучин\\s+аял",
+  "(?:^|[^a-z])(?:sergee[a-z]*|idevh?juul[a-z]*|nemelt\\s+medeelel|tailbar[a-z]*\\s+(?:nem|oruul)|ay?al[a-z]*d\\s+(?:[a-z\\d/.,-]+\\s+){0,5}(?:nem|oruul))",
+].join("|"), "iu");
+// "Шинэчил", "update": about a saved trip when a program is named ("хөтөлбөрийг шинэчил"), or when a
+// document (Word, Excel, PDF) is sent and no price is mentioned. A photo, or a price list with "үнийг
+// шинэчил", stays with the file reader, which updates the prices of every trip a list names.
+const UPDATE_WORDS = /шинэчил|шинэчлэ|(?:^|[^a-z])(?:update|shinechil[a-z]*|shinechle[a-z]*)/iu;
+const PROGRAM_WORDS = /хөтөлбөр|(?:^|[^a-z])(?:hutulbur|khutulbur|hotolbor|program(?:me)?)/iu;
+const PRICE_LIST_WORDS = /үн[эи]|прайс|ханш|(?:^|[^a-z])(?:un(?:e|ii|iig|eer)|prices?|rates?)(?![a-z])/iu;
+// "Шинэ аялал болгон нэм", "шинээр нэм", "манай аяллуудад нэм": a new trip, whatever else is said.
+const NEW_TRIP_WORDS = /шинэ\s+аял\p{L}*\s+(?:болгон\s+)?(?:нэм|үүсг|оруул)|шинээр\s+(?:нэм|үүсг|оруул)|манай\s+аял\p{L}*\s+(?:нэм|оруул)|shine\s+ay?al[a-z]*\s+(?:bolgon\s+)?(?:nem|uusg)|shineer\s+(?:nem|uusg)/iu;
+
+/**
+ * True when the words sent with files are about trips already saved: a restore, added
+ * information, or an update (see above). `files` decides the plain "шинэчил" case.
+ */
+export function isSavedTripInstruction(text: string, files: Array<Pick<AttachedFile, "name" | "mimeType">> = []): boolean {
+  const words = String(text || "");
+  if (!words.trim() || NEW_TRIP_WORDS.test(words)) return false;
+  if (SAVED_TRIP_WORDS.test(words)) return true;
+  if (!UPDATE_WORDS.test(words)) return false;
+  if (PROGRAM_WORDS.test(words)) return true;
+  return !PRICE_LIST_WORDS.test(words) && files.some((file) => !isImageAttachment(file));
+}
+
 export type AttachmentRoute =
   | { kind: "none" }
   /** Photos with an explicit photo edit: hosted first, then sent to the agent with the text. */
   | { kind: "agent_images"; images: AttachedFile[]; skipped: number }
+  /** Files with an instruction about saved trips: read as text, then sent to the agent with the words. */
+  | { kind: "agent_files"; files: AttachedFile[]; skipped: number }
   /** Documents, mixed files, or images with anything else (or nothing) said: the file → trip reader. */
   | { kind: "files" };
 
@@ -74,6 +114,9 @@ export function attachmentRoute(text: string, files: AttachedFile[]): Attachment
   const allImages = files.every(isImageAttachment);
   if (allImages && String(text || "").trim() && isPhotoInstruction(text)) {
     return { kind: "agent_images", images: files.slice(0, MAX_AGENT_IMAGES), skipped: Math.max(0, files.length - MAX_AGENT_IMAGES) };
+  }
+  if (isSavedTripInstruction(text, files)) {
+    return { kind: "agent_files", files: files.slice(0, MAX_AGENT_FILES), skipped: Math.max(0, files.length - MAX_AGENT_FILES) };
   }
   return { kind: "files" };
 }
@@ -112,14 +155,18 @@ export function instructionBody(input: {
   sessionId: string;
   answerTo?: AnswerToRef | null;
   attachments?: AssistantAttachment[];
+  /** Files read as text (/api/admin/file-text), for an instruction about saved trips. */
+  documents?: Array<{ name: string; text: string }>;
   openProposals?: OpenProposalRef[];
 }): Record<string, unknown> {
   const attachments = (input.attachments || []).filter((item) => /^https:\/\//.test(item.url)).slice(0, MAX_AGENT_IMAGES);
+  const documents = (input.documents || []).filter((item) => item.text.trim()).slice(0, MAX_AGENT_FILES);
   return {
     instruction: input.instruction,
     session_id: input.sessionId,
     ...(input.answerTo?.question ? { answer_to: input.answerTo } : {}),
     ...(attachments.length ? { attachments: attachments.map((item) => ({ url: item.url, kind: "image" as const })) } : {}),
+    ...(documents.length ? { documents: documents.map((item) => ({ name: item.name, text: item.text })) } : {}),
     ...(input.openProposals?.length ? { open_proposals: input.openProposals } : {}),
   };
 }

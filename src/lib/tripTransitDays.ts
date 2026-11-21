@@ -62,6 +62,8 @@ export const STANDARD_DAYS = {
   },
   /** Closes a partner's last day that already reaches Erenhot that day. */
   borderOutboundSameDay: "Эрээнд ирээд хил гаалиар гарч Замын-Үүдэд ирнэ.\n18.00 цагт хөдлөх Замын-Үүд УБ чиглэлийн галт тэргэнд сууна.",
+  /** Closes a last day that crosses the border itself ("13:00 – Замын-Үүд хил гарах"): only the train is missing. */
+  trainHome: "18.00 цагт хөдлөх Замын-Үүд УБ чиглэлийн галт тэргэнд сууна.",
   arrival: {
     title: "УЛААНБААТАР ХОТ",
     description: "Өглөө 09.20 цагт Улаанбаатарт ирснээр манай аялал өндөрлөнө.",
@@ -76,6 +78,9 @@ const FLIGHT = /нис|онгоц|airport|flight|хөөрнө|газардана
 const TRAIN_OR_LAND = /галт тэрэг|замын[ -]?үүд|эрээн|erenhot|zamyn|автобус|газраар|газрын|хил гаал/i;
 const UB_AIRPORT = /чингис\s*хаан|улаанбаатар(?:аас|ын)?[^.]{0,40}нис|нис[^.]{0,40}улаанбаатар/i;
 const ERENHOT = /эрээн|erenhot/i;
+// The day leaves China through the border by its own words.
+const CROSSES_OUT = /хил\s*(?:гаал\S*\s*)?гар|замын[ -]?үүд\S*\s+(?:хил\s+)?(?:гар|ир|ор)/i;
+const HOME_CITY = /улаанба+тар|улаан\s*баатар/i;
 
 const text = (value: unknown) => (typeof value === "string" ? value : "").trim();
 const same = (a: string, b: string) => a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
@@ -148,6 +153,7 @@ export function stripStandardTransitDays(days: ItineraryDay[]): ItineraryDay[] {
       title = title.replace(/^ЗАМЫН ҮҮД – /, "");
     }
     if (description.endsWith(STANDARD_DAYS.borderOutboundSameDay)) description = description.slice(0, -STANDARD_DAYS.borderOutboundSameDay.length).replace(/\s*\n?$/, "");
+    else if (description.endsWith(STANDARD_DAYS.trainHome)) description = description.slice(0, -STANDARD_DAYS.trainHome.length).replace(/\s*\n?$/, "");
     if (description.startsWith(STANDARD_DAYS.flightDeparture)) description = description.slice(STANDARD_DAYS.flightDeparture.length).trim();
     if (description.endsWith(STANDARD_DAYS.flightArrival)) description = description.slice(0, -STANDARD_DAYS.flightArrival.length).trim();
     return { ...day, title, description };
@@ -180,7 +186,8 @@ export function withStandardTransitDays(input: ItineraryDay[], transport: Transp
     const last = days[days.length - 1];
     if (!itineraryEndsInUlaanbaatar(last)) {
       if (ERENHOT.test(dayText(last))) {
-        last.description = `${text(last.description)}\n${STANDARD_DAYS.borderOutboundSameDay}`.trim();
+        // A day that already crosses the border ("13:00 – Замын-Үүд хил гарах") only lacks its train.
+        last.description = `${text(last.description)}\n${CROSSES_OUT.test(dayText(last)) ? STANDARD_DAYS.trainHome : STANDARD_DAYS.borderOutboundSameDay}`.trim();
       } else {
         days.push({ ...STANDARD_DAYS.borderOutbound, meals: meals(true) });
         added += 1;
@@ -192,6 +199,22 @@ export function withStandardTransitDays(input: ItineraryDay[], transport: Transp
   return { days: days.map((day, index) => ({ ...day, day: index + 1 })), added };
 }
 
+/**
+ * The program without a last-day line that sends the group home to Ulaanbaatar by bus ("Автобусандаа
+ * сууж Улаанбаатар буцна"). Used when the admin says the trip rides the train: a partner's own-bus
+ * ending read as "the trip ends in Ulaanbaatar", so the house's return (the 18.00 train, the 09.20
+ * arrival) was never written and the trip came out a day short (a real file, 2026-11-21).
+ */
+export function withoutBusReturn(input: ItineraryDay[]): ItineraryDay[] {
+  if (!input.length) return input;
+  const days = input.map((day) => ({ ...day }));
+  const last = days[days.length - 1];
+  const pieces = text(last.description).match(/[^.!?\n]+[.!?]*[ \t]*|\n+/g) || [];
+  const kept = pieces.filter((piece) => !(HOME_CITY.test(piece) && /автобус/i.test(piece)));
+  if (kept.length === pieces.length) return input;
+  last.description = kept.join("").replace(/[ \t]+\n/g, "\n").trim();
+  return days;
+}
 /** Door-to-door duration: every day counts, the train nights included. */
 export function durationForDays(count: number): { duration_days: number; duration_nights: number; duration_text: string } {
   const nights = Math.max(0, count - 1);

@@ -246,6 +246,26 @@ async function docxToText(buffer: Buffer): Promise<string> {
 }
 
 /**
+ * Text of a Word 97–2003 .doc (an OLE compound file, not a ZIP): the body, then any text boxes, where partner
+ * programs often keep a day's table. Partners send their programs as .doc; until 2026-11-21 the assistant
+ * refused them ("Энэ төрлийн файл дэмжигдэхгүй") and staff had to re-save each one as .docx by hand.
+ */
+async function legacyDocToText(buffer: Buffer): Promise<string> {
+  type Extracted = { getBody(): string; getTextboxes?(options?: { includeHeadersAndFooters?: boolean; includeBody?: boolean }): string };
+  let document: Extracted;
+  try {
+    const { default: WordExtractor } = await import("word-extractor") as { default: new () => { extract(source: Buffer): Promise<Extracted> } };
+    document = await new WordExtractor().extract(buffer);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`.doc файлыг нээж чадсангүй (${reason}). Word дээр нээгээд .docx эсвэл PDF болгож хадгалаад дахин оруулна уу.`);
+  }
+  const boxes = document.getTextboxes?.({ includeHeadersAndFooters: false, includeBody: true }) || "";
+  return [document.getBody(), boxes].map((part) => part.replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim())
+    .filter(Boolean).join("\n\n");
+}
+
+/**
  * The PDF's text layer, page by page, through pdf.js (the same engine the admin
  * page uses in the browser). pdf-parse 1.x bundled a 2018 pdf.js that rejected
  * PDFs with object streams, i.e. most files Word and Chrome write today, with
@@ -312,6 +332,7 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
     extension === "docx" ||
     mimeType ===
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const isLegacyWord = extension === "doc" || mimeType === "application/msword";
   const isCsv = extension === "csv" || mimeType === "text/csv";
   const isPdf = extension === "pdf" || mimeType === "application/pdf";
   const isImage =
@@ -332,6 +353,12 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
   if (isWord) {
     const text = await docxToText(buffer);
     if (!text) throw new Error("Word файлд текст олдсонгүй.");
+    return { label: filename, text, inline: null };
+  }
+
+  if (isLegacyWord) {
+    const text = await legacyDocToText(buffer);
+    if (!text) throw new Error("Word (.doc) файлд текст олдсонгүй.");
     return { label: filename, text, inline: null };
   }
 
@@ -378,6 +405,6 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
   }
 
   throw new Error(
-    "Энэ төрлийн файл дэмжигдэхгүй. Excel (.xlsx/.xls), Word (.docx), CSV, PDF, зураг эсвэл текст файл оруулна уу.",
+    "Энэ төрлийн файл дэмжигдэхгүй. Excel (.xlsx/.xls), Word (.docx/.doc), CSV, PDF, зураг эсвэл текст файл оруулна уу.",
   );
 }

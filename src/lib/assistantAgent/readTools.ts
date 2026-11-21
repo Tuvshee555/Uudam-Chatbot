@@ -81,13 +81,22 @@ export function isoDateOf(value: string, now: Date): string | null {
 
 export type TripSummaryView = {
   trip_id: string; name: string; status: string; visible: boolean; partner: boolean;
+  /** "7 өдөр 6 шөнө": two saved trips can share a name and differ only in length. */
+  duration: string;
   next_dates: string[]; leaves_on_date?: boolean; version: string;
+  /** Why an archived trip left the catalogue: its dates passed, or it never had any. */
+  archived_because?: string;
 };
+
+const ARCHIVED_BECAUSE: Record<string, string> = { no_departure_dates: "гарах өдөргүй байсан", all_departure_dates_passed: "гарах өдрүүд нь өнгөрсөн" };
 
 function summaryOf(trip: TravelTrip, now: Date, date?: string | null): TripSummaryView {
   const departures = tripDepartures(trip, now).filter((day) => day.state !== "cancelled");
+  const reason = trip.status === "archived" && typeof trip.extra?.archived_reason === "string" ? trip.extra.archived_reason : "";
   return {
     trip_id: trip.id, name: trip.route_name, status: trip.status, visible: isVisible(trip), partner: isPartnerTrip(trip),
+    duration: trip.duration_text || "",
+    ...(reason ? { archived_because: ARCHIVED_BECAUSE[reason] || reason } : {}),
     next_dates: departures.slice(0, 4).map((day) => day.date),
     ...(date ? { leaves_on_date: departures.some((day) => day.date === date) } : {}),
     version: trip.updated_at,
@@ -157,9 +166,13 @@ export function searchTrips(trips: TravelTrip[], input: { query?: string; date?:
   let results = pool.map((trip) => summaryOf(trip, now, date));
   if (date) results = results.filter((entry) => entry.leaves_on_date);
   if (!query && !date) results = results.slice(0, MAX_SEARCH_RESULTS);
+  // Two saved trips under one name: only the length, the state and the dates tell them apart.
+  const names = results.map((entry) => entry.name.trim().toLowerCase());
+  const sameName = names.some((name, index) => names.indexOf(name) !== index);
   const note = !results.length
     ? date ? `${date}-нд гарах аялал ${query ? `«${query}» нэрээр ` : ""}олдсонгүй.` : `«${query}» нэртэй аялал олдсонгүй.`
-    : results.length > MAX_SEARCH_RESULTS ? `${results.length} аялал таарлаа; эхний ${MAX_SEARCH_RESULTS}-г харууллаа — нарийсгаж хайна уу.` : undefined;
+    : results.length > MAX_SEARCH_RESULTS ? `${results.length} аялал таарлаа; эхний ${MAX_SEARCH_RESULTS}-г харууллаа — нарийсгаж хайна уу.`
+      : sameName ? "Ижил нэртэй хэд хэдэн аялал байна: админы хэлсэн хугацаатай (duration) нь таарахыг сонго; хугацаа хэлээгүй бол идэвхтэйг нь; тодорхойгүй бол ask_user (сонголт бүрт хугацаа, төлөвийг бич)." : undefined;
   return { results: results.slice(0, MAX_SEARCH_RESULTS), ...(note ? { note } : {}) };
 }
 
@@ -194,7 +207,7 @@ export function priceRowsOf(trip: TravelTrip, now: Date) {
   });
 }
 
-function itineraryOf(trip: TravelTrip, poster: PosterPhotoView | null) {
+function itineraryOf(trip: TravelTrip, poster: PosterPhotoView | null, descriptionMax = 420) {
   const days = Array.isArray(trip.extra?.itinerary_days) ? (trip.extra.itinerary_days as unknown[]).map(record) : [];
   return days.slice(0, 40).map((day, index) => {
     const number = typeof day.day === "number" ? day.day : index + 1;
@@ -203,7 +216,7 @@ function itineraryOf(trip: TravelTrip, poster: PosterPhotoView | null) {
     return {
       day: number,
       title: clip(day.title, 120),
-      description: clip(day.description, 420),
+      description: clip(day.description, descriptionMax),
       ...(text(day.hotel) ? { hotel: clip(day.hotel, 120) } : {}),
       meals: { breakfast: meals.breakfast ?? null, lunch: meals.lunch ?? null, dinner: meals.dinner ?? null },
       ...(text(day.meal_note) ? { meal_note: clip(day.meal_note, 160) } : {}),
@@ -212,8 +225,14 @@ function itineraryOf(trip: TravelTrip, poster: PosterPhotoView | null) {
   });
 }
 
+/**
+ * `full`: the program days and the description uncut. A turn that compares the trip with an attached file (an
+ * updated program) needs every sentence: a day cut at 420 characters reads as "changed" against the file's whole day.
+ */
+export type DetailOptions = { full?: boolean };
+
 /** Everything the model may need to edit one trip exactly. */
-export function tripDetailView(trip: TravelTrip, now: Date, poster: PosterPhotoView | null) {
+export function tripDetailView(trip: TravelTrip, now: Date, poster: PosterPhotoView | null, options: DetailOptions = {}) {
   const slug = storedWebsiteTripSlug(trip);
   const partner = isPartnerTrip(trip);
   return {
@@ -246,17 +265,29 @@ export function tripDetailView(trip: TravelTrip, now: Date, poster: PosterPhotoV
     has_food: trip.has_food,
     hotel: trip.hotel,
     transport_type: trip.extra?.transport_type ?? null,
-    itinerary_days: itineraryOf(trip, poster),
+    itinerary_days: itineraryOf(trip, poster, options.full ? 2_400 : 420),
     photos: trip.photo_urls.slice(0, 30).map((url, index) => ({ position: index + 1, url })),
     poster: poster ? { hero: poster.hero, day_photos: poster.days.filter((day) => day.photo) } : null,
-    notes: clip(trip.notes, 600),
+    // In full the whole description: a file may update a list kept there (a check-up's tests), and one
+    // trip's section may be copied to another.
+    notes: clip(trip.notes, options.full ? 9_000 : 600),
+    // What the trip page lists outside the program; a file may bring a new version of these lists.
+    ...(options.full ? {
+      included_items: (Array.isArray(trip.extra?.included_items) ? trip.extra.included_items as unknown[] : []).map((item) => clip(item, 240)).slice(0, 30),
+      excluded_items: (Array.isArray(trip.extra?.excluded_items) ? trip.extra.excluded_items as unknown[] : []).map((item) => clip(item, 240)).slice(0, 30),
+    } : {}),
   };
 }
 
 const DETAIL_MAX_CHARS = 14_000;
+const FULL_DETAIL_MAX_CHARS = 30_000;
 
 /** The detail as the JSON the model reads, cut down (program text first) to stay inside the token budget. */
-export function tripDetailJson(trip: TravelTrip, now: Date, poster: PosterPhotoView | null): string {
+export function tripDetailJson(trip: TravelTrip, now: Date, poster: PosterPhotoView | null, options: DetailOptions = {}): string {
+  if (options.full) {
+    const full = JSON.stringify(tripDetailView(trip, now, poster, options));
+    if (full.length <= FULL_DETAIL_MAX_CHARS) return full;
+  }
   const view = tripDetailView(trip, now, poster);
   let json = JSON.stringify(view);
   if (json.length <= DETAIL_MAX_CHARS) return json;

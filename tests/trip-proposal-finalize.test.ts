@@ -180,3 +180,57 @@ test("the admin's 'every night dinner' note is applied by code; an own-cost meal
   await finalizeNewTripActions(q, { sourceText: "Хотын аялал. Өдрийн хоол өөрсдөө төлнө." });
   assert.equal(q.conflict_items!.some((item) => item.type === "meals_check"), false);
 });
+
+test("'галт тэрэгтэй' in the admin's note: the file's bus home becomes the standard train return and the length is door to door", async () => {
+  const { finalizeNewTripActions, noteAsksTrain } = await import("../src/lib/tripProposalFinalize");
+  for (const words of ["2 талдаа галт тэрэгтэй", "Улаанбаатараас галт тэргээр гарна", "стандарт галт тэрэгний өдрүүд", "galt teregtei"]) assert.equal(noteAsksTrain(words), true, words);
+  for (const words of ["", "галт тэрэггүй, автобусаар явна", "автобустай аялал", undefined]) assert.equal(noteAsksTrain(words), false, String(words));
+
+  const make = (): AIChangeProposal => ({
+    summary: "", needs_confirmation: false, important_reason: "", conflicts: [], conflict_items: [],
+    actions: [{ action: "upsert", fields: { route_name: ROUTE, duration_text: "4 өдөр 3 шөнө", adult_price: 1_590_000, child_price: 1_390_000,
+      extra: { program_duration_text: "4 өдөр 3 шөнө", itinerary_days: [
+        { day: 1, title: "Эрээн – Норвел", description: "Эрээн хотод аялагчдаа тосно. Эрээн → Норвел (4–5 цаг).", meals: { breakfast: null, lunch: null, dinner: true } },
+        { day: 2, title: "Норвел – Эрээн", description: "Өглөөний цай. Норвел → Эрээн (4–5 цаг).", meals: { breakfast: true, lunch: null, dinner: true } },
+        { day: 3, title: "Эрээн – Замын-Үүд", description: "Өглөөний цай. 13:00 – Замын-Үүд хил гарах. Автобусандаа сууж Улаанбаатар буцна.", meals: { breakfast: true, lunch: null, dinner: null } },
+      ] } } }],
+  });
+  const days = (p: AIChangeProposal) => ((p.actions[0].fields as { extra: { itinerary_days: Array<{ title: string; description: string }> } }).extra.itinerary_days);
+
+  const train = make();
+  await finalizeNewTripActions(train, { note: "Шинэ аялал болгон нэм, 2 талдаа галт тэрэгтэй.", sourceText: "x" });
+  assert.equal(days(train).length, 5);
+  assert.equal(train.actions[0].fields?.duration_text, "5 өдөр 4 шөнө");
+  assert.match(days(train)[3].description, /13:00 – Замын-Үүд хил гарах\.\n18\.00 цагт хөдлөх Замын-Үүд УБ чиглэлийн галт тэргэнд сууна\.$/);
+  assert.doesNotMatch(days(train)[3].description, /Автобусандаа/);
+  assert.equal(days(train)[4].description, "Өглөө 09.20 цагт Улаанбаатарт ирснээр манай аялал өндөрлөнө.");
+  const choice = train.conflict_items!.find((item) => item.type === "transport_choice")!;
+  assert.match(choice.text, /Файлын хөтөлбөр \(3 өдөр 2 шөнө\) дээр Улаанбаатараас гарах, буцах өдрүүд нэмэгдэж нийт 5 өдөр 4 шөнө болсон/, "the file's own length is what its days count, whatever the model wrote");
+
+  // No such note: the file's ending stands (a trip that really returns by bus).
+  const bus = make();
+  await finalizeNewTripActions(bus, { note: "Шинэ аялал болгон нэм.", sourceText: "x" });
+  assert.equal(days(bus).length, 4);
+  assert.match(days(bus)[3].description, /Автобусандаа сууж Улаанбаатар буцна/);
+});
+
+test("child rows 'with / without a bed' no source mentions are the template's echo and go; an included line is not repeated as a condition", async () => {
+  const { finalizeNewTripActions, withoutEchoedBedRows } = await import("../src/lib/tripProposalFinalize");
+  const row = () => ({ dates: ["2098-12-27"], adult_price: 1_590_000, child_price: 1_390_000, passenger_prices: [
+    { label: "Хүүхэд ортой", age_range: "", price: 1_390_000 }, { label: "Хүүхэд ор эзлэхгүй", age_range: "2-12 нас", price: 1_390_000 }, { label: "Ахмад настан", age_range: "60+", price: 1_490_000 },
+  ] });
+  const p = proposal();
+  const fields = p.actions[0].fields as Record<string, unknown> & { extra: Record<string, unknown> };
+  fields.departure_dates = ["2098-12-27"];
+  fields.extra = { ...fields.extra, price_groups: [row()], included_items: ["Аяллын даатгал багтсан"], important_notes: ["Аяллын даатгал багтсан", "Паспорт 6 сараас дээш хүчинтэй байна"] };
+  await finalizeNewTripActions(p, { sourceText: "Норвел хотын аялал. Хүүхэд 1150 юань. Аяллын даатгал багтсан.", note: "хүүхэд 1,390,000₮" });
+  const extra = (p.actions[0].fields as { extra: { price_groups: Array<ReturnType<typeof row>>; important_notes: string[] } }).extra;
+  assert.deepEqual(extra.price_groups[0].passenger_prices.map((entry) => entry.label), ["Ахмад настан"], "only the rows nobody wrote go");
+  assert.equal(extra.price_groups[0].child_price, 1_390_000, "the child fare itself stays");
+  assert.deepEqual(extra.important_notes, ["Паспорт 6 сараас дээш хүчинтэй байна"]);
+
+  // The file does speak of beds, or there is no text to check against (a picture): the rows stay.
+  const withBeds = { extra: { price_groups: [row()] } };
+  assert.equal(withoutEchoedBedRows(withBeds, "Хүүхэд оргүй 1,200,000₮"), withBeds);
+  assert.equal(withoutEchoedBedRows(withBeds, ""), withBeds);
+});

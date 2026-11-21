@@ -12,8 +12,9 @@ import { formatDateMn } from "../assistantBrain";
 import { isHostedPhotoUrl } from "../tripPhotoEdit";
 import type { TravelTrip } from "../travelTypes";
 import { chatbotIdsInText, identityLinks, resolveLink, resolveLinksInText, urlsInText, withScheme, type LinkResolution } from "./links";
+import { compareProgram, type ProgramComparison } from "./programCompare";
 import { isPartnerTrip, searchTrips, tripDepartures, tripDetailJson } from "./readTools";
-import type { AgentAttachment, AgentDeps, AgentInput, PosterPhotoView } from "./types";
+import type { AgentAttachment, AgentDeps, AgentDocument, AgentInput, PosterPhotoView } from "./types";
 import { readWebPage, WEB_DATA_NOTICE } from "./webPage";
 
 /* ---------------------------------------------------------------- */
@@ -70,10 +71,14 @@ export type TurnState = {
   /** The instruction of the question this message answers ("" when it answers none). */
   answerToInstruction: string;
   attachments: AgentAttachment[];
+  /** The files sent with the message, as text (data for the model; see prompt rule 13). */
+  documents: AgentDocument[];
   links: LinkResolution[];
   /** Pages the model may read: the links in the admin's words (and where his short links lead). */
   allowedUrls: Map<string, string>;
   fetched: Map<string, string>;
+  /** Trips whose saved program was compared with the attached file in this turn (compare_program), with the result. */
+  compared: Map<string, Extract<ProgramComparison, { ok: true }>>;
   seen: Set<string>;
   /** The trips known before the first web page was read (an injected page cannot add targets). */
   seenBeforeWeb: Set<string> | null;
@@ -87,8 +92,26 @@ export type TurnState = {
   preloaded: TravelTrip[];
 };
 
-const TOOL_LIMITS: Record<string, number> = { search_trips: 6, get_trip: 6, resolve_link: 6, read_web_page: 2, host_image: 4 };
+const TOOL_LIMITS: Record<string, number> = { search_trips: 6, get_trip: 6, resolve_link: 6, read_web_page: 2, host_image: 4, compare_program: 3 };
 const TOOL_RESULT_MAX_CHARS = 16_000;
+export const MAX_DOCUMENTS = 6;
+export const DOCUMENT_MAX_CHARS = 24_000;
+export const DOCUMENTS_TOTAL_MAX_CHARS = 60_000;
+
+/** The attached files as the turn keeps them: named, clipped, at most MAX_DOCUMENTS and DOCUMENTS_TOTAL_MAX_CHARS in all. */
+export function turnDocuments(value: unknown): AgentDocument[] {
+  const out: AgentDocument[] = [];
+  let total = 0;
+  for (const item of Array.isArray(value) ? value : []) {
+    const name = item && typeof item === "object" && typeof (item as AgentDocument).name === "string" ? (item as AgentDocument).name.trim().slice(0, 200) : "";
+    const raw = item && typeof item === "object" && typeof (item as AgentDocument).text === "string" ? (item as AgentDocument).text.trim() : "";
+    if (!raw || out.length >= MAX_DOCUMENTS || total >= DOCUMENTS_TOTAL_MAX_CHARS) continue;
+    const text = raw.slice(0, Math.min(DOCUMENT_MAX_CHARS, DOCUMENTS_TOTAL_MAX_CHARS - total));
+    total += text.length;
+    out.push({ name: name || `Файл ${out.length + 1}`, text });
+  }
+  return out;
+}
 const PRELOAD_MAX = 3;
 
 /** A link's identity for the allow-list: host and path (no query, fragment or trailing slash). */
@@ -127,9 +150,10 @@ export async function openTurn(input: AgentInput, deps: AgentDeps, now: Date): P
   const state: TurnState = {
     trips: input.trips, byId, now, deps, adminText, instruction, answerToInstruction: String(input.answerTo?.instruction || ""),
     attachments: (input.attachments || []).filter((item) => item && typeof item.url === "string" && /^https:\/\//.test(item.url)).slice(0, 6),
+    documents: turnDocuments(input.documents),
     links,
     allowedUrls: new Map(),
-    fetched: new Map(), seen: new Set([...linkTrips, ...chosen]), seenBeforeWeb: null,
+    fetched: new Map(), compared: new Map(), seen: new Set([...linkTrips, ...chosen]), seenBeforeWeb: null,
     linkTrips,
     // A tapped trip answers the "which trip?" an unresolved link raised.
     linkUnresolved: identity.some((link) => !link.trip_id) && !chosen.size,
@@ -151,7 +175,7 @@ export async function openTurn(input: AgentInput, deps: AgentDeps, now: Date): P
 /** The preloaded trips' detail, for the first message (same JSON get_trip returns). */
 export async function preloadedDetail(state: TurnState): Promise<string[]> {
   const out: string[] = [];
-  for (const trip of state.preloaded) out.push(tripDetailJson(trip, state.now, await posterFor(trip, state.deps)));
+  for (const trip of state.preloaded) out.push(tripDetailJson(trip, state.now, await posterFor(trip, state.deps), { full: state.documents.length > 0 }));
   return out;
 }
 
@@ -185,7 +209,18 @@ async function getTripTool(state: TurnState, args: Args): Promise<string> {
   if (!trip) return json({ error: "Ийм trip_id бүртгэлд алга. search_trips-ээр хайж, буцаасан trip_id-г ашигла." });
   state.fetched.set(trip.id, trip.updated_at);
   state.seen.add(trip.id);
-  return tripDetailJson(trip, state.now, await posterFor(trip, state.deps));
+  return tripDetailJson(trip, state.now, await posterFor(trip, state.deps), { full: state.documents.length > 0 });
+}
+
+/** An updated program file against the saved days: exact differences, worked out in code (programCompare.ts). */
+async function compareProgramTool(state: TurnState, args: Args): Promise<string> {
+  if (!state.documents.length) return json({ error: "No file is attached to this message: compare_program reads the attached file's days." });
+  const trip = state.byId.get(str(args.trip_id));
+  if (!trip) return json({ error: "Ийм trip_id бүртгэлд алга. search_trips-ээр хайж, буцаасан trip_id-г ашигла." });
+  if (!state.fetched.has(trip.id)) return json({ error: "Call get_trip for this trip first." });
+  const result = compareProgram(trip, args.file_days, state.documents.map((document) => document.text).join("\n\n"));
+  if (result.ok) state.compared.set(trip.id, result);
+  return json(result);
 }
 
 async function resolveLinkTool(state: TurnState, args: Args): Promise<string> {
@@ -241,6 +276,7 @@ const READ_TOOL_RUNNERS: Record<string, (state: TurnState, args: Args) => Promis
   resolve_link: resolveLinkTool,
   read_web_page: readWebPageTool,
   host_image: hostImageTool,
+  compare_program: compareProgramTool,
 };
 
 /** Runs one read tool call; the result is the tool message's content. Never throws. */

@@ -9,7 +9,7 @@
  */
 import type { ToolDefinition } from "./types";
 
-export const READ_TOOLS = ["search_trips", "get_trip", "resolve_link", "read_web_page", "host_image"] as const;
+export const READ_TOOLS = ["search_trips", "get_trip", "resolve_link", "read_web_page", "host_image", "compare_program"] as const;
 export const TERMINAL_TOOLS = ["propose_changes", "ask_user", "reply", "read_trip_source"] as const;
 export type ReadToolName = (typeof READ_TOOLS)[number];
 export type TerminalToolName = (typeof TERMINAL_TOOLS)[number];
@@ -44,9 +44,9 @@ const ACTION_ITEM = {
   properties: {
     action: {
       type: "string",
-      enum: ["set_date_state", "set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "fare_change_all", "change_dates", "patch", "cancel", "delete"],
+      enum: ["set_date_state", "set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "fare_change_all", "change_dates", "append_notes", "patch", "cancel", "delete"],
     },
-    trip_id: { type: "string", description: "The exact trip_id from get_trip / search_trips / the resolved link. Required except fare_change_all with all_active." },
+    trip_id: { type: "string", description: "The exact trip_id from get_trip / search_trips / the resolved link. Required except fare_change_all with all_active and append_notes with trip_ids." },
     summary: { type: "string", description: "One short Mongolian line for the review card, e.g. «12/2: Дүүрсэн», «Сайтаас нуух»." },
     date: { type: "string", description: "set_date_state / set_date_price: the departure day, YYYY-MM-DD, one of the trip's departures." },
     state: { type: "string", enum: ["open", "low", "full", "paused"], description: "set_date_state: open = нээлттэй, low = цөөн суудал, full = дүүрсэн, paused = түр хаасан." },
@@ -81,7 +81,9 @@ const ACTION_ITEM = {
       properties: { adult: FARE_INTENT, child: FARE_INTENT, infant: FARE_INTENT, everyone: { type: "number", description: "Shift every priced fare by this amount." } },
       additionalProperties: false,
     },
-    trip_ids: { type: "array", items: { type: "string" }, description: "fare_change_all: the trips, when not all_active." },
+    trip_ids: { type: "array", items: { type: "string" }, description: "fare_change_all: the trips, when not all_active. append_notes: every trip that gets the same section (write the section once)." },
+    heading: { type: "string", description: "append_notes: the section's heading line in Mongolian (no colon at the end)." },
+    text: { type: "string", description: "append_notes: the section's lines under the heading, plain text, one item per line; a group heading ends with ':'; an item with a price is 'name: 123 юань'." },
     all_active: { type: "boolean", description: "fare_change_all: every active trip (partner trips are skipped by the system)." },
     add_dates: { type: "array", items: { type: "string" }, description: "change_dates: departures to add, YYYY-MM-DD." },
     remove_dates: { type: "array", items: { type: "string" }, description: "change_dates: departures to remove, YYYY-MM-DD." },
@@ -111,6 +113,25 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     { url: { type: "string" } }, ["url"]),
   fn("host_image", "Copy an image (an attachment URL or an https image link) to our Cloudinary. Use the returned url as replace_photo.new_url.",
     { url: { type: "string" } }, ["url"]),
+  fn("compare_program", "With an attached file that is an UPDATED PROGRAM of a saved trip: pass the file's days as you read them and get back exactly what differs from the saved program (hotel per day, meals, sentences one side has and the other lacks). Call get_trip first. Build the proposal from its result only.",
+    {
+      trip_id: { type: "string" },
+      file_days: {
+        type: "array",
+        description: "EVERY day of the file's program, in the file's order.",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "The day's route or heading as the file writes it." },
+            hotel: { type: "string", description: "The hotel the file names for that day (\"\" when none)." },
+            meals: { type: "object", properties: { breakfast: MEAL, lunch: MEAL, dinner: MEAL }, additionalProperties: false },
+            text: { type: "string", description: "The day's whole text copied from the file word for word." },
+          },
+          required: ["title", "text"],
+          additionalProperties: false,
+        },
+      },
+    }, ["trip_id", "file_days"]),
   fn("propose_changes", "END the turn with a proposal the admin reviews and saves. Every exact change of the message, one action each, all in this one call.",
     { reply_text: { type: "string", description: "1-2 short Mongolian sentences: what will change." }, actions: { type: "array", items: ACTION_ITEM } },
     ["reply_text", "actions"]),

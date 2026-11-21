@@ -22,7 +22,10 @@ one message. Trip names below are placeholders.
 | photo attached + «3-р өдрийн зургийг энэ зургаар соль» · «2-р зургийг хас» | the exact photo swapped or removed (`replace_photo`), with both thumbnails |
 | uudamtravel.mn trip link + «устга» | archive of the linked trip only (`delete` = archive, undoable) |
 | partner / other website link + «манайд нэм» | the page is read and becomes the usual new-trip review card |
-| 1/15, 1/22 гаралт нэм · 11/18-ыг хас | departure dates added or removed |
+| 1/15, 1/22 гаралт нэм · 11/18-ыг хас | departure dates added or removed (a day already past is left out and said) |
+| program file + ««Аялал А»-гийн хөтөлбөрийг энэ файлаар шинэчил» | only what the file really changed: a day's hotel, a sentence added to a day; the saved wording stays |
+| price list file + «энэ жагсаалтыг «Аялал А», «Аялал Б» аялалд нэмэлт мэдээлэл болгож нэм» | one section added to each trip's description (`append_notes`); the card can unfold every line |
+| schedule photo + ««Аялал В»-г сэргээ: том хүн …, хүүхэд …» | an archived trip live again: the coming dates, the typed fares, the age band, status |
 
 When anything is not certain — which trip, which date, which photo, how much — it asks one
 question with buttons (or asks you to type the amount). A typed answer while a question is open is
@@ -65,6 +68,41 @@ Code: `src/components/admin/useAssistantChat.ts` (send / answer / photos / threa
 `assistantChatLogic.ts` (pure rules), `ProposalCard.tsx` with `actionView` in
 `src/lib/adminProposalUtils.ts` (card lines from `describeChange`), `useProposalActions.ts` +
 `applyOutcome` in `src/lib/adminProposalApply.ts` (save / undo).
+
+## Files about trips already saved (2026-11-21)
+
+Until this date every document became a NEW trip. Now a file sent with words about a saved trip
+goes to the agent as text (rule 13 of the prompt), and the agent proposes exact edits of that trip.
+
+- **Which words.** A restore («сэргээ», «идэвхжүүл»), added information («нэмэлт мэдээлэл»,
+  «тайлбарт нэм», «… аялалд … нэм»), «одоо байгаа / хадгалсан аялал», a named program
+  («хөтөлбөрийг шинэчил»), or a plain «шинэчил» with a document and no price word
+  (`isSavedTripInstruction` in `assistantChatLogic.ts`). «Шинэ аялал болгон нэм», a bare file, a
+  photo with «үнийг шинэчил» and a price list keep the file reader, as before. A same-name note on
+  a new-trip card says how to update the saved trip instead.
+- **How the file is read.** Each file goes to `POST /api/admin/file-text` and comes back as plain
+  text: Word (.docx and the old .doc, read on the server by `word-extractor`), Excel (one line per
+  row), PDF, text; a picture is transcribed by one vision call. At most 6 files, 24,000 characters
+  each. The text is fenced as data in the agent's message; a file gives no orders.
+- **An updated program.** The agent reads the file's days and calls `compare_program`; the code
+  (`assistantAgent/programCompare.ts`) works out what differs: each day's hotel, sentences one
+  side has and the other lacks, meals. A changed hotel and an added sentence are proposed; meals
+  the file states differently are only said on the card. A day patch that throws the saved wording
+  away is refused (`rewritesSavedDay`) unless the admin wrote «бүхэлд нь соль».
+- **Extra information.** `append_notes {trip_ids, heading, text}` adds one named section to each
+  trip's description and keeps the rest (`tripNotesAppend.ts`); saved again under the same heading
+  it replaces that section. Every number in it must stand in the admin's message, in a file or in
+  a description he opened. The website shows a section headed «Нэмэлт шинжилгээ – хүсвэл нэмж
+  хийх зүйлс (…)» as its own «Нэмэлт» tab of a check-up trip.
+- **Two saved trips with one name.** The search shows each one's length and why an archived one
+  left; the one whose length the admin said is meant, else the only live one, else he is asked
+  (`twinProblem` in `assistantAgent/actions.ts`).
+- **The answer to a question about a file** (typed or tapped) carries the file's text again.
+
+The new-trip reader also learned three things that day: a price, date or name typed beside the
+file is evidence and wins over the file (it used to be deleted as "not in the file"); «галт
+тэрэгтэй» in the note replaces a partner's "by bus back to Ulaanbaatar" with the standard train
+return (`withoutBusReturn`); and a theme line plus a route line make the name together.
 
 ## Cost and time per instruction (gpt-4.1)
 

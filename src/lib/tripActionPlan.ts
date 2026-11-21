@@ -7,6 +7,7 @@
  *   patch_itinerary_day  one program day (tripItineraryDayEdit.ts)
  *   set_age_bands    extra.age_rules (+ default-form tier and poster column labels)
  *   replace_photo    an exact photo swap / removal (tripPhotoEdit.ts)
+ *   append_notes     one named section added to the description (tripNotesAppend.ts)
  *   fare_change_all  a fare rule over many trips, expanded into one patch per trip
  *
  * Validation (travelAIValidation) plans every action to refuse what cannot be done, with the
@@ -22,6 +23,7 @@ import { isInfantShapedAge } from "./travelFastPathsSearch";
 import { planDatePrice, fareAmountOf, partnerSourceUrl, PARTNER_EDIT_REASON, shortDay } from "./tripDatePrice";
 import { itineraryDayPatchOf, planItineraryDay } from "./tripItineraryDayEdit";
 import { planPhotoEdit } from "./tripPhotoEdit";
+import { notesHeadingOf, notesSectionText, planAppendNotes } from "./tripNotesAppend";
 import { TRIP_EDIT_VERBS, type AITripAction, type DepartureDateState, type TravelTrip, type TripEditVerb, type TripMutationFields } from "./travelTypes";
 
 export { partnerSourceUrl, PARTNER_EDIT_REASON } from "./tripDatePrice";
@@ -303,6 +305,7 @@ function planTripEditUnchecked(trip: TravelTrip, action: AITripAction, posterDat
     const planned = planPhotoEdit(trip, action, posterData);
     return planned.ok ? { ok: true, plan: planned.plan } : planned;
   }
+  if (verb === "append_notes") return planAppendNotes(trip, { heading: action.heading, text: action.text });
   return { ok: false, reason: `«${verb}» гэсэн өөрчлөлтийг энд төлөвлөхгүй.` };
 }
 
@@ -338,6 +341,12 @@ const VERB_KEYS: Record<string, (action: Row) => Row> = {
     for (const key of ["position", "day"]) if (typeof action[key] === "number" && Number.isFinite(action[key])) kept[key] = Math.trunc(action[key] as number);
     if (action.remove === true) kept.remove = true;
     else if (text(action.new_url)) kept.new_url = text(action.new_url);
+    return kept;
+  },
+  append_notes: (action) => {
+    const kept = KEEP(BASE_KEYS)(action);
+    if (notesHeadingOf(action.heading)) kept.heading = notesHeadingOf(action.heading);
+    if (notesSectionText(action.text)) kept.text = notesSectionText(action.text);
     return kept;
   },
 };

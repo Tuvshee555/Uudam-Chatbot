@@ -98,3 +98,30 @@ test("text upload evidence guard keeps prices that appear in the source", () => 
   assert.deepEqual(guarded.actions[0].fields?.departure_dates, ["2026-10-30"]);
   assert.equal(guarded.needs_confirmation, false);
 });
+
+test("a price the admin typed beside the file is evidence; one that is in neither is still removed", () => {
+  const make = (): AIChangeProposal => ({
+    summary: "Read one trip", needs_confirmation: false, important_reason: "", conflicts: [],
+    actions: [{
+      action: "upsert",
+      fields: {
+        route_name: "Туршилтын хилийн аялал", adult_price: 1590000, child_price: 1390000, infant_price: 290000, departure_dates: ["2098-12-09"],
+        extra: { source_file_name: "program.docx.part-001-of-001.txt", price_groups: [{ dates: ["2098-12-09"], adult_price: 1590000, child_price: 1390000 }] },
+      },
+    }],
+  });
+  const sources = [{ label: "program.docx.part-001-of-001.txt", contentText: "Туршилтын хилийн аялал. Ланд үнэ: том хүн 1450 юань, хүүхэд 1150 юань. 1-р өдөр 12/10." }];
+  const note = "Шинэ аялал болгон нэм. 2098 оны 12 сарын 9-нд гарна. Зарлах үнэ: том хүн 1,590,000₮, хүүхэд 1,390,000₮.";
+
+  const kept = enforceTextSourceEvidence(make(), sources, note);
+  const fields = kept.actions[0].fields as Record<string, unknown>;
+  assert.equal(fields.adult_price, 1590000, "typed by the admin: kept");
+  assert.equal(fields.child_price, 1390000);
+  assert.deepEqual(fields.departure_dates, ["2098-12-09"], "the year he typed stays on the date");
+  assert.deepEqual((fields.extra as { price_groups: unknown[] }).price_groups, [{ dates: ["2098-12-09"], adult_price: 1590000, child_price: 1390000 }]);
+  assert.equal(fields.infant_price, undefined, "in neither the file nor his words: removed");
+  assert.deepEqual(kept.conflict_items?.filter((item) => item.type === "source_evidence_missing").map((item) => /290000/.test(item.text)), [true], "and asked once, for that price only");
+
+  const without = enforceTextSourceEvidence(make(), sources);
+  assert.equal((without.actions[0].fields as Record<string, unknown>).adult_price, undefined, "with no note the old check stands");
+});

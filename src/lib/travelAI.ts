@@ -232,9 +232,16 @@ export function enforceTextSourceEvidence(
     contentText?: string;
     inline?: { mimeType: string; data: string } | null;
   }>,
+  /**
+   * The admin's own words sent with the file. A price, a seat count or a year he typed is not invented:
+   * until 2026-11-21 "том хүн 1,590,000₮" beside a partner's program (yuan only) was deleted as "not in
+   * the file" and asked back as two questions.
+   */
+  adminNote = "",
 ): AIChangeProposal {
   const textSources = sources.filter((source) => source.contentText?.trim() && !source.inline);
   if (textSources.length === 0 || proposal.actions.length === 0) return proposal;
+  const typed = adminNote.trim();
 
   const textByLabel = new Map(
     textSources.map((source) => [source.label, source.contentText?.trim() || ""]),
@@ -244,8 +251,9 @@ export function enforceTextSourceEvidence(
   for (const action of proposal.actions) {
     const fields = action.fields as Record<string, unknown> | undefined;
     if (!fields) continue;
-    const evidence = sourceTextForAction(action, textByLabel, allText);
-    if (!evidence.trim()) continue;
+    const fileText = sourceTextForAction(action, textByLabel, allText);
+    if (!fileText.trim()) continue;
+    const evidence = typed ? `${fileText}\n\n${typed}` : fileText;
     const label = fields.route_name?.toString().trim() || action.match?.route_name || "Аялал";
 
     for (const key of ["adult_price", "child_price", "infant_price", "seats_total", "seats_left"]) {
@@ -1693,7 +1701,7 @@ export async function generateAIProposalFromContentBatched(input: {
       mergeDuplicateTripActions(merged);
       // A price or a year read from the picture is not in the document's text; the guard
       // would delete it as invented (it did, on a real program + price table, 2026-11-05).
-      if (!sameTrip) enforceTextSourceEvidence(merged, sources);
+      if (!sameTrip) enforceTextSourceEvidence(merged, sources, input.note);
       if (tableReads) {
         const tables = (await tableReads).filter((table): table is PriceTable => Boolean(table));
         const created = newTripActions(merged);

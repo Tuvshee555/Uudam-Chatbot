@@ -22,10 +22,12 @@ import { describeChange } from "../assistantActionText";
 import { dateStateProblem, dateStatusOf, expandFareChangeAll, fareChangeOf, partnerEditProblem, planTripEdit, sanitizeTripEditAction, tripDepartureDays } from "../tripActionPlan";
 import { PARTNER_EDIT_REASON, partnerSourceUrl } from "../tripDatePrice";
 import { isHostedPhotoUrl } from "../tripPhotoEdit";
+import { notesHeadingOf, notesSectionText, numbersNotInSources } from "../tripNotesAppend";
+import { rewritesSavedDay } from "./programCompare";
 import { addDepartureDates, removeDepartureDates } from "../tripScheduleChange";
 import { prunePastDepartureDates, type ResolvedDepartureDate } from "../travelDates";
 import type { AIChangeProposal, AITripAction, ConflictItem, TravelTrip, TripMutationFields } from "../travelTypes";
-import { tripDepartures } from "./readTools";
+import { tripDepartures, ubToday } from "./readTools";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => (value && typeof value === "object" && !Array.isArray(value) ? (value as Row) : {});
@@ -44,13 +46,22 @@ export type ProposalContext = {
   linkUnresolved: boolean;
   /** Photo URLs we host: host_image results and hosted attachments. */
   hosted: Set<string>;
+  /** What a section added to a description may quote numbers from: the admin's words and his attached files. */
+  sources?: string[];
+  /** The admin's own words (no option tags, no links), and the trips he picked by tapping an option. */
+  adminText?: string;
+  pinned?: Set<string>;
+  /** Files are attached to this turn: a program day's saved wording is kept (programCompare rewritesSavedDay). */
+  fileTurn?: boolean;
+  /** The admin's own words ask to replace a day's text whole. */
+  rewriteAsked?: boolean;
 };
 
 /** A stored action: the travelTypes contract, built as a plain record so new verbs need no cast at each site. */
 type StoredAction = Row & { action: string; trip_id: string; summary: string; expected_updated_at?: string };
 
 const PARTNER_VERBS = new Set(["set_date_state", "set_date_price", "change_dates"]);
-const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo"]);
+const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "append_notes"]);
 const PATCH_FIELDS = new Set(["route_name", "duration_text", "hotel", "has_food", "seats_total", "seats_left", "status", "notes"]);
 const PATCH_STATUSES = new Set(["active", "paused", "sold_out", "draft"]);
 const ALREADY = /аль хэдийн/u;
@@ -105,13 +116,23 @@ function datePriceAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): Stor
   return action;
 }
 
-function itineraryDayAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAction {
+function itineraryDayAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAction | string {
   const action: StoredAction = { ...base("patch_itinerary_day", trip, ctx), day: raw.day };
   for (const key of ["title", "description", "hotel", "meal_note"]) if (typeof raw[key] === "string" && text(raw[key])) action[key] = text(raw[key]);
   const meals = record(raw.meals);
   const mealPatch: Row = {};
   for (const key of ["breakfast", "lunch", "dinner"]) if (key in meals && (meals[key] === true || meals[key] === false || meals[key] === null)) mealPatch[key] = meals[key];
   if (Object.keys(mealPatch).length) action.meals = mealPatch;
+  // With a file attached, a day's text is built on the saved wording. A patch that throws it away is the
+  // file's raw text pasted over what staff wrote (the first real program update, 2026-11-21: three days
+  // would have been overwritten, typos and all). The admin's own "бүхэлд нь соль" lifts this.
+  if (ctx.fileTurn && !ctx.rewriteAsked && typeof action.description === "string") {
+    const days = Array.isArray(trip.extra?.itinerary_days) ? (trip.extra.itinerary_days as unknown[]) : [];
+    const saved = text(record(days[Number(raw.day) - 1]).description);
+    if (saved && rewritesSavedDay(saved, action.description)) {
+      return `${Number(raw.day)}-р өдөр: хадгалсан тайлбарыг файлын үгээр бүхэлд нь солихгүй — compare_program-ийн хариугаар хадгалсан өгүүлбэрүүдийг хэвээр үлдээж зөвхөн шинэ өгүүлбэрийг нэм; өөрчлөгдөөгүй өдрийг бүү хөнд`;
+    }
+  }
   return action;
 }
 
@@ -139,10 +160,24 @@ function photoAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAc
   };
 }
 
-/** One part of one trip (price of a date, visibility, a program day, age bands, a photo), planned exactly as save will. */
+/**
+ * A section for the trip's description. Every number in it (a price, a count) must stand in the admin's
+ * message or in a file he attached: a list re-typed by the model is checked digit by digit, never trusted.
+ */
+function notesAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAction | string {
+  const heading = notesHeadingOf(raw.heading);
+  const body = notesSectionText(raw.text);
+  if (!heading || !body) return "тайлбарт нэмэх хэсгийн гарчиг эсвэл мөр алга";
+  const invented = numbersNotInSources([heading, body].join(" "), ctx.sources || []);
+  if (invented.length) return `нэмэх хэсэгт таны мессеж, файлд байхгүй тоо байна (${invented.slice(0, 6).join(", ")}) — тоо бүрийг эх сурвалжаас яг хуулна`;
+  return { ...base("append_notes", trip, ctx), heading, text: body };
+}
+
+/** One part of one trip (price of a date, visibility, a program day, age bands, a photo, a description section), planned exactly as save will. */
 function buildPlanned(verb: string, raw: Row, trip: TravelTrip, ctx: ProposalContext): Built {
   let action: StoredAction | string;
   if (verb === "set_date_price") action = datePriceAction(raw, trip, ctx);
+  else if (verb === "append_notes") action = notesAction(raw, trip, ctx);
   else if (verb === "set_visibility") action = typeof raw.visible === "boolean" ? { ...base(verb, trip, ctx), visible: raw.visible } : "харуулах эсвэл нуухыг заагаагүй";
   else if (verb === "patch_itinerary_day") action = itineraryDayAction(raw, trip, ctx);
   else if (verb === "set_age_bands") action = ageBandsAction(raw, trip, ctx);
@@ -165,6 +200,37 @@ function fareWarningsFor(actions: StoredAction[], ctx: ProposalContext): string[
   });
 }
 
+const nameKey = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const programDays = (value: string) => Number(/(\d+)\s*өдөр/iu.exec(value)?.[1] ?? NaN);
+/** "7 өдөр 6 шөнийн", "7 өдрийн", "7 хоногийн" in the admin's words → 7; a date ("2-ны өдөр") or a program day ("3-р өдөр") is not a length. */
+function statedDays(admin: string): number | null {
+  const match = /(?:^|[^\d\p{L}/.-])(\d{1,2})\s+(?:өдөр|өдрийн|хоног\p{L}*|udur|udriin|odor|odriin|honog\p{L}*|days?)(?!\p{L})/iu.exec(admin);
+  return match ? Number(match[1]) : null;
+}
+const STATE_WORDS: Record<string, string> = { active: "идэвхтэй", paused: "түр зогссон", sold_out: "дүүрсэн", draft: "ноорог", archived: "архив", cancelled: "цуцалсан" };
+
+/**
+ * Two saved trips under one name (a re-import, an older copy): the one meant is the one whose length
+ * the admin said, else the only live one; otherwise he is asked. On 2026-11-21 «7 өдөр 6 шөнийн …
+ * аяллыг сэргээ» was about to restore the 9-day copy of the same name. A tapped option or a pasted
+ * link has already picked the trip.
+ */
+function twinProblem(trip: TravelTrip, ctx: ProposalContext): string | null {
+  if (ctx.pinned?.has(trip.id) || ctx.linkTrips.has(trip.id)) return null;
+  const twins = ctx.trips.filter((other) => nameKey(other.route_name) === nameKey(trip.route_name));
+  if (twins.length < 2) return null;
+  const stated = statedDays(ctx.adminText || "");
+  const live = (entry: TravelTrip) => !["archived", "cancelled", "draft"].includes(entry.status);
+  let meant = stated ? twins.filter((entry) => programDays(entry.duration_text) === stated) : twins.filter(live);
+  // Two of the stated length: the live one is the one on sale.
+  if (meant.length > 1 && meant.some(live)) meant = meant.filter(live);
+  if (meant.length === 1) {
+    return meant[0].id === trip.id ? null : `ижил нэртэй ${twins.length} аялал байна; ${stated ? `таны хэлсэн ${stated} өдрийнх нь` : "идэвхтэй нь"} trip_id=${meant[0].id} — түүнийг get_trip хийгээд ашигла`;
+  }
+  const described = twins.map((entry) => `${entry.duration_text || "хугацаа бичээгүй"}, ${STATE_WORDS[entry.status] || entry.status} (trip_id=${entry.id})`).join("; ");
+  return `ижил нэртэй ${twins.length} аялал байна: ${described} — аль нь болохыг ask_user-ээр асуу (сонголт бүрт хугацаа, төлөвийг бич)`;
+}
+
 /**
  * Why a trip may not be edited in this turn, or null: it must be a real trip, the one a pasted
  * link names (when there is one), seen in this turn and opened with get_trip. `fixable` when one
@@ -174,6 +240,8 @@ function targetProblem(trip: TravelTrip | undefined, verb: string, ctx: Proposal
   if (!trip) return { reason: `${verb || "өөрчлөлт"}: аялал тодорхойгүй — алгаслаа`, fixable: true };
   const name = `«${trip.route_name}»`;
   if (ctx.linkTrips.size && !ctx.linkTrips.has(trip.id)) return { reason: `${name}: таны илгээсэн холбоосын аялал биш тул хөндөхгүй`, fixable: false };
+  const twin = twinProblem(trip, ctx);
+  if (twin) return { reason: `${name}: ${twin}`, fixable: true };
   if (!ctx.seen.has(trip.id)) return { reason: `${name}: энэ мессежээс тодорхойлогдоогүй аялал тул хөндөхгүй`, fixable: true };
   // Every edit is built on the trip as get_trip showed it (its version, dates, rows, photos).
   if (!ctx.fetched.has(trip.id)) return { reason: `${name}: мэдээллийг нь шалгаагүй тул хөндөхгүй (эхлээд get_trip)`, fixable: true };
@@ -218,12 +286,18 @@ function buildFareChangeAll(raw: Row, ctx: ProposalContext): FareChangeBuilt {
 }
 
 function buildChangeDates(raw: Row, trip: TravelTrip, ctx: ProposalContext): Built {
-  const add = (Array.isArray(raw.add_dates) ? raw.add_dates : []).map(text).filter((date) => ISO.test(date));
+  // A departure that has already left is never added: a schedule table lists the whole season, and a
+  // trip brought back with only past days is archived again the moment it is read (2026-11-21).
+  const today = ubToday(ctx.now);
+  const asked = (Array.isArray(raw.add_dates) ? raw.add_dates : []).map(text).filter((date) => ISO.test(date));
+  const add = asked.filter((date) => date >= today);
+  const past = asked.filter((date) => date < today);
   const remove = (Array.isArray(raw.remove_dates) ? raw.remove_dates : []).map(text).filter((date) => ISO.test(date));
-  if (!add.length && !remove.length) return { refuse: "нэмэх, хасах огноо тодорхойгүй" };
+  if (!add.length && !remove.length) return { refuse: past.length ? `${past.map(shortDate).join(", ")} аль хэдийн өнгөрсөн тул нэмэхгүй — ирэх өдрүүдийг заана уу` : "нэмэх, хасах огноо тодорхойгүй" };
   const fields: TripMutationFields = {};
   const parts: string[] = [];
   const notes: string[] = [];
+  if (past.length) notes.push(`${past.map(shortDate).join(", ")} аль хэдийн өнгөрсөн тул нэмээгүй.`);
   const added = add.length ? addDepartureDates(trip, add, ctx.now) : null;
   if (added?.added.length) { Object.assign(fields, added.fields); parts.push(`${added.added.map(shortDate).join(", ")} гаралт нэмнэ`); }
   notes.push(...(added?.notes ?? []));
@@ -276,7 +350,12 @@ function buildStatusVerb(verb: "cancel" | "delete", trip: TravelTrip, ctx: Propo
  * date or row) rather than only explain it (a partner trip, a link to another trip).
  */
 export function buildAgentProposal(rawActions: unknown, replyText: string, ctx: ProposalContext): { proposal: AIChangeProposal } | { note: string; fixable: boolean } {
-  const items = Array.isArray(rawActions) ? rawActions.map(record) : [];
+  // One section for several trips ("both check-up trips") is written once and planned per trip.
+  const items = (Array.isArray(rawActions) ? rawActions.map(record) : []).flatMap((raw) => {
+    if (text(raw.action) !== "append_notes" || !Array.isArray(raw.trip_ids)) return [raw];
+    const ids = [...new Set([text(raw.trip_id), ...raw.trip_ids.map(text)].filter(Boolean))];
+    return ids.length ? ids.map((id) => ({ ...raw, trip_id: id, trip_ids: undefined })) : [raw];
+  });
   const byId = new Map(ctx.trips.map((trip) => [trip.id, trip]));
   const actions: StoredAction[] = [];
   const conflicts: ConflictItem[] = [];

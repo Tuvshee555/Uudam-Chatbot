@@ -26,7 +26,7 @@ import { identityLinks, resolveLinksInText, urlsInText } from "./assistantAgent/
 import { openProposalRoute, unsavedTripLinkNote, type OpenProposal } from "./assistantAgent/openProposals";
 import { isFileProposal, loadChangeRequest, saveRevisedProposal } from "./assistantAgent/requests";
 import { hasBrainTokens } from "./assistantAgent/turn";
-import type { AgentAttachment, AgentDeps, AgentOutcome, AnswerTo } from "./assistantAgent/types";
+import type { AgentAttachment, AgentDeps, AgentDocument, AgentOutcome, AnswerTo } from "./assistantAgent/types";
 import { assistantContextText, type AssistantTurn } from "./assistantLog";
 import { aiBudgetMessage, aiBudgetState } from "./aiUsage";
 import { logError, logInfo, recordCounter } from "./observability";
@@ -69,6 +69,8 @@ export type AssistantReplyOptions = {
   answerTo?: AnswerTo | null;
   /** Images the page already hosted, sent with the instruction. */
   attachments?: AgentAttachment[];
+  /** Files sent with an instruction about saved trips, as text (assistantAgent rule 13). */
+  documents?: AgentDocument[];
   /** New-trip cards open on the page and not saved yet (assistantAgent/openProposals.ts). */
   openProposals?: OpenProposal[];
   /** Tests: the agent's model and outside world. */
@@ -252,7 +254,10 @@ async function replyFromCatalogue(typed: string, trips: Trips, options: Assistan
   const context = options.context ?? assistantContextText(options.turns || []);
   const answering = Boolean(options.answerTo?.question);
   const attachments = options.attachments || [];
-  if (!answering && !attachments.length && looksLikeBulkText(instruction)) {
+  // A message that brings files is the agent's: it is never small talk, a bulk paste or a remark on an open card.
+  const documents = (options.documents || []).filter((document) => document && typeof document.text === "string" && document.text.trim());
+  const plain = !attachments.length && !documents.length;
+  if (!answering && plain && looksLikeBulkText(instruction)) {
     // Pages of text with not one number in them are neither a price list nor an instruction.
     if (!/\d/.test(instruction)) return { kind: "note", text: "Энэ урт текстэнд огноо, үнэ, тоо алга — юуг өөрчлөхийг нэг өгүүлбэрээр бичээрэй, эсвэл файлаа оруулаарай." };
     return modelReply(instruction, { context, trips });
@@ -270,13 +275,13 @@ async function replyFromCatalogue(typed: string, trips: Trips, options: Assistan
     if (outcome.kind === "note") return { kind: "note", text: outcome.text };
   }
   // A link a trip was already made from is not read again as a new trip unless he says so (in code, before the model).
-  if (!answering && !attachments.length && !forcesNewTrip(typed)) {
+  if (!answering && plain && !forcesNewTrip(typed)) {
     const known = duplicateLinkAsk(instruction, trips, options.now);
     // Answered in code on purpose: marked as the brain, the page said «Энгийн горим — AI түр ажиллахгүй» under it.
     if (known) return { kind: "ask", ask: known, source: "agent", steps: ["resolve_link"] };
   }
   // Small talk is answered in code; it never costs a model call. A bare link is not small talk.
-  if (!answering && !attachments.length && !urlsInText(instruction).length) {
+  if (!answering && plain && !urlsInText(instruction).length) {
     const intent = parseIntent(instruction, options.now);
     if (intent.kind === "chatter" && (FREE_CHATTER.has(intent.topic) || (intent.topic === "gibberish" && !/\d/.test(instruction)))) {
       const outcome = think({ text: instruction, trips, now: options.now, context });
@@ -285,13 +290,13 @@ async function replyFromCatalogue(typed: string, trips: Trips, options: Assistan
   }
 
   // A message about a trip still on an unsaved card changes that card, never a saved trip (2026-11-14).
-  if (!answering && !attachments.length && options.openProposals?.length) {
+  if (!answering && plain && options.openProposals?.length) {
     const opened = await openCardReply(instruction, options.openProposals, trips, options);
     if (opened) return opened;
   }
 
   const deps = { ...defaultAgentDeps(), ...(options.agentDeps || {}) } as AgentDeps;
-  const run = await runAgent({ instruction, trips, turns: options.turns, answerTo: options.answerTo, attachments, today: options.now, deps });
+  const run = await runAgent({ instruction, trips, turns: options.turns, answerTo: options.answerTo, attachments, documents, today: options.now, deps });
   const outcome = run.outcome;
   if (outcome.kind === "note" && outcome.reason === "budget") {
     recordCounter("ai.budget_stop_total", 1, { route: "api.admin.ai_change" });

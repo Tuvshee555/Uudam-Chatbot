@@ -19,7 +19,7 @@ import {
   collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, photosWantedFor, rankPhotos, withoutSamePictures, type FoundPhoto,
 } from "./tripPhotoFinder";
 import {
-  TRANSPORT_CHOICE, TRANSPORT_LABELS, detectTransportType, durationForDays, isTransitDay, isTransportType,
+  TRANSPORT_CHOICE, TRANSPORT_LABELS, detectTransportType, durationForDays, isTransitDay, isTransportType, withoutBusReturn,
   type ItineraryDay, type TransportType,
 } from "./tripTransitDays";
 import { DEPARTURE_CONFLICT, DEPARTURE_SHIFT, applyTransport, checkDeparture, dayMeals, departureDays, deriveHasFood, formatYmd } from "./tripReview";
@@ -99,6 +99,36 @@ export function noteMealsEveryDay(note: string | undefined): MealKey[] {
   return MEAL_WORDS.filter(([, word]) => word.test(said)).map(([key]) => key);
 }
 
+const BED_WORDS = /ортой|оргүй|ор\s*эзл|нэмэлт\s*ор|with(?:out)?\s*(?:a\s*)?bed|no\s*bed/iu;
+/**
+ * Child rows "with a bed / without a bed" that no source mentions are the reading template's own example
+ * echoed back (a real file, 2026-11-21: one child fare became «Хүүхэд ортой» and «Хүүхэд ор эзлэхгүй 2-12 нас»,
+ * both at the child price, as two columns of the price table). They go; the row's child fare stays.
+ * `evidence` is the file's text with the admin's note; with none (a picture) nothing can be checked.
+ */
+export function withoutEchoedBedRows(fields: Row, evidence: string): Row {
+  if (!evidence.trim() || BED_WORDS.test(evidence)) return fields;
+  const extra = record(fields.extra);
+  let changed = false;
+  const clean = (rows: unknown) => (Array.isArray(rows) ? rows.map((row) => {
+    const entry = record(row);
+    if (!Array.isArray(entry.passenger_prices)) return row;
+    const kept = entry.passenger_prices.filter((passenger) => !BED_WORDS.test(text(record(passenger).label)));
+    if (kept.length === entry.passenger_prices.length) return row;
+    changed = true;
+    return { ...entry, passenger_prices: kept };
+  }) : rows);
+  const price_groups = clean(extra.price_groups);
+  const departure_date_groups = clean(extra.departure_date_groups);
+  return changed ? { ...fields, extra: { ...extra, price_groups, departure_date_groups } } : fields;
+}
+/**
+ * The admin's note says the group rides the train ("галт тэрэгтэй", "2 талдаа галт тэргээр", "стандарт галт
+ * тэрэгний өдрүүд"); "галт тэрэггүй" says the opposite.
+ */
+export function noteAsksTrain(note: string | undefined): boolean {
+  return /галт\s*тэр(?:эг(?!гүй)|г)|(?:^|[^a-z])(?:galt\s*tereg(?!gui)|train(?![a-z]))/iu.test(text(note));
+}
 /** Every evening with a hotel night gets dinner, every morning after one breakfast, every full day lunch. */
 function withNoteMeals(days: ItineraryDay[], meals: MealKey[]): ItineraryDay[] {
   if (!meals.length || !days.length) return days;
@@ -377,6 +407,8 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
     // 2026-11-06 each was a «+» suggestion the admin had to click, or it was never saved.
     const withHotels = withSuggestedHotelProfiles(fields);
     if (withHotels !== fields) fields.extra = withHotels.extra;
+    const withoutEcho = withoutEchoedBedRows(fields, [text(options.sourceText), text(options.note)].filter(Boolean).join("\n"));
+    if (withoutEcho !== fields) fields.extra = withoutEcho.extra;
     // Every priced row's day is on the calendar, and each day's seat state (full / few seats)
     // moves off the rows so the review shows it per day (tripDayStates.ts; put back on save).
     const scheduled = liftDayStates(withPricedDaysOnCalendar(fields, options.now ?? new Date()), options.now ?? new Date());
@@ -387,6 +419,10 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
     try {
       const detected = detectTransportType({ title: route, route: text(extra.route), notes: text(fields.notes), days,
         transportType: isTransportType(extra.transport_type) ? extra.transport_type : undefined, chosen: extra.transport_chosen === true, transport: extra.transport });
+      // "Галт тэрэгтэй" in the admin's note: the file's "by bus back to Ulaanbaatar" gives way to the standard train return.
+      if (detected.transport !== "direct_flight" && noteAsksTrain(options.note)) {
+        fields.extra = { ...record(fields.extra), itinerary_days: withoutBusReturn(days) };
+      }
       const rebuilt = applyTransport(fields, detected.transport);
       Object.assign(fields, rebuilt.fields);
       // Every day's meals as included / own cost / not stated, and the trip-level flag from them.
@@ -418,6 +454,12 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
       const important = new Set((Array.isArray(record(fields.extra).important_notes) ? record(fields.extra).important_notes as unknown[] : []).map((line) => squash(String(line))));
       if (important.size && typeof fields.notes === "string") {
         fields.notes = fields.notes.split(/\n/).filter((line) => !line.trim() || !important.has(squash(line))).join("\n").trim();
+      }
+      // A line listed under "Үнэд багтсан / багтаагүй" is not repeated as a condition (a real file, 2026-11-21).
+      const afterNotes = record(fields.extra);
+      const listed = new Set([afterNotes.included_items, afterNotes.excluded_items].flatMap((list) => (Array.isArray(list) ? list : [])).map((line) => squash(String(line))));
+      if (listed.size && Array.isArray(afterNotes.important_notes)) {
+        fields.extra = { ...afterNotes, important_notes: afterNotes.important_notes.filter((line) => !listed.has(squash(String(line)))) };
       }
       setConflictItem(proposal, {
         text: `«${route}» — тээвэр: ${TRANSPORT_LABELS[detected.transport]}.${built.added > 0 ? ` Файлын хөтөлбөр (${programDuration}) дээр Улаанбаатараас гарах, буцах өдрүүд нэмэгдэж нийт ${duration.duration_text} болсон.` : ""}`,

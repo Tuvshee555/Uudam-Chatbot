@@ -164,6 +164,17 @@ function ActionLines({ view }: { view: ActionView }) {
           {view.lines.map((line, index) => <ChangeLine key={`${index}-${line}`} line={line} alignValue={labeled} />)}
         </dl>
       )}
+      {view.preview && (
+        <details className="rounded-lg border border-line bg-canvas px-3 py-2 text-[13px] leading-5 text-ink">
+          <summary className="cursor-pointer select-none text-xs font-medium text-ink-muted">Нэмэх мөрүүдийг харах ({view.preview.lines.length})</summary>
+          {view.preview.title && <p className="mt-2 font-semibold">{view.preview.title}</p>}
+          <ul className="mt-1 max-h-72 space-y-0.5 overflow-y-auto pr-1">
+            {view.preview.lines.map((line, index) => (
+              <li key={`${index}-${line}`} className={line.endsWith(":") ? "pt-1.5 font-medium" : "text-ink-muted"}>{line}</li>
+            ))}
+          </ul>
+        </details>
+      )}
       {thumbs && (thumbs.before || thumbs.after) && (
         <div className="flex items-center gap-2 pt-1" aria-label="Зургийн өөрчлөлт">
           <PhotoThumb url={thumbs.before} caption={thumbs.before ? "Одоо" : "Зураггүй"} />
