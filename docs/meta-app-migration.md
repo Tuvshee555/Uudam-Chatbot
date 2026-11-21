@@ -2,6 +2,11 @@
 
 > Instagram goes another way: the UUDAM Instagram account is answered through the Ursgal hub's
 > Meta app, which already holds the Instagram permissions. See `ursgal-hub-instagram.md`.
+>
+> Found 2026-11-21: the Facebook account that administers the UUDAM Page is an **Administrator**
+> of the original app "Uudam-chatbot" (1350045020372966, Live). The original app is therefore not
+> out of reach: its settings, roles and tokens can be managed from that account, which may make
+> the move to `uudam-v2` unnecessary.
 
 The original Meta app is outside the owner's control (its ID is in no env var, its token holds
 only `pages_messaging` + `public_profile`, data access expired 2026-09-10, and `message_echoes`
