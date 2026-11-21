@@ -63,3 +63,14 @@ change.
   Instagram messages to the hub's general assistant.
 - Do not remove the two variables while the Page is still routed here. Every delivery would be refused,
   and the hub would keep telling Meta to retry.
+
+## Status
+
+- 2026-11-21: connected. Hub route «Uudam Travel» (`7c9ec704e3ae5057`); the UUDAM Page is assigned to it,
+  and Instagram account @uudam_travel_agency (17841465053339386) comes with it. Tested from an Instagram
+  account with a role on the Ursgal Digital app. A question about December trips got one reply
+  (route `catalog_listing`, `meta.instagram.request_success`).
+- The UUDAM Instagram account also has Meta's own instant reply: the consultants' phone numbers and a
+  WhatsApp card, sent on a customer's first message. It arrives as an echo with no app id
+  (`classification: unknown`), so it pauses nothing. Until App Review, it is the only answer most
+  customers get. Afterwards, decide whether to keep it next to the bot's reply.
