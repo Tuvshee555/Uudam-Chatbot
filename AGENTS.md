@@ -10,16 +10,22 @@
 - Claude Code sessions (every machine and the cloud) run `.claude/hooks/git-sync.mjs`: it pulls from GitHub at
   session start and before each message (fast-forward, or rebase of a clean tree; a conflicting rebase is
   aborted and reported), and at the end of a turn sends Claude back once to commit and push unpushed work.
-  It never commits or pushes by itself. `node .claude/hooks/git-sync.mjs install` turns it on for every repo
-  on a machine; `git config claude.gitsync false` turns it off for one repo, `CLAUDE_GIT_SYNC=off` everywhere.
+  It never commits or pushes work by itself. The first Claude session in this repo on a machine installs it for every
+  repo there (also `node .claude/hooks/git-sync.mjs install`), with the 30-minute background sweep and
+  `pull.rebase` / `rebase.autoStash` / `fetch.prune`; `git config claude.gitsync false` turns it off for one repo,
+  `CLAUDE_GIT_SYNC=off` everywhere.
 
 ## Branches: only `main` (owner's permanent rule)
 
 - Only `main` exists, locally and on GitHub. Work on `main` directly when possible; any other branch is temporary.
 - When the job on a branch is done: merge it into `main`, push `main`, delete the branch locally and on `origin`,
   remove its worktree, and switch back to `main`. Always, without asking.
-- Delete branches already fully merged into `main` whenever you find them. A branch with work not in `main` that is
-  not yours may be another session's work in progress: ask the owner before deleting it.
+- The git-sync hook deletes branches already fully merged into `main` by itself (locally, their clean worktrees, and
+  on GitHub in the owner's own repositories), at session start and in a background sweep every 30 minutes
+  (owner, 2026-11-21: two computers, "always pull, merge and delete useless branches").
+- A branch with work not in `main`: changed in the last 30 days → merge it into `main` (keeping both sides' work in a
+  conflict), run the checks, push, delete it locally and on `origin`. Changed in the last 2 hours → leave it (maybe
+  live work on the other computer). Untouched for 30+ days → leave it unless the owner asks.
 - Never delete tags: the 11 `archive/*` tags stay forever.
 
 ## Verification

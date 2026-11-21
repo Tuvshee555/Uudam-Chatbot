@@ -10,14 +10,23 @@
  *                                check, commit and push it (unless the user said not to); on a side
  *                                branch, remind it once to merge into main and delete the branch.
  *
- * The owner's rule is "only main": session start lists leftover branches (merged ones to delete,
- * unmerged ones to finish or ask about). The hook itself never deletes anything.
- *   install                      copy this script to ~/.claude/hooks and register it in
- *                                ~/.claude/settings.json, so every repository on this machine gets it.
+ * The owner's rule is "only main" (owner, 2026-11-21: "always pull, merge and delete useless branches, on
+ * both computers, without me remembering"). Branches whose every commit is already in main are deleted by
+ * the hook itself: locally, their clean worktrees, and on GitHub when the repository belongs to the owner
+ * (claude.gitsync.owner). Branches holding work are handed to Claude: worked on in the last 30 days → merge
+ * into main after checks and delete; touched in the last 2 hours → left alone (maybe live work on the
+ * other computer); older than 30 days → reported, left alone. Tags are never touched.
+ *   install                      copy this script to ~/.claude/hooks, register it in ~/.claude/settings.json
+ *                                (every repository on this machine), set pull.rebase / rebase.autoStash /
+ *                                fetch.prune, and schedule `sweep` every 30 minutes. A repository holding
+ *                                this script installs it by itself on a machine that does not have it.
+ *   sweep                        no Claude needed: every repository under claude.gitsync.roots is fetched,
+ *                                fast-forwarded (or rebased when clean) and cleaned of merged branches.
  *
  * It never discards work: it only fast-forwards, or rebases when the tree is clean, and a rebase that
- * conflicts is aborted and handed to Claude. It never commits or pushes by itself (secrets, unfinished
- * work, "don't push" instructions stay Claude's and the user's call).
+ * conflicts is aborted and handed to Claude. It never deletes a branch holding a commit main lacks, and it
+ * never commits or pushes work by itself (secrets, unfinished work, "don't push" stay Claude's and the
+ * user's call).
  * Off switches: CLAUDE_GIT_SYNC=off (everywhere) or `git config claude.gitsync false` (one repository).
  */
 import { spawnSync } from "node:child_process";
@@ -27,7 +36,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = 2;
+const VERSION = 3;
 const MODE = process.argv[2] || "";
 const SELF = fileURLToPath(import.meta.url);
 const PROMPT_EVERY_MS = 60_000;
@@ -124,25 +133,127 @@ function defaultBranch(remote) {
   return null;
 }
 
-/** Every branch but the default one, split into fully merged (to delete) and holding work not in it. */
-function otherBranches(info, def) {
+const HOUR = 3_600_000;
+/** Touched this recently, a branch may be live work on the other computer: never merged or deleted. */
+const FRESH_MS = 2 * HOUR;
+/** Untouched this long, a branch with unmerged work is abandoned: reported, left alone. */
+const OLD_MS = 30 * 24 * HOUR;
+
+/** The owner's GitHub login(s): git config --global claude.gitsync.owner (set by install). */
+function owners() {
+  return git(["config", "--global", "--get-all", "claude.gitsync.owner"], { cwd: os.homedir() }).out
+    .split(/[\n,]/).map((name) => name.trim().toLowerCase()).filter(Boolean);
+}
+
+/** GitHub owner of a remote's URL ("https://github.com/<owner>/<repo>", "git@github.com:<owner>/<repo>"). */
+function remoteOwner(remote, cwd = ROOT) {
+  return (/github\.com[:/]+([^/]+)\//i.exec(git(["remote", "get-url", remote], { cwd }).out)?.[1] || "").toLowerCase();
+}
+
+/** Branches are deleted on GitHub only in the owner's own repositories, never in a team's or a stranger's. */
+const ownsRemote = (remote) => Boolean(remote) && owners().includes(remoteOwner(remote));
+
+const tipAge = (ref) => Date.now() - (Number(git(["log", "-1", "--format=%ct", ref]).out) || 0) * 1000;
+
+/** When a local branch last moved (its reflog), or its tip commit's age without one. */
+function localAge(name) {
+  const stamp = Number(/@\{(\d+)\}/.exec(git(["reflog", "show", "--date=unix", "--format=%gd", "-n", "1", `refs/heads/${name}`]).out)?.[1]);
+  return stamp ? Date.now() - stamp * 1000 : tipAge(`refs/heads/${name}`);
+}
+
+const ago = (ms) => (ms < 2 * HOUR ? `${Math.max(1, Math.round(ms / 60_000))} min` : ms < 48 * HOUR ? `${Math.round(ms / HOUR)} h` : `${Math.round(ms / (24 * HOUR))} days`);
+
+function worktreesByBranch() {
+  const map = new Map();
+  let dir = null;
+  for (const line of git(["worktree", "list", "--porcelain"]).out.split("\n")) {
+    if (line.startsWith("worktree ")) dir = line.slice("worktree ".length);
+    else if (line.startsWith("branch refs/heads/") && dir) map.set(line.slice("branch refs/heads/".length), dir);
+  }
+  return map;
+}
+
+/**
+ * Removes a clean worktree. A linked folder inside it (node_modules joined to the main checkout) is unlinked
+ * first and never followed: `git worktree remove --force` through such a junction emptied the main
+ * checkout's node_modules before. Never --force.
+ */
+function removeWorktree(dir) {
+  const status = git(["--no-optional-locks", "status", "--porcelain"], { cwd: dir });
+  if (!status.ok || status.out) return false;
+  for (const name of ["node_modules", ".next", "vendor", ".venv"]) {
+    const link = path.join(dir, name);
+    try {
+      if (!fs.lstatSync(link).isSymbolicLink()) continue;
+      if (process.platform === "win32") fs.rmdirSync(link); else fs.unlinkSync(link);
+    } catch { /* no such link */ }
+  }
+  return git(["worktree", "remove", dir], { timeout: 60_000 }).ok;
+}
+
+/**
+ * Deletes every branch whose commits are all in the default branch: locally (with its clean worktree) and,
+ * in the owner's own repositories, on the remote (at most `remoteBudget` pushes per run). A branch exactly
+ * on the default tip that moved in the last 2 hours has most likely just been created and is left alone.
+ */
+function cleanMergedBranches(info, def, remoteBudget) {
   const defName = def.slice(info.remote.length + 1);
   const defTip = git(["rev-parse", def]).out;
-  const refs = [
-    ...lines(git(["for-each-ref", "--format=%(refname:short)", "refs/heads"]).out).filter((b) => b !== defName),
-    // origin/HEAD shows up as "origin" or "origin/HEAD" depending on the git version.
-    ...lines(git(["for-each-ref", "--format=%(refname:short)", `refs/remotes/${info.remote}`]).out)
-      .filter((r) => r !== def && r !== info.remote && r !== `${info.remote}/HEAD`),
-  ].slice(0, 40);
-  const merged = [];
-  const unmerged = [];
-  for (const ref of refs) {
-    const own = Number(git(["rev-list", "--count", `${def}..${ref}`]).out) || 0;
-    if (own) unmerged.push(`${ref} (${plural(own, "commit")} not in ${defName})`);
-    // A branch sitting exactly on the default tip has most likely just been created: leave it.
-    else if (ref !== info.branch && git(["rev-parse", ref]).out !== defTip) merged.push(ref);
+  const trees = worktreesByBranch();
+  const deleted = [];
+  const failed = [];
+  for (const name of lines(git(["for-each-ref", "--format=%(refname:short)", "refs/heads"]).out)) {
+    if (name === defName || name === info.branch) continue;
+    if (Number(git(["rev-list", "--count", `${def}..refs/heads/${name}`]).out) !== 0) continue;
+    if (git(["rev-parse", `refs/heads/${name}`]).out === defTip && localAge(name) < FRESH_MS) continue;
+    const tree = trees.get(name);
+    if (tree && path.resolve(tree) === path.resolve(ROOT)) continue;
+    if (tree && !removeWorktree(tree)) { failed.push(`${name} (its worktree ${tree} has uncommitted changes)`); continue; }
+    if (git(["branch", "-D", name]).ok) deleted.push(name); else failed.push(name);
   }
-  return { defName, merged, unmerged };
+  if (ownsRemote(info.remote)) {
+    let pushes = 0;
+    // origin/HEAD shows up as "origin" or "origin/HEAD" depending on the git version.
+    for (const ref of lines(git(["for-each-ref", "--format=%(refname:short)", `refs/remotes/${info.remote}`]).out)) {
+      if (ref === def || ref === info.remote || ref === `${info.remote}/HEAD` || ref === info.upstream) continue;
+      if (Number(git(["rev-list", "--count", `${def}..${ref}`]).out) !== 0) continue;
+      if (git(["rev-parse", ref]).out === defTip || tipAge(ref) < HOUR) continue;
+      if (pushes >= remoteBudget) break;
+      pushes += 1;
+      const r = git(["push", "--quiet", info.remote, "--delete", ref.slice(info.remote.length + 1)], { timeout: 30_000 });
+      if (r.ok) deleted.push(ref); else failed.push(`${ref} (${firstLine(r.err) || "push failed"})`);
+    }
+  }
+  git(["worktree", "prune"]);
+  return { defName, deleted, failed };
+}
+
+/** Branches holding commits the default branch lacks, by how recently they moved (remote ones: owner's repos only). */
+function unmergedBranches(info, def) {
+  const defName = def.slice(info.remote.length + 1);
+  const found = new Map();
+  const add = (ref, name, age) => {
+    const own = Number(git(["rev-list", "--count", `${def}..${ref}`]).out) || 0;
+    if (!own) return;
+    const seen = found.get(name);
+    if (!seen || age < seen.age) found.set(name, { label: `${name} (${plural(own, "commit")} not in ${defName}, last change ${ago(age)} ago)`, age });
+  };
+  for (const name of lines(git(["for-each-ref", "--format=%(refname:short)", "refs/heads"]).out)) {
+    if (name !== defName) add(`refs/heads/${name}`, name, localAge(name));
+  }
+  if (ownsRemote(info.remote)) {
+    for (const ref of lines(git(["for-each-ref", "--format=%(refname:short)", `refs/remotes/${info.remote}`]).out)) {
+      if (ref === def || ref === info.remote || ref === `${info.remote}/HEAD`) continue;
+      add(ref, ref.slice(info.remote.length + 1), tipAge(ref));
+    }
+  }
+  const all = [...found.values()];
+  return {
+    defName,
+    fresh: all.filter((b) => b.age < FRESH_MS).map((b) => b.label),
+    recent: all.filter((b) => b.age >= FRESH_MS && b.age < OLD_MS).map((b) => b.label),
+    old: all.filter((b) => b.age >= OLD_MS).map((b) => b.label),
+  };
 }
 
 function counts(range) {
@@ -214,14 +325,100 @@ function result(event, notes, shown) {
   return Object.keys(out).length ? out : null;
 }
 
-/** Keeps ~/.claude/hooks/git-sync.mjs current on every machine that opens a repository holding a newer copy. */
+/**
+ * Every machine that opens a repository holding this script gets it for all its repositories: installed when
+ * missing, upgraded when older (the owner works on two computers and forgets to set either up). Not in the
+ * cloud, where the home folder does not last. Returns "turned on" / "updated", or null when nothing changed.
+ */
 function refreshUserCopy() {
+  if (process.env.CLAUDE_CODE_REMOTE || !inside(SELF, ROOT)) return null;
   const dest = path.join(os.homedir(), ".claude", "hooks", "git-sync.mjs");
-  const theirs = Number(/const VERSION = (\d+)/.exec(readState(dest) || "")?.[1]);
-  if (theirs && theirs < VERSION && inside(SELF, ROOT)) {
-    try { fs.copyFileSync(SELF, dest); } catch { /* not ours to fix here */ }
+  const theirs = Number(/const VERSION = (\d+)/.exec(readState(dest) || "")?.[1]) || 0;
+  if (theirs >= VERSION) return null;
+  try {
+    install({ quiet: true });
+    return theirs ? "updated" : "turned on";
+  } catch {
+    return null;
   }
-  return fs.existsSync(dest);
+}
+
+/** Folders the background sweep walks (git config --global claude.gitsync.root, set by install). */
+function sweepRoots() {
+  return lines(git(["config", "--global", "--get-all", "claude.gitsync.root"], { cwd: os.homedir() }).out).filter((dir) => fs.existsSync(dir));
+}
+
+/** Git repositories under `root`, never inside OneDrive (its sync fights git), node_modules or a worktree folder. */
+function findRepositories(root, depth = 5, found = []) {
+  if (depth < 0 || /onedrive/i.test(root)) return found;
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return found; }
+  if (entries.some((entry) => entry.name === ".git")) { found.push(root); return found; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || /^(node_modules|\.next|\.venv|vendor|dist|build|worktrees|\..+)$/.test(entry.name)) continue;
+    findRepositories(path.join(root, entry.name), depth - 1, found);
+  }
+  return found;
+}
+
+/**
+ * No Claude needed (scheduled every 30 minutes by install): each repository is fetched, brought up to date
+ * the same safe way a session does it (fast-forward, or rebase of a clean tree), and cleaned of merged
+ * branches. Problems are left in a log for the next session; nothing is ever discarded.
+ */
+function sweep() {
+  if (/^(off|0|false|no)$/i.test(process.env.CLAUDE_GIT_SYNC || "")) return;
+  const report = [`git auto-sync sweep ${new Date().toISOString()}`];
+  for (const repo of sweepRoots().flatMap((root) => findRepositories(root))) {
+    ROOT = repo;
+    const gitDir = git(["rev-parse", "--absolute-git-dir"]).out;
+    if (!gitDir || git(["config", "--bool", "claude.gitsync"]).out === "false") continue;
+    const state = (name) => path.join(gitDir, "claude-git-sync", name);
+    if (Date.now() - (Number(readState(state("last-sync"))) || 0) < 10 * 60_000) continue;
+    if (!takeLock(state("lock"))) continue;
+    try {
+      if (operationInProgress(gitDir)) { report.push(`${repo}: a git operation is in progress, left alone`); continue; }
+      let info = branchInfo();
+      if (!info.branch || !info.remote) continue;
+      const fetched = git(["fetch", "--prune", "--quiet", info.remote], { timeout: 30_000 });
+      writeState(state("last-sync"), String(Date.now()));
+      if (!fetched.ok) { report.push(`${repo}: fetch failed (${firstLine(fetched.err) || "timed out"})`); continue; }
+      info = branchInfo();
+      const pulled = info.upstream ? pull(info, dirtyEntries()) : null;
+      if (pulled?.how) report.push(`${repo}: pulled ${plural(pulled.behind, "commit")} (${pulled.how})`);
+      if (pulled?.problem) report.push(`${repo}: not pulled — ${pulled.problem}`);
+      const def = defaultBranch(info.remote);
+      if (!def) continue;
+      const cleaned = cleanMergedBranches(branchInfo(), def, 20);
+      if (cleaned.deleted.length) report.push(`${repo}: deleted merged ${list(cleaned.deleted)}`);
+      if (cleaned.failed.length) report.push(`${repo}: could not delete ${list(cleaned.failed)}`);
+    } catch (error) {
+      report.push(`${repo}: ${firstLine(error?.message)}`);
+    } finally {
+      try { fs.rmSync(state("lock"), { force: true }); } catch { /* gone */ }
+    }
+  }
+  const log = path.join(os.homedir(), ".claude", "git-sync-sweep.log");
+  const previous = (readState(log) || "").split("\n").slice(-400).join("\n");
+  writeState(log, `${previous}\n${report.join("\n")}\n`.replace(/^\n+/, ""));
+  if (process.stdout.isTTY) console.log(report.join("\n"));
+}
+
+/** The sweep every 30 minutes, without a window: Task Scheduler on Windows, crontab elsewhere. */
+function scheduleSweep(dest) {
+  if (process.platform === "win32") {
+    const vbs = path.join(path.dirname(dest), "git-sync-sweep.vbs");
+    fs.writeFileSync(vbs, `CreateObject("WScript.Shell").Run """${process.execPath}"" ""${dest}"" sweep", 0, False\r\n`);
+    const r = spawnSync("schtasks", ["/Create", "/F", "/SC", "MINUTE", "/MO", "30", "/TN", "Claude git auto-sync", "/TR", `wscript.exe "${vbs}"`],
+      { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+    return r.status === 0 ? "every 30 minutes (Task Scheduler: Claude git auto-sync)" : `not scheduled (${firstLine(r.stderr || r.stdout)})`;
+  }
+  const current = spawnSync("crontab", ["-l"], { encoding: "utf8", timeout: 10_000 });
+  if (current.error) return "not scheduled (no crontab)";
+  const kept = (current.stdout || "").split("\n").filter((line) => line && !line.includes("# claude-git-sync"));
+  const line = `*/30 * * * * "${process.execPath}" "${dest}" sweep >/dev/null 2>&1 # claude-git-sync`;
+  const written = spawnSync("crontab", ["-"], { input: `${[...kept, line].join("\n")}\n`, encoding: "utf8", timeout: 10_000 });
+  return written.status === 0 ? "every 30 minutes (crontab)" : `not scheduled (${firstLine(written.stderr)})`;
 }
 
 function syncTurn({ input, gitDir, state, sid }) {
@@ -301,22 +498,24 @@ function syncTurn({ input, gitDir, state, sid }) {
       notes.push("Unless the user says otherwise: check that work (build/type-check, no secrets such as .env files or keys), commit it, git pull --rebase, then git push. If it looks like someone's unfinished work, ask before committing.");
     }
     if (def) {
-      const { defName, merged, unmerged } = otherBranches(info, def);
+      const cleaned = cleanMergedBranches(info, def, 3);
+      const { defName, fresh, recent, old } = unmergedBranches(info, def);
       notes.push(`Owner's standing rule (every machine, every repo): only ${defName} should exist. When the job on a branch is done, merge it into ${defName}, push ${defName}, delete the branch locally and on ${info.remote}, remove its worktree, and switch back to ${defName}, without asking. Never delete tags (archive/* stay forever).`);
-      if (merged.length) {
-        notes.push(`Branches already merged into ${def}: ${list(merged)}. Delete them now, locally (git branch -d) and on ${info.remote} (git push ${info.remote} --delete <name>).`);
-        shown.push(`git: ${plural(merged.length, "merged branch", "merged branches")} to delete`);
+      if (cleaned.deleted.length) {
+        notes.push(`Git auto-sync deleted branches already merged into ${def}: ${list(cleaned.deleted)}.`);
+        shown.push(`git: deleted ${plural(cleaned.deleted.length, "merged branch", "merged branches")}`);
       }
-      if (unmerged.length) {
-        notes.push(`Branches with work not in ${defName}: ${list(unmerged)}. If a branch's job is done, merge it into ${defName} and delete it. If it may be another session's work in progress, ask the owner before deleting it.`);
-        shown.push(`git: ${plural(unmerged.length, "other branch", "other branches")} with unmerged work`);
+      if (cleaned.failed.length) notes.push(`Merged branches that could not be deleted automatically: ${list(cleaned.failed)}. Delete them (keep any uncommitted work in a worktree: commit or ask first).`);
+      if (recent.length) {
+        notes.push(`Branches with work not in ${defName}, changed in the last 30 days: ${list(recent)}. Owner's rule: merge each into ${defName} now (git merge, resolving any conflict by keeping both sides' work), run the checks this repository asks for, push ${defName}, then delete the branch locally and on ${info.remote}. Skip one only if it is this session's own unfinished work.`);
+        shown.push(`git: ${plural(recent.length, "branch", "branches")} to merge into ${defName}`);
       }
+      if (fresh.length) notes.push(`Changed in the last 2 hours, maybe live work on the other computer: ${list(fresh)}. Leave them for now.`);
+      if (old.length) notes.push(`Untouched for 30+ days, with work never merged: ${list(old)}. Leave them unless the owner asks.`);
     }
     if (!shown.length) shown.push(`git: ${info.branch} is up to date with ${info.upstream || info.remote}`);
-    if (!refreshUserCopy() && !process.env.CLAUDE_CODE_REMOTE && inside(SELF, ROOT) && !readState(state("hinted"))) {
-      writeState(state("hinted"), String(Date.now()));
-      notes.push("Git auto-sync runs for this repository only. Tell the user, in one line, that running `node .claude/hooks/git-sync.mjs install` once turns it on for every repository on this machine.");
-    }
+    const installed = refreshUserCopy();
+    if (installed) shown.push(`git: auto-sync ${installed} for every repository on this computer`);
     cleanOldState(path.dirname(state("x")));
   }
   saveTurn();
@@ -371,17 +570,44 @@ function cleanOldState(dir) {
   } catch { /* nothing to clean */ }
 }
 
-function install() {
+/** Whose GitHub repositories may have branches deleted remotely: the gh login, else this repository's owner. */
+function detectOwner() {
+  const gh = spawnSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8", windowsHide: true, timeout: 15_000 });
+  const login = gh.status === 0 ? firstLine(gh.stdout) : "";
+  return login || (inside(SELF, ROOT) ? remoteOwner("origin") : "");
+}
+
+/** Where repositories live on this machine (never OneDrive: its sync fights git). */
+function defaultRoots(home) {
+  const candidates = [...(process.platform === "win32" ? ["C:/Dev", "D:/Dev"] : []),
+    ...["Dev", "dev", "code", "Code", "projects", "Projects", "repos", path.join("Documents", "GitHub"), path.join("source", "repos")].map((dir) => path.join(home, dir))];
+  return candidates.filter((dir) => !/onedrive/i.test(dir) && fs.existsSync(dir));
+}
+
+function install({ quiet = false } = {}) {
+  const say = (text) => { if (!quiet) console.log(text); };
   const home = os.homedir();
   const dest = path.join(home, ".claude", "hooks", "git-sync.mjs");
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   if (path.resolve(SELF) !== path.resolve(dest)) fs.copyFileSync(SELF, dest);
+  // Plain `git pull` (a terminal, VS Code's sync button) rebases instead of making merge commits, carries
+  // uncommitted edits across, and forgets branches deleted on GitHub: fewer conflicts between the computers.
+  // Only settings the user has not chosen are set.
+  const globalGit = (args) => git(["config", "--global", ...args], { cwd: home });
+  for (const [key, value] of [["pull.rebase", "true"], ["rebase.autoStash", "true"], ["fetch.prune", "true"], ["push.autoSetupRemote", "true"]]) {
+    if (!globalGit(["--get", key]).out) globalGit([key, value]);
+  }
+  if (!owners().length) { const owner = detectOwner(); if (owner) globalGit(["claude.gitsync.owner", owner]); }
+  if (!sweepRoots().length) for (const root of defaultRoots(home)) globalGit(["--add", "claude.gitsync.root", root.replace(/\\/g, "/")]);
+  const scheduled = scheduleSweep(dest);
+  say(`git auto-sync: owner ${owners().join(", ") || "(unknown: branches are not deleted on GitHub)"}; sweeps ${sweepRoots().join(", ") || "(no folder)"} ${scheduled}.`);
   const settingsPath = path.join(home, ".claude", "settings.json");
   let settings = {};
   if (fs.existsSync(settingsPath)) {
     try {
       settings = JSON.parse(fs.readFileSync(settingsPath, "utf8") || "{}");
     } catch (error) {
+      if (quiet) throw error;
       console.error(`${settingsPath} is not valid JSON, so it was left alone: ${error.message}`);
       process.exitCode = 1;
       return;
@@ -397,7 +623,8 @@ function install() {
   for (const [event, mode, timeout, statusMessage] of wanted) {
     const groups = (settings.hooks[event] ??= []);
     if (groups.some((group) => (group.hooks || []).some((hook) => String(hook.command || "").includes("git-sync.mjs")))) continue;
-    const hook = { type: "command", command: `node "$HOME/.claude/hooks/git-sync.mjs" ${mode}`, timeout };
+    // The absolute path: "$HOME" is not expanded by every shell a hook may run in on Windows.
+    const hook = { type: "command", command: `node "${dest.split(path.sep).join("/")}" ${mode}`, timeout };
     if (statusMessage) hook.statusMessage = statusMessage;
     groups.push({ hooks: [hook] });
     added.push(event);
@@ -406,12 +633,13 @@ function install() {
     if (fs.existsSync(settingsPath)) fs.copyFileSync(settingsPath, `${settingsPath}.before-git-sync`);
     fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
   }
-  console.log(`git auto-sync: script at ${dest}; ${added.length ? `registered ${added.join(", ")} in` : "already registered in"} ${settingsPath}. New Claude Code sessions pick it up.`);
+  say(`git auto-sync: script at ${dest}; ${added.length ? `registered ${added.join(", ")} in` : "already registered in"} ${settingsPath}. New Claude Code sessions pick it up.`);
 }
 
 function main() {
-  const input = readInput();
   if (MODE === "install") return install();
+  if (MODE === "sweep") return sweep();
+  const input = readInput();
   if (!["session", "prompt", "stop"].includes(MODE)) return;
   if (/^(off|0|false|no)$/i.test(process.env.CLAUDE_GIT_SYNC || "")) return;
   if (MODE === "stop" && input.stop_hook_active) return;
