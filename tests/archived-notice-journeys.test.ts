@@ -28,7 +28,9 @@ const catalogue = () => [
   trip("kv", "КВАНТОР НУУРЫН ЦАМХАГ", ["2097-09-01"], [1_200_000, 900_000, null],
     { status: "archived", extra: { transport_type: "land", aliases: [], archived_reason: "all_departure_dates_passed" } }),
 ];
-const ENDED = /идэвхгүй/u;
+// The ended-trip notice (endedTrip.ts). Since 2026-11-22 it says the dates have ended (owner's wording) instead of
+// "одоогоор идэвхгүй"; both are matched so the negative checks below still catch either notice.
+const ENDED = /идэвхгүй|аяллын товлосон гарах өдрүүд дууссан|гарах өдөр одоогоор товлогдоогүй/u;
 
 const readings: Array<[string, ModelOverride]> = [
   ["the model reads the active trip", { tripId: "lom", certainty: "one", topics: ["price"] }],

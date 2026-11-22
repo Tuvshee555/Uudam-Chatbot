@@ -14,6 +14,7 @@ import { DATE_NOT_SCHEDULED_HEADING, OTHER_TRIPS_LINK_LINE, buildDateNotSchedule
 import { NEAREST_DATES_MARKER, buildNearestDatesReply } from "./dateAlternatives";
 import { filterTripsByTransportIntent } from "./travelFastPathsSearch";
 import { requestedPassengersFromText } from "./tripRequest";
+import { askedTimeOf, sameDirectionTrips } from "./endedTrip";
 import type { TravelTrip } from "./travelTypes";
 
 /**
@@ -36,7 +37,12 @@ export function buildScopedNotScheduledReply(trips: TravelTrip[], askText: strin
   const ofKind = filterTripsByTransportIntent(askText, trips);
   // Other trips of the catalogue, of the kind the customer named if they named one (never a flight for "газраар").
   const others = filterTripsByTransportIntent(askText, catalogue.filter((trip) => trip.status === "active"));
-  return buildNearestDatesReply(ofKind.length ? ofKind : trips, askText, now, [OTHER_TRIPS_LINK_LINE], { others })
+  // One trip in focus: the trips going the same way that DO leave in the asked time come right after its own dates,
+  // instead of trips elsewhere. "Энэ чиглэлд 2 сард гарах аялал алга" was said of a Shanghai trip while another
+  // Shanghai trip left on 2/18, followed by Thailand and Hainan (live 2026-11-22).
+  const direction = trips.length === 1
+    ? sameDirectionTrips(trips[0], others, askedTimeOf(askText, now), now).filter((row) => row.inWindow) : [];
+  return buildNearestDatesReply(ofKind.length ? ofKind : trips, askText, now, [OTHER_TRIPS_LINK_LINE], { others, direction })
     ?? buildDateNotScheduledReply(trips, now);
 }
 

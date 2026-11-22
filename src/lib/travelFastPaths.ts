@@ -68,6 +68,7 @@ import {
 import { buildTripProgramReply } from "./travelFastPathsProgram";
 import { phoneticTokenMatches } from "./travelTextNorm";
 import { aliasOccursInText } from "./aliasMatch";
+import { OPEN_ALTERNATIVES_HEADING } from "./endedTripWording";
 import { CUSTOMER_TURN_MARK, customerTurn, intentTextOf, joinContextAndTurn } from "./customerTurn";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
@@ -1456,7 +1457,7 @@ export function buildUnavailableReplyForTrip(best: TravelTrip, trips: TravelTrip
     return [
       `✈️ ${best.route_name} — ${wording.inlineSuffix}`,
       "",
-      "Гэхдээ ижил чиглэлд эдгээр аялал нээлттэй байна:",
+      OPEN_ALTERNATIVES_HEADING,
       ...altLines,
       "",
       "Аль нь сонирхол татаж байна вэ? 😊",
@@ -1507,7 +1508,7 @@ export function buildDepartureUnavailableReply(text: string, trips: TravelTrip[]
   // customer away while other trips to the same city were open (2026-10-21).
   const alternatives = sameDestinationOpenTrips(match.trip, trips);
   if (alternatives.length) {
-    return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`, "", "Гэхдээ ижил чиглэлд эдгээр аялал нээлттэй байна:",
+    return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`, "", OPEN_ALTERNATIVES_HEADING,
       ...alternatives.map((trip) => formatAlternativeTripLine(trip, safeDurationText(trip.duration_text))), "", "Аль нь сонирхол татаж байна вэ? 😊"].join("\n");
   }
   return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`, "Өөр гарах өдрийг аяллын зөвлөхөөс тодруулъя."].join("\n");

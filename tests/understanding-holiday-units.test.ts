@@ -107,7 +107,8 @@ test("an ended trip is named from the part of its name the customer uses; a shar
     assert.equal(travelFastPaths.buildArchivedTripNotice(text, archived), null, text);
   }
   const unknown = catalogListing.withEndedTripNotice({ reply: "REFER", listed: [], authoritative: true, unknownPlace: ["манзерийн"], kind: "time" }, "Шинэ жилээр Манзерийн аялал байна уу", archived);
-  assert.match(unknown.reply, /ВОРНЕЛ МАНЗЕРИЙН АЯЛАЛ аяллын бүх гарах өдөр өнгөрсөн/u);
+  // Owner, 2026-11-22: an ended trip is said to have ended (was «… аяллын бүх гарах өдөр өнгөрсөн тул … идэвхгүй»).
+  assert.match(unknown.reply, /ВОРНЕЛ МАНЗЕРИЙН АЯЛАЛ\nЭнэ аяллын товлосон гарах өдрүүд дууссан/u);
   const stillUnknown = catalogListing.withEndedTripNotice({ reply: "REFER", listed: [], authoritative: true, unknownPlace: ["оролго"], kind: "time" }, "Шинэ жилээр Оролго аялал", archived);
   assert.equal(stillUnknown.reply, "REFER");
 });

@@ -24,6 +24,8 @@ import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripU
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { soldOutNamedReply } from "../../lib/soldOutNamed";
+import { buildEndedTripReply } from "../../lib/endedTrip";
+import { isSharedTripPost } from "../../lib/sharedTripPost";
 import { decideTripAnswer } from "../../lib/tripAnswerDecision";
 import { getRecentTripIds, getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
@@ -44,7 +46,7 @@ import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../li
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceOrBudgetReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
-import { CONTACT_OPERATOR_LABEL, isContactOperatorTap, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
+import { CONTACT_OPERATOR_LABEL, isContactOperatorTap, customerPhoneIn, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { planReplyQuestion } from "../../lib/replyQuestion";
 import { getEnv } from "../../lib/env";
 import { replyModel } from "../../lib/modelConfig";
@@ -250,11 +252,11 @@ export default async function handler(
       const [groundingSelection, groundingClarification, groundingRecent] = await Promise.all([
         getTripSelection(sessionId), getClarificationState(sessionId), getRecentTripIds(sessionId),
       ]);
-      const detectedPhone = extractPhoneNumber(normalizedText);
+      const detectedPhone = customerPhoneIn(normalizedText);
       const phoneCollected =
         Boolean(detectedPhone) ||
         history.some(
-          (message) => message.role === "user" && extractPhoneNumber(message.text),
+          (message) => message.role === "user" && customerPhoneIn(message.text),
         );
       const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
       const customerMemory = await getCustomerMemoryText(sessionId);
@@ -416,12 +418,20 @@ export default async function handler(
             ? async (pendingTripIds, selection, recentTripIds) =>
                 understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, recentTripIds, ask: understandingModel(trace) })
             : undefined,
+          getEndedTrips: getArchivedTrips,
         });
         currentSelection = routedCache.selection || null;
         factualScope = routedCache.chosenTripId
           ? (await getTrips()).filter((trip) => trip.id === routedCache?.chosenTripId)
           : routedCache.scopedClarify || routedCache.understanding?.trips || [];
         return routedCache;
+      };
+      /** Mirrors the webhook's deliverEndedTrip: the reply, and its open trips as the list the next answer picks from. */
+      const endedTripReply = async (ended: TravelTrip, askText: string): Promise<string> => {
+        const built = buildEndedTripReply({ trip: ended, catalogue: await getTrips(), askText, now: new Date() });
+        if (built.alternativeIds.length) await setClarificationState(sessionId, built.alternativeIds);
+        factualScope = (await getTrips()).filter((trip) => built.alternativeIds.includes(trip.id));
+        return appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(built.reply)), phoneAlreadyRequested);
       };
       const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
       // Same as the webhook: intent comes from the customer's words, trip names removed.
@@ -495,6 +505,15 @@ export default async function handler(
       // destination family and turns "A уу B уу?" into "which A variant?".
       {
         const route = await getRouted();
+        // Mirrors the webhook: a trip whose dates have ended is answered about that trip (endedTrip.ts).
+        if (route.endedTrip) {
+          const safeReply = await endedTripReply(route.endedTrip, route.requestText || normalizedText);
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          recordCounter("demo.ended_trip_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
         if (route.unsupportedRequest) {
           await appendMessage(sessionId, "user", normalizedText);
           return returnHandoff();
@@ -518,6 +537,11 @@ export default async function handler(
         if (soldOutNamed) {
           const safeReply = appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(soldOutNamed)), phoneAlreadyRequested);
           factualScope = tripsNamedIn(safeReply, await getTrips());
+          // Mirrors the webhook: the open trips it lists are what the next answer picks from, the full one last.
+          const firstLine = soldOutNamed.split("\n")[0];
+          const offered = [...factualScope].sort((a, b) => Number(firstLine.includes(a.route_name)) - Number(firstLine.includes(b.route_name))
+            || soldOutNamed.indexOf(a.route_name) - soldOutNamed.indexOf(b.route_name));
+          if (offered.length > 1) await setClarificationState(sessionId, offered.map((trip) => trip.id));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
@@ -662,10 +686,7 @@ export default async function handler(
             await getTrips(),
           );
           if (archivedNotice) {
-            const safeReply = appendLeadCaptureCta(
-              enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
-              phoneAlreadyRequested,
-            );
+            const safeReply = await endedTripReply(archivedNotice.trip, normalizedText);
             await appendMessage(sessionId, "user", normalizedText);
             await appendMessage(sessionId, "assistant", safeReply);
             await rememberTurn();
@@ -738,7 +759,7 @@ export default async function handler(
           // Mirror the webhook: a booking-intent date question gets nudged for
           // name + phone so the answer ends the same way Messenger's does.
           const bookingNudge =
-            botSettings.handoff_enabled && isBookingIntent(normalizedText)
+            botSettings.handoff_enabled && isBookingIntent(normalizedText) && !isSharedTripPost(normalizedText)
               ? " Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй."
               : "";
           const safeReply = appendLeadCaptureCta(
@@ -943,10 +964,7 @@ export default async function handler(
           await getTrips(),
         );
         if (archivedNotice) {
-          const safeReply = appendLeadCaptureCta(
-            enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
-            phoneAlreadyRequested,
-          );
+          const safeReply = await endedTripReply(archivedNotice.trip, normalizedText);
           const media = buildDemoMedia({ reply: safeReply, userText: programFastPathText, trips });
           await appendMessage(sessionId, "user", normalizedText);
           if (shouldHandoffSilently(safeReply)) return returnHandoff();

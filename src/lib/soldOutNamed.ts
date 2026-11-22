@@ -8,6 +8,8 @@
 import type { FastPathRoute } from "./fastPathRouting";
 import { buildSoldOutPrecedenceReply, buildUnavailableReplyForTrip } from "./travelFastPaths";
 import { findTripMatches } from "./travelFastPathsSearch";
+import { departureMatchesScope, requestedDepartureScope } from "./travelDates";
+import { upcomingDepartures } from "./tripFareBlock";
 import type { TravelTrip } from "./travelTypes";
 
 /** The score lead an open trip needs over a full one before the customer's words count as naming it alone. */
@@ -33,6 +35,13 @@ function unavailableTripSharingTheWords(text: string, chosen: TravelTrip, trips:
   const openSharing = matches.filter((match) => match.trip.status === "active"
     && match.matchedWords.some((word) => unavailable.matchedWords.includes(word))).length;
   if (openSharing > 2) return null;
+  // The time the customer asked names the trip too: "Уб <хот> хотын 2-р сарын аялал" is the open trip that leaves
+  // in February, not the full "<хот> хотын 11-р сарын" trip whose words it shares. It was told twice that the
+  // November trip was full (live 2026-11-22).
+  const asked = requestedDepartureScope(text, new Date());
+  const leavesThen = (trip: TravelTrip) => Boolean(asked) && asked!.kind !== "unsupported"
+    && upcomingDepartures(trip, new Date()).some((date) => departureMatchesScope(date, asked));
+  if (leavesThen(chosen) && !leavesThen(unavailable.trip)) return null;
   return chosenScore > unavailable.score + CLEAR_LEAD ? null : unavailable.trip;
 }
 

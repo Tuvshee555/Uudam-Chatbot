@@ -18,6 +18,8 @@ import type { TravelTrip } from "./travelTypes";
 import { requestedDepartureScope, type RequestedDepartureScope } from "./travelDates";
 import { dateIsOnSale, upcomingDepartures } from "./tripFareBlock";
 import { customerDate } from "./customerDate";
+import { directionLines, type DirectionAlternative } from "./endedTrip";
+import { ENDED_TRIP_GROUP_LINE } from "./endedTripWording";
 
 /** Heading line of the nearest-dates reply; later turns recognise the reply by it. */
 export const NEAREST_DATES_MARKER = "Хамгийн ойр гарах өдрүүд:";
@@ -152,7 +154,11 @@ export function similarTripsAround(pool: TravelTrip[], others: TravelTrip[], win
 }
 
 export function buildNearestDatesReply(pool: TravelTrip[], askText: string, now = new Date(), closingLines: string[] = [],
-  options: { /** The rest of the customer-visible catalogue: other trips around the asked date are offered too. */ others?: TravelTrip[] } = {}): string | null {
+  options: {
+    /** The rest of the customer-visible catalogue: other trips around the asked date are offered too. */ others?: TravelTrip[];
+    /** One trip in focus: the trips of its direction that leave in the asked time (endedTrip.ts sameDirectionTrips). */
+    direction?: DirectionAlternative[];
+  } = {}): string | null {
   // "20-оос 25", "20 эсвэл 21": the parser keeps only the first day, so the label would drop the second one.
   if (/\d\s*(?:-?\s*(?:оос|өөс|аас|ээс)|эсвэл|esvel|esvl)\s*\d/iu.test(askText)) return null;
   const window = askedWindowOf(requestedDepartureScope(askText, now), now);
@@ -175,6 +181,23 @@ export function buildNearestDatesReply(pool: TravelTrip[], askText: string, now 
       const otherSide = wide.find((row) => (hasBefore ? row.offsetDays > 0 : row.offsetDays < 0) && Math.abs(row.offsetDays) <= OTHER_SIDE_MAX_DAYS);
       if (otherSide) alternatives.push(otherSide);
     }
+  }
+  // The customer's trip first, then the trips going the same way that leave in the asked time, and only then
+  // trips elsewhere (owner, 2026-11-22: "answer about this trip, then at the very end offer other trips").
+  const direction = pool.length === 1 ? (options.direction || []).filter((row) => row.inWindow && row.trip.id !== pool[0].id) : [];
+  if (direction.length) {
+    return [
+      `${pool[0].route_name} ${window.label} гарахгүй.`,
+      NEAREST_DATES_MARKER,
+      ...alternatives.map((row) => `• ${row.trip.route_name}: ${customerDate(row.date, now)}${close ? ` (${offsetWords(row.offsetDays)})` : ""}`),
+      "",
+      ENDED_TRIP_GROUP_LINE,
+      "",
+      `${window.label} ижил чиглэлд гарах аялал:`,
+      ...directionLines(direction, now),
+      ...(closingLines.length ? ["", ...closingLines] : []),
+      "Эдгээрээс аль нь танд тохирох вэ? 😊",
+    ].join("\n");
   }
   const similar = options.others?.length ? similarTripsAround(pool, options.others, window, now) : [];
   const rows = alternatives.length + similar.length;

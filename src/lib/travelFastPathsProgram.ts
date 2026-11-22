@@ -35,6 +35,7 @@ import { buildAmbiguousTripReply, formatExtraFeesLine, hasPriceIntent } from "./
 import { replyPreferences } from "./chatbotReplyPolicy";
 import { aliasOccursInText } from "./aliasMatch";
 import { isAttributeWord } from "./travelModeWords";
+import { ENDED_TRIP_GROUP_LINE, ENDED_TRIP_MARKER, NEVER_DATED_LINE } from "./endedTripWording";
 
 const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "хөтөлбөр",
@@ -589,12 +590,13 @@ export function buildArchivedTripNotice(
     if (open.status !== "not_found" && !namesEndedTripAlone(text, resolution.trip, activeTrips)) return null;
   }
   const reason = (resolution.trip.extra as Record<string, unknown> | undefined)?.archived_reason;
-  const detail = reason === "no_departure_dates"
-    ? "гарах өдөр нь одоогоор баталгаажаагүй байгаа тул"
-    : "бүх гарах өдөр өнгөрсөн тул";
+  // Owner, 2026-11-22: the trip "has ended", and a group of ten or more can still go on it on a date they choose.
+  // The handlers answer with the full ended-trip reply (endedTrip.ts: the open trips of the same direction last);
+  // this short form is the catalogue listing's.
+  const status = reason === "no_departure_dates" ? NEVER_DATED_LINE : `Энэ ${ENDED_TRIP_MARKER}.`;
   return {
     trip: resolution.trip,
-    reply: `${resolution.trip.route_name} аяллын ${detail} одоогоор идэвхгүй байна. Шинэ огноо гарч ирмэгц дахин идэвхжинэ, эсвэл манай аяллын зөвлөхтэй шууд холбогдож лавлаарай.`,
+    reply: `✈️ ${resolution.trip.route_name}\n${status}\n\n${ENDED_TRIP_GROUP_LINE}`,
   };
 }
 

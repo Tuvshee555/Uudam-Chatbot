@@ -45,6 +45,7 @@ import {
   isHandoffRequest as detectHandoffRequest,
 } from "./handoffDetection";
 import { GRAPH_API_BASE } from "./metaGraph";
+import { isSharedTripPost } from "./sharedTripPost";
 
 const FALLBACK_SEND_ERROR_MESSAGE = "Уучлаарай, мессеж илгээхэд алдаа гарлаа.";
 const MAX_PHOTO_ONLY_PHOTOS = MAX_TRIP_PHOTOS;
@@ -606,6 +607,10 @@ export function extractPhoneNumber(text: string): string {
   const compact = text.replace(/[\s\-()]/g, "");
   const match = compact.match(MONGOLIAN_MOBILE_RE);
   return match ? match[0] : "";
+}
+/** The customer's own phone number; a shared post of ours carries only the company's numbers (sharedTripPost.ts). */
+export function customerPhoneIn(text: string): string {
+  return isSharedTripPost(text) ? "" : extractPhoneNumber(text);
 }
 /**
  * True when the message is essentially JUST a phone number (the customer

@@ -62,6 +62,9 @@ import { departureAvailability, departureIsClosed } from "./departureAvailabilit
 import { normalizeTripOffers } from "./tripOffers";
 import { buildCatalogListingReply } from "./catalogListing";
 import { isGenericRouteToken } from "./travelTextNorm";
+import { endedTripFromLink, endedTripNamedIn, endedTripOfReply, refersToThisTrip, typedNameWords } from "./endedTrip";
+import { ENDED_TRIP_MARKER, NEVER_DATED_LINE, OPEN_ALTERNATIVES_HEADING } from "./endedTripWording";
+import { isSharedTripPost } from "./sharedTripPost";
 
 /**
  * The asked day is one of the trip's listed departures that staff closed (sold out, paused,
@@ -287,6 +290,13 @@ export type FastPathRoute = {
   newTrip?: boolean;
   /** The customer turned down the date(s) on the table: the nearest other departures (dateRejection.ts). */
   dateAlternatives?: { reply: string; tripIds: string[] };
+  /**
+   * The customer means a trip whose dates have ended (endedTrip.ts): named, shared as a link, or pointed back at
+   * ("энэ аялал") right after its notice. The answer is about that trip; `requestText` carries the time asked.
+   */
+  endedTrip?: TravelTrip;
+  /** The message is our own post of the chosen trip, shared into the chat (sharedTripPost.ts): answer with its card. */
+  sharedPost?: boolean;
 };
 
 /** The message asks something besides when the trip departs. */
@@ -300,7 +310,10 @@ function asksBeyondDate(text: string, trips: TravelTrip[], now: Date): boolean {
 function isTripChoiceQuestion(reply: string): boolean {
   // "Not then; these trips depart on …" keeps those trips in scope: "hoyor sard" right after it
   // asks about them and got silence once the list counted as stale (live replay 2026-10-30).
-  return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply) || reply.startsWith(DATE_NOT_SCHEDULED_HEADING) || reply.includes(NEAREST_DATES_MARKER) || reply.includes(DATE_REJECTION_MARKER);
+  // "This trip is full / has ended; these are open": the customer's next words pick from those open trips
+  // ("2-р сарын" is the one leaving in February). It got the earlier list's trip instead (live 2026-11-22).
+  return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply) || reply.startsWith(DATE_NOT_SCHEDULED_HEADING) || reply.includes(NEAREST_DATES_MARKER) || reply.includes(DATE_REJECTION_MARKER)
+    || reply.includes(OPEN_ALTERNATIVES_HEADING) || reply.includes(ENDED_TRIP_MARKER) || reply.includes(NEVER_DATED_LINE);
 }
 
 /**
@@ -376,13 +389,15 @@ async function routeFastPathTextInner(input: {
     ? storedSelection : null;
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
-  const chose = async (trip: TravelTrip, understanding?: Understanding, pickOnly = false): Promise<FastPathRoute> => {
+  const chose = async (trip: TravelTrip, understanding?: Understanding, pickOnly = false, identified = false): Promise<FastPathRoute> => {
     // Every place the customer names must be in the trip (placeCoverage.ts). A pick by number, or the trip
     // already selected, is the customer's own choice; anything else that leaves a named place out is a
     // trip the bot does not have: staff take it, and no trip is remembered for the next turn.
+    // `identified`: the customer shared the trip's own page. Its post text is full of the trip's selling
+    // words ("Диснейлэнд", "чөлөөт өдөр"), which read as places the trip lacks: the shared post got silence.
     const offered = (await getClarificationState(senderId))?.candidateTripIds || [];
     // A trip from the list the bot just offered is the customer's own pick too ("лумиагаас" under a list).
-    if (!numericChoice && previousSelection?.tripId !== trip.id && !offered.includes(trip.id)
+    if (!numericChoice && !identified && previousSelection?.tripId !== trip.id && !offered.includes(trip.id)
       && (await placesMissingFromTrip(text, trip, trips, input.getEndedTrips)).length) {
       return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
     }
@@ -408,6 +423,13 @@ async function routeFastPathTextInner(input: {
     return { matchText: joinContextAndTurn(trip.route_name, turn), scopedClarify: null, chosenTripId: trip.id, selection,
       ...(requestText !== text ? { requestText } : {}), ...(previousSelection?.tripId !== trip.id ? { newTrip: true } : {}) };
   };
+  // An ended trip becomes the subject (endedTrip.ts): nothing is selected (it cannot be booked), and the reply's
+  // own open trips become the offered list once the caller has built it.
+  const endedRoute = async (trip: TravelTrip, ask = requestText): Promise<FastPathRoute> => {
+    await setTripSelection(senderId, null);
+    await clearClarificationState(senderId);
+    return { matchText: markNoTrip(text), scopedClarify: null, endedTrip: trip, ...(ask !== text ? { requestText: ask } : {}) };
+  };
   if (hasUnsupportedOriginRequest(text)) {
     return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
   }
@@ -415,7 +437,18 @@ async function routeFastPathTextInner(input: {
   // old conversation context or a pending list can replace that identity.
   if (websiteTripLinksInText(text).slugs.length > 0) {
     const linked = resolve(text, trips);
-    if (linked.status === "verified") return chose(linked.trip);
+    // A shared post is our own advertisement of the trip: it asks "tell me about this one". Its selling words
+    // ("ЗАХИАЛГА", prices, "11-р сарын 19") are not the customer's questions; read as payment and booking-term
+    // questions the data cannot answer, the post got silence (live 2026-11-22).
+    const sharedPost = isSharedTripPost(text);
+    if (linked.status === "verified") {
+      if (!sharedPost) return chose(linked.trip, undefined, false, true);
+      requestText = linked.trip.route_name;
+      return { ...(await chose(linked.trip, undefined, true, true)), sharedPost: true };
+    }
+    // The page of a trip whose dates have ended (an old post shared again): that trip, said to have ended.
+    const endedLink = input.getEndedTrips ? endedTripFromLink(text, await input.getEndedTrips()) : null;
+    if (endedLink) return endedRoute(endedLink, sharedPost ? endedLink.route_name : requestText);
     await setTripSelection(senderId, null);
     await clearClarificationState(senderId);
     if (linked.status === "ambiguous") {
@@ -432,6 +465,24 @@ async function routeFastPathTextInner(input: {
   }
   const tappedOwnButton = isOwnButtonLabel(text);
   const choice = parseNumberedChoice(text);
+
+  // --- An ended trip the customer names, or points back at, is the answer's subject (endedTrip.ts). ---
+  // Before the offered list, the month and the model: "Шанхай жанжиажэ" names one ended trip whose words two open
+  // trips share, and was answered with an earlier list's trip, another trip's "full", or silence (live 2026-11-22).
+  if (!choice && !tappedOwnButton && input.getEndedTrips) {
+    const lastReply = input.history ? lastAssistantReply(input.history) : undefined;
+    const pointsBack = refersToThisTrip(text) && Boolean(lastReply && (lastReply.includes(ENDED_TRIP_MARKER) || lastReply.includes(NEVER_DATED_LINE)));
+    if (pointsBack || typedNameWords(text).length >= 2) {
+      const ended = await input.getEndedTrips();
+      // "Энэ аялал 2 сард байгаа юу?" right after the notice: that ended trip, in the asked time.
+      const pointedAt = pointsBack && resolve(text, trips).status !== "verified" ? endedTripOfReply(lastReply, ended) : null;
+      if (pointedAt) return endedRoute(pointedAt, text);
+      const named = endedTripNamedIn(text, ended, trips);
+      // The trip on screen keeps a question about a place its own programme holds ("Диснейлэнд орох уу").
+      const selected = previousSelection ? trips.find((trip) => trip.id === previousSelection.tripId) : undefined;
+      if (named && !(selected && !(await placesMissingFromTrip(text, selected, trips, input.getEndedTrips)).length)) return endedRoute(named);
+    }
+  }
 
   // --- 1. Pending clarification: scope the answer to what we offered. ---
   // The state is saved whenever a message matches several trips, even when
@@ -542,8 +593,9 @@ async function routeFastPathTextInner(input: {
     // or a place nothing holds is a new question, not a follow-up.
     // The holiday must be in THIS message: one carried over from an earlier turn (requestText) is a window
     // for the trips this message names, answered below with that window named.
+    // "Энэ аялал цагаан сараар байгаа юу?" asks about the trip in scope, not what else exists then.
     if (holidayWindowOf(intentTextOf(text, trips), now)
-      && (named.length > 1 || newPlace || (!named.length && dateScope.length > 0 && asksWhatExists(intentTextOf(text, trips))))) {
+      && (named.length > 1 || newPlace || (!named.length && dateScope.length > 0 && asksWhatExists(intentTextOf(text, trips)) && !refersToThisTrip(text)))) {
       await clearClarificationState(senderId);
       await setTripSelection(senderId, null);
       return { matchText: markNoTrip(text), scopedClarify: null };
@@ -736,6 +788,9 @@ async function routeFastPathTextInner(input: {
     const refersToOfferedTrip =
       hasReferentialHint(text) ||
       /(?:аялал|aylal|ayalal)\s*(?:нь|ni)\b|(?:aylal|ayalal)n\b/iu.test(looseNorm(text));
+    // One trip on offer and "аялал байна уу": that trip, not "Аяллууд: 1. <it> … Аль аяллыг нь сонирхож байна вэ?"
+    // (a list of one asks nothing; live 2026-11-22).
+    if (pendingTrips.length === 1 && isGenericTripRequest(text) && !asksForCategory) return chose(pendingTrips[0]);
     if (isPassengerCountOnly(text) || (isGenericTripRequest(text) && !asksForCategory)) {
       await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
       return { matchText: text, scopedClarify: pendingTrips };

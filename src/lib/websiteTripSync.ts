@@ -11,6 +11,7 @@ import { getEnv } from "./env";
 import { classifyTripCategory } from "./tripCategorization";
 import type { TravelTrip } from "./travelTypes";
 import { sameDatabase, websiteProjectionTransaction } from "./websiteSyncTransaction";
+import { websiteEndedProgramme } from "./endedTrip";
 import { applyWebsiteDetailsPatch, fillWebsiteFields, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
 import { sameParityValue } from "./tripWebsiteParityValue";
 import { departureSeatsAfterTripEdit } from "./departureSeats";
@@ -380,6 +381,12 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   for (const field of held) {
     if (field.startsWith("sourceMetadata.")) metadata[field.slice("sourceMetadata.".length)] = record(prior?.sourceMetadata)[field.slice("sourceMetadata.".length)];
   }
+  // A trip whose dates have all passed keeps its page (owner, 2026-11-22: "the trip stays on the web"): not
+  // bookable and not listed, shown as an ended programme with its last date, fares and the group offer
+  // (endedTrip.ts websiteEndedProgramme). A re-activated trip drops it. Its old post links no longer 404.
+  const endedProgramme = websiteEndedProgramme(source);
+  metadata.publicInfoOnly = Boolean(endedProgramme);
+  if (endedProgramme) metadata.connectedSource = { ...record(metadata.connectedSource), poster: { ...poster, public_archive: endedProgramme } };
   // Never override a category staff picked by hand — only classify a trip
   // that has none yet (a brand-new sync, or one that predates this feature).
   const categoryId = prior?.categoryId

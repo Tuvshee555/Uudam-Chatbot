@@ -31,11 +31,13 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
   };
 }
 
-test("naming an expired trip by its full name gets told it is inactive, not silence", () => {
+test("naming an expired trip by its full name gets told its dates have ended, not silence", () => {
   const notice = buildArchivedTripNotice("Торвал Нордэнын аялал явна уу", [trip({})]);
   assert.ok(notice);
   assert.equal(notice!.trip.route_name, "Торвал Нордэнын аялал");
-  assert.match(notice!.reply, /идэвхгүй/);
+  // Owner, 2026-11-22: «дууссан», and a group of ten or more can still go on it (was «одоогоор идэвхгүй»).
+  assert.match(notice!.reply, /аяллын товлосон гарах өдрүүд дууссан/);
+  assert.match(notice!.reply, /10 ба түүнээс дээш хүнтэй/);
   assert.match(notice!.reply, /Торвал Нордэнын аялал/);
 });
 

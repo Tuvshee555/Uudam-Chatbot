@@ -38,6 +38,8 @@ import { dispatchNeed, needModelMode } from "../../lib/needDispatch";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { soldOutNamedReply } from "../../lib/soldOutNamed";
+import { buildEndedTripReply } from "../../lib/endedTrip";
+import { isSharedTripPost } from "../../lib/sharedTripPost";
 import { judgeDateMiss } from "../../lib/dateMiss";
 import { unanswerableForList } from "../../lib/listCompleteness";
 import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
@@ -125,7 +127,7 @@ import {
   resetWebhookStateForTests as resetWebhookStateForTestsInternal,
 } from "../../lib/webhookDedup";
 import { rememberSenderName } from "../../lib/senderNames";
-import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, isContactOperatorTap, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
+import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, isContactOperatorTap, isBookingIntent, customerPhoneIn, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 import { placeWeatherAnswer } from "../../lib/placeWeather";
@@ -479,13 +481,16 @@ async function handleMessageTurn(
     decision?: TripAnswerDecision;
     catalogTripIds?: string[];
     verifyConfiguredFacts?: boolean;
+    /** Trips outside the open catalogue whose own facts the reply quotes (an ended trip's last date). */
+    verifyAlsoWith?: TravelTrip[];
   }) => {
     const presented = input.decision?.reply ?? presentAssistantReply({ reply: input.reply, userText: text,
       hasPriorReply: history.some((message) => message.role === "assistant"),
-      phoneAlreadyRequested: Boolean(extractPhoneNumber(text)) || hasAskedForPhone(history) || history.some((message) => message.role === "user" && Boolean(extractPhoneNumber(message.text))),
+      phoneAlreadyRequested: Boolean(customerPhoneIn(text)) || hasAskedForPhone(history) || history.some((message) => message.role === "user" && Boolean(customerPhoneIn(message.text))),
     });
-    const verificationScope = input.verifyConfiguredFacts ? await getGroundingTrips()
+    const catalogScope = input.verifyConfiguredFacts ? await getGroundingTrips()
       : input.catalogTripIds ? (await getGroundingTrips()).filter(trip => input.catalogTripIds!.includes(trip.id)) : factualScope;
+    const verificationScope = input.verifyAlsoWith?.length ? [...(catalogScope || []), ...input.verifyAlsoWith] : catalogScope;
     let reply = verificationScope && !input.decision
       ? verifyTripReply({ reply: presented, trips: verificationScope, selection: currentSelection })
       : presented;
@@ -1074,7 +1079,8 @@ async function handleMessageTurn(
   // number creates a lead in the Leads tab (once per open lead). A phone-only
   // message gets a deterministic thank-you; a phone bundled with a question
   // falls through so the AI answers the question too.
-  const detectedPhone = extractPhoneNumber(text);
+  // A shared post of ours carries the company's own phone numbers, never the customer's (sharedTripPost.ts).
+  const detectedPhone = customerPhoneIn(text);
   if (detectedPhone) {
     const note = (await conversationLeadNote().catch(() => null))?.context;
     const captured = await captureLead({
@@ -1139,12 +1145,14 @@ async function handleMessageTurn(
   const phoneCollected =
     Boolean(detectedPhone) ||
     history.some(
-      (message) => message.role === "user" && extractPhoneNumber(message.text),
+      (message) => message.role === "user" && customerPhoneIn(message.text),
     );
   const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
   // A payment claim or a bank-account ask is answered by its own branch below, never by the booking collector.
   const customerWantsToBook =
-    botSettings.handoff_enabled && isBookingIntent(text) && !hasPaymentClaimIntent(text) && !hasBankAccountRequest(text);
+    botSettings.handoff_enabled && isBookingIntent(text) && !hasPaymentClaimIntent(text) && !hasBankAccountRequest(text)
+    // A shared post of ours says "ЗАХИАЛГА" to every reader; it is not this customer asking to book.
+    && !isSharedTripPost(text);
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
     if (cachedTrips) return cachedTrips;
@@ -1206,14 +1214,40 @@ async function handleMessageTurn(
   /** Delivers "this trip is full / paused, these are open"; false = there was nothing to say. */
   const deliverSoldOutNamed = async (soldOutReply: string | null): Promise<boolean> => {
     if (!soldOutReply) return false;
+    const named = tripsNamedIn(soldOutReply, await getTrips());
+    // The open trips it lists are what the customer picks from next ("2-р сарын", "1"), in the order shown, the
+    // unavailable trip of the first line last (fastPathRouting.ts isTripChoiceQuestion).
+    const firstLine = soldOutReply.split("\n")[0];
+    const offered = [...named].sort((a, b) => Number(firstLine.includes(a.route_name)) - Number(firstLine.includes(b.route_name))
+      || soldOutReply.indexOf(a.route_name) - soldOutReply.indexOf(b.route_name));
+    if (offered.length > 1) await setClarificationState(senderId, offered.map((trip) => trip.id));
     await deliverFastPathReply({
       reply: appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply)), phoneAlreadyRequested),
       failTag: "sold_out_named",
-      catalogTripIds: tripsNamedIn(soldOutReply, await getTrips()).map(trip => trip.id),
+      catalogTripIds: named.map(trip => trip.id),
       rememberSource: "api.webhook.sold_out_named",
       counter: "webhook.sold_out_named_total",
     });
     return true;
+  };
+  /**
+   * A trip whose dates have ended (endedTrip.ts): that trip first and that its dates are over (in the time asked),
+   * the group line, then the open trips of the same direction, which become the list the next answer picks from.
+   * Staff get the lead: a group or a new date is theirs to arrange.
+   */
+  const deliverEndedTrip = async (ended: TravelTrip, askText: string): Promise<void> => {
+    const built = buildEndedTripReply({ trip: ended, catalogue: await getTrips(), askText, now: new Date() });
+    await captureLead({ kind: "handoff", contactPhone: detectedPhone || "",
+      context: `Хэрэглэгч гарах өдрүүд нь дууссан «${ended.route_name}» аяллыг асуусан. 10+ хүний групп эсвэл шинэ огноо сонирхож магадгүй — зөвлөх холбогдоно уу.` });
+    if (built.alternativeIds.length) await setClarificationState(senderId, built.alternativeIds);
+    await deliverFastPathReply({
+      reply: appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(built.reply)), phoneAlreadyRequested),
+      failTag: "ended_trip",
+      catalogTripIds: built.alternativeIds,
+      verifyAlsoWith: [ended],
+      rememberSource: "api.webhook.ended_trip",
+      counter: "webhook.ended_trip_total",
+    });
   };
   // What is being ASKED: the customer's words with trip names removed. A tapped
   // "…шууд нислэгтэй аялал" button is a choice of trip, not a flight question.
@@ -1318,6 +1352,14 @@ async function handleMessageTurn(
         && (await dispatchFor({ need: modelNeed.need, signals: ["model"], constraints: extractNeedConstraints(text) }, "model"))) return;
     }
   }
+  // The customer means a trip whose dates have ended: answered about that trip (endedTrip.ts).
+  {
+    const routed = await getRouted();
+    if (routed.endedTrip) {
+      await deliverEndedTrip(routed.endedTrip, routed.requestText || text);
+      return;
+    }
+  }
   if ((await getRouted()).unsupportedRequest) {
     await deliverFastPathReply({ reply: "REFER", failTag: "unsupported_request",
       rememberSource: "api.webhook.unsupported_request" });
@@ -1360,6 +1402,21 @@ async function handleMessageTurn(
   // The customer named a trip that is sold out or paused: say so (soldOutNamed.ts) before an answer
   // plan prices it as open or a list of its siblings stands in for it.
   if (await deliverSoldOutNamed(soldOutNamedReply({ routed: await getRouted(), text, trips: await getTrips() }))) return;
+  // Our own post of an open trip, shared into the chat (sharedTripPost.ts): that trip's card. The post's selling
+  // words are not the customer's questions: read as a month listing ("11-р сарын 19") or booking terms
+  // ("ЗАХИАЛГА"), the shared post got silence (live 2026-11-22).
+  {
+    const routed = await getRouted();
+    if (routed.sharedPost && routed.chosenTripId) {
+      const card = buildStructuredTripReply(await getFastPathText(), await getTrips());
+      if (card && !card.includes(AMBIGUOUS_REPLY_MARKER)) {
+        const safeCard = appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(card)), phoneAlreadyRequested);
+        await deliverFastPathReply({ reply: safeCard, failTag: "shared_post", rememberSource: "api.webhook.shared_post",
+          counter: "webhook.shared_post_total", buttons: buildSmartButtons(safeCard, await getTrips()) || undefined });
+        return;
+      }
+    }
+  }
 
   // Compare questions intentionally mention multiple destinations/products.
   // Answer them as comparisons before scoped clarification narrows the message
@@ -1595,15 +1652,7 @@ async function handleMessageTurn(
         await getTrips(),
       );
       if (archivedNotice) {
-        await deliverFastPathReply({
-          reply: appendLeadCaptureCta(
-            enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
-            phoneAlreadyRequested,
-          ),
-          failTag: "archived_trip_notice",
-          rememberSource: "api.webhook.archived_trip_notice",
-          counter: "webhook.archived_trip_notice_total",
-        });
+        await deliverEndedTrip(archivedNotice.trip, text);
         return;
       }
       const resolution = resolveTripFromUserMessage(fastPathText, await getTrips(), {
@@ -1919,15 +1968,7 @@ async function handleMessageTurn(
       await getTrips(),
     );
     if (archivedNotice) {
-      await deliverFastPathReply({
-        reply: appendLeadCaptureCta(
-          enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
-          phoneAlreadyRequested,
-        ),
-        failTag: "archived_trip_notice",
-        rememberSource: "api.webhook.archived_trip_notice",
-        counter: "webhook.archived_trip_notice_total",
-      });
+      await deliverEndedTrip(archivedNotice.trip, text);
       return;
     }
     const structuredTripReply = buildStructuredTripReply(await getFastPathText(), trips);

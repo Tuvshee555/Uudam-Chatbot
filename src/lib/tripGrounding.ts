@@ -90,7 +90,9 @@ export function groundedTripIds(context: GroundingContext): Set<string> {
   if (websiteTripLinksInText(context.customerText).slugs.length > 0) {
     // A newly shared page replaces prior chat context, including a stale
     // selection. An unknown page gives no permission to answer about an old trip.
-    return new Set(current);
+    // The alternatives this turn's own builder lists are not old context: the page of an ended trip is answered
+    // "it has ended; these are open" (endedTrip.ts), and those open trips were held back as unrelated (2026-11-22).
+    return new Set([...current, ...catalog]);
   }
   if (current.length) {
     // "<town>-оос нисэх юм уу" on a land trip that visits that town: the words also fit a sibling's
