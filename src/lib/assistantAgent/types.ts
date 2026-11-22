@@ -11,7 +11,20 @@ import type { AIChangeProposal, TravelTrip } from "../travelTypes";
 export type AgentTurn = { role: "admin" | "assistant"; text: string };
 
 /** The open question a typed answer belongs to (the page sends back what the ask carried). */
-export type AnswerTo = { id?: string; question: string; instruction?: string };
+export type AnswerTo = {
+  id?: string;
+  question: string;
+  instruction?: string;
+  /** The agent's own note written with a dialog of questions, returned with the answers. */
+  memo?: string;
+  /** The answers to a dialog, one per question in its order (what he chose or typed). */
+  answers?: string[];
+  /** What each attached file is and which questions were asked (intake.ts packs it, the page echoes it). */
+  intake?: string;
+};
+
+/** Attached files that are one whole NEW trip: the page sends the original files to the new-trip reader with this note. */
+export type NewTripHandoff = { files: string[]; note: string };
 
 /** An image the admin attached, already hosted by the page (a Cloudinary URL). */
 export type AgentAttachment = { url: string; kind: "image" };
@@ -71,7 +84,15 @@ export type AgentDeps = {
   posterPhotos: (posterId: string) => Promise<PosterPhotoView | null>;
   budget: () => Promise<{ exceeded: boolean; message: string }>;
   now: () => number;
+  /**
+   * A photo for each program day of a saved trip that has none: the agency's own photos of the same
+   * places, and with `web` the Wikimedia search (slow). Every url returned is on our Cloudinary.
+   */
+  findPhotos: (trip: TravelTrip, catalogue: TravelTrip[], options: { web: boolean }) => Promise<FoundDayPhoto[]>;
 };
+
+/** One photo find_photos proposes for a program day. */
+export type FoundDayPhoto = { day: number; url: string; source: "house" | "web"; from?: string; credit?: Record<string, unknown> };
 
 /** The stored proposal a clarification is about (a card the admin is still reviewing). */
 export type AgentRevision = { requestId: number; instruction: string; proposal: AIChangeProposal };
@@ -85,6 +106,8 @@ export type AgentInput = {
   /** Files sent with the instruction, as text (at most 6; the page reads them through /api/admin/file-text). */
   documents?: AgentDocument[];
   revising?: AgentRevision | null;
+  /** The page asks for the files to be taken stock of first (several files, or one with loose words). Several documents always are. */
+  intake?: boolean;
   /** "Today" for dates in the prompt; defaults to deps.now(). */
   today?: Date;
   deps?: Partial<AgentDeps>;
@@ -95,8 +118,10 @@ export type AgentInput = {
 };
 
 export type AgentOutcome =
-  | { kind: "proposal"; proposal: AIChangeProposal }
+  | { kind: "proposal"; proposal: AIChangeProposal; handoffs?: NewTripHandoff[] }
   | { kind: "ask"; ask: AssistantAskPayload }
+  /** Only new trips in the attached files: nothing to review here, the page reads each file set as a new trip. */
+  | { kind: "handoff"; handoffs: NewTripHandoff[]; text: string }
   | { kind: "note"; text: string; reason?: "timeout" | "budget" | "model_failed" | "reply" | "refused" }
   /**
    * A partner page or pasted program: the router hands it to the new-trip file pipeline. `url` is

@@ -9,7 +9,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { aiBudgetMessage, aiBudgetState } from "../../../lib/aiUsage";
+import { similarSavedTrips } from "../../../lib/assistantAgent/fileMatch";
 import { documentTextOf } from "../../../lib/documentText";
+import { listTrips } from "../../../lib/travelDb";
 import { beginRequestTrace, finishRequestTrace, logWarn, recordCounter } from "../../../lib/observability";
 import { getClientKey, rateLimitAsync } from "../../../lib/rateLimit";
 import { PayloadTooLargeError, readRawBodyLimited } from "../../../lib/webhookSecurity";
@@ -57,6 +59,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     try {
       const document = await documentTextOf({ filename, mimeType, dataBase64 });
+      // `match`: the page asks whether this document looks like a trip already saved (fileMatch.ts);
+      // a likely match sends it to the assistant instead of straight to the new-trip reader.
+      if (body.match === true) {
+        const trips = await listTrips({ limit: 250, includeArchived: true }).catch(() => []);
+        return res.status(200).json({ ok: true, document, similar: similarSavedTrips(document.text, trips) });
+      }
       return res.status(200).json({ ok: true, document });
     } catch (error) {
       const message = error instanceof Error && error.message ? error.message : "Файлыг уншиж чадсангүй.";

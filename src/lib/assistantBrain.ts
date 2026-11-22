@@ -531,6 +531,26 @@ export function resolveTrip(rawText: string, trips: TravelTrip[], options: { con
 /* Questions and proposals                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * One question of a dialog the assistant asks all at once (the agent's stock-taking of attached
+ * files): a short heading for its tab, the question with the facts it rests on, and two to four
+ * choices, each saying what it does. The admin can always type his own answer instead.
+ */
+export type AskDialogOption = {
+  label: string;
+  /** What choosing it does, in one or two plain sentences. */
+  description?: string;
+  /** The choice the assistant would make: shown first, marked. */
+  recommended?: boolean;
+  /** What goes back to the assistant when it is chosen (the label, its description, a trip tag). */
+  answer: string;
+};
+export type AskDialogQuestion = {
+  id: string; header: string; text: string; options: AskDialogOption[];
+  /** The row where he types his own answer: its name and hint when the question expects typing (a price). */
+  custom_label?: string; custom_placeholder?: string;
+};
+
 export type AssistantAskPayload = {
   /** A stable id for the kind of question (trip, date, amount), for logs and tests. */
   id: string;
@@ -538,6 +558,12 @@ export type AssistantAskPayload = {
   options: ProposalQuestionOption[];
   allow_custom?: boolean;
   custom_placeholder?: string;
+  /** Several questions asked together; the page shows them as one dialog and sends every answer back in one message. */
+  questions?: AskDialogQuestion[];
+  /** The agent's own short note on what it found, returned with the answers so the next turn starts from it. */
+  memo?: string;
+  /** What each attached file is and which questions these are (assistantAgent/intake.ts); returned with the answers. */
+  intake?: string;
 };
 
 export type BrainOutcome =

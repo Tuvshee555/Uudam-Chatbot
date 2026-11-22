@@ -142,6 +142,17 @@ const APPLY = [
  * What differs between the file's days (as the model read them) and the saved program.
  * `documentText` is the files' own text: a day whose text is not there was not copied from the file.
  */
+/**
+ * The file names the hotel the saved day already names: the same letters, or the saved day says more
+ * ("«Alpha Park» амралтын цогцолбор" for "Alpha Park", "<city>: A / B" for "A/B"). Only spelling would
+ * change, and staff wording is kept (a real run proposed both as "new hotels", 2026-11-21).
+ */
+function sameHotel(saved: string, file: string): boolean {
+  const a = squash(saved);
+  const b = squash(file);
+  return a === b || (b.length >= 5 && a.includes(b));
+}
+
 export function compareProgram(trip: TravelTrip, fileDaysInput: unknown, documentText: string): ProgramComparison {
   const saved = savedDays(trip);
   const file = fileDaysOf(fileDaysInput);
@@ -165,7 +176,7 @@ export function compareProgram(trip: TravelTrip, fileDaysInput: unknown, documen
     if (source && day.text && !source.includes(squash(day.text).slice(0, 60))) unverified.push(day.day);
     const difference: DayDifference = { saved_day: target.day, file_day: day.day, title: target.title };
     const fileHotel = cleanHotelName(day.hotel);
-    if (fileHotel && squash(fileHotel) !== squash(target.hotel)) difference.hotel = { saved: target.hotel, file: day.hotel, write: fileHotel };
+    if (fileHotel && !sameHotel(target.hotel, fileHotel)) difference.hotel = { saved: target.hotel, file: day.hotel, write: fileHotel };
     const meals = MEALS.filter((meal) => typeof day.meals[meal] === "boolean" && typeof target.meals[meal] === "boolean" && day.meals[meal] !== target.meals[meal])
       .map((meal) => ({ meal, saved: target.meals[meal] as boolean, file: day.meals[meal] as boolean }));
     if (meals.length) difference.meals_differ = meals;

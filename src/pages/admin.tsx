@@ -999,6 +999,7 @@ export default function AdminPage() {
               }
               onSend={() => void assistant.sendAssistant()}
               onChooseOption={assistant.chooseAskOption}
+              onSubmitAskDialog={assistant.submitAskDialog}
               onQuickAction={(kind, trip, value) => void assistant.sendQuickAction(kind, trip, value)}
               onEditTripPrice={(trip) => beginEditTrip(trip)}
               onNewTrip={() => beginCreateTrip()}

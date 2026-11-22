@@ -9,7 +9,7 @@
  */
 import type { ToolDefinition } from "./types";
 
-export const READ_TOOLS = ["search_trips", "get_trip", "resolve_link", "read_web_page", "host_image", "compare_program"] as const;
+export const READ_TOOLS = ["search_trips", "get_trip", "resolve_link", "read_web_page", "host_image", "compare_program", "find_photos", "take_stock"] as const;
 export const TERMINAL_TOOLS = ["propose_changes", "ask_user", "reply", "read_trip_source"] as const;
 export type ReadToolName = (typeof READ_TOOLS)[number];
 export type TerminalToolName = (typeof TERMINAL_TOOLS)[number];
@@ -101,6 +101,16 @@ const ACTION_ITEM = {
   additionalProperties: false,
 };
 
+const NEW_TRIP_ITEM = {
+  type: "object",
+  properties: {
+    files: { type: "array", items: { type: "string" }, description: "The exact names of the attached files that make this ONE new trip (its program, its price table)." },
+    answers: { type: "array", items: { type: "number" }, description: "The numbers of his answers that are about this new trip (its selling price, its transport, its dates)." },
+  },
+  required: ["files"],
+  additionalProperties: false,
+};
+
 export const AGENT_TOOLS: ToolDefinition[] = [
   fn("search_trips", "Find trips in the catalogue (every status) by the admin's words: name, place, alias, Latin spelling. With date (YYYY-MM-DD or as typed) only trips that leave that day. Empty query + date = every trip leaving that day.",
     { query: { type: "string" }, date: { type: "string" },
@@ -132,14 +142,44 @@ export const AGENT_TOOLS: ToolDefinition[] = [
         },
       },
     }, ["trip_id", "file_days"]),
-  fn("propose_changes", "END the turn with a proposal the admin reviews and saves. Every exact change of the message, one action each, all in this one call.",
-    { reply_text: { type: "string", description: "1-2 short Mongolian sentences: what will change." }, actions: { type: "array", items: ACTION_ITEM } },
-    ["reply_text", "actions"]),
-  fn("ask_user", "END the turn with ONE question the admin answers by tapping a button. Use whenever the trip, date, amount, photo or day is not certain. Each option's answer is the full instruction restated with the choice made.",
+  fn("find_photos", "Find a photo for every program day of a saved trip that has none: first the agency's own photos of the same places (from its other trips), then free photos from Wikimedia Commons. Returns {day, url} pairs already on our Cloudinary; propose each as replace_photo {day, new_url}. Call get_trip first.",
+    { trip_id: { type: "string" }, web: { type: "boolean", description: "true = also search Wikimedia Commons for the days the agency has no photo of (slow, up to a minute)." } }, ["trip_id"]),
+  fn("take_stock", "REQUIRED before you finish whenever files are attached and you must work out what they are (several files, or one file with loose words): say what EVERY attached file is, after search_trips / get_trip / compare_program showed you. The system answers with the decisions only the admin can make (must_ask) and the work each file means (do).",
     {
-      question: { type: "string", description: "Plain Mongolian question." },
+      files: {
+        type: "array",
+        description: "Every attached file, once.",
+        items: {
+          type: "object",
+          properties: {
+            file: { type: "string", description: "The attached file's exact name." },
+            kind: { type: "string", enum: ["saved_program", "new_trip", "schedule", "extra_info", "other"],
+              description: "saved_program = the program of a trip the catalogue ALREADY has (same places, same number of days; live or archived; compare_program it first). new_trip = a whole trip the catalogue does not have (another route, length or occasion), or a price table / information that belongs to it. schedule = a departure and price table of ONE saved trip. extra_info = a list of optional services or tests, conditions, for saved trips. other = none of these." },
+            trip_ids: { type: "array", items: { type: "string" }, description: "saved_program / schedule: the ONE saved trip. extra_info: every saved trip it is for. new_trip / other: leave empty." },
+            group: { type: "number", description: "new_trip only: files that make ONE new trip share a number (1, 2, …)." },
+          },
+          required: ["file", "kind"],
+          additionalProperties: false,
+        },
+      },
+    }, ["files"]),
+  fn("propose_changes", "END the turn with a proposal the admin reviews and saves. Every exact change of the message, one action each, all in this one call.",
+    {
+      reply_text: { type: "string", description: "1-2 short Mongolian sentences: what will change." },
+      actions: { type: "array", items: ACTION_ITEM },
+      new_trips: {
+        type: "array",
+        description: "Attached files that are whole NEW trips the catalogue does not have: each entry becomes its own new-trip review card after this proposal (actions may be empty when the message is only new trips).",
+        items: NEW_TRIP_ITEM,
+      },
+    },
+    ["reply_text", "actions"]),
+  fn("ask_user", "END the turn by asking the admin. ONE thing not certain (which trip, date, amount, photo, day): question + options, answered by one tap. SEVERAL decisions at once (taking stock of attached files): questions[] — they are shown together as one dialog and answered in one go.",
+    {
+      question: { type: "string", description: "One question: plain Mongolian." },
       options: {
         type: "array",
+        description: "One question: its choices.",
         items: {
           type: "object",
           properties: {
@@ -151,11 +191,47 @@ export const AGENT_TOOLS: ToolDefinition[] = [
           additionalProperties: false,
         },
       },
-    }, ["question", "options"]),
+      questions: {
+        type: "array",
+        description: "Several decisions (1-4), each standing on its own.",
+        items: {
+          type: "object",
+          properties: {
+            topic: { type: "string", enum: ["saved_or_new", "selling_price", "price_remark", "transport", "extras", "other"], description: "The decision this question is, as take_stock's must_ask names it (other = a question of your own)." },
+            file: { type: "string", description: "The attached file the question is about (as must_ask names it)." },
+            header: { type: "string", description: "The tab's name: 1-3 Mongolian words (≤ 22 characters), e.g. «Шинжилгээний үнэ», «Шинэ жил ₮», «Тээвэр»." },
+            question: { type: "string", description: "The whole question in plain Mongolian: which trip or file it is about, the figures or the sentence you found, and what you need decided." },
+            options: {
+              type: "array",
+              description: "2-4 choices that exclude each other; the one you recommend first. Never an «Өөр / бусад» option: the admin can always type his own answer. For the topics saved_or_new, selling_price, transport and extras the system writes the choices itself: send none.",
+              items: {
+                type: "object",
+                properties: {
+                  label: { type: "string", description: "1-5 Mongolian words." },
+                  description: { type: "string", description: "One or two plain sentences: what happens when this is chosen." },
+                  recommended: { type: "boolean", description: "true on the one choice you recommend (at most one per question)." },
+                  trip_id: { type: "string", description: "When the choice is a trip: its trip_id." },
+                },
+                required: ["label", "description"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["header", "question"],
+          additionalProperties: false,
+        },
+      },
+      memo: { type: "string", description: "With questions[]: your own short note for the next turn (≤ 1,200 characters): what each file is, the trip_id it belongs to, and what you will do once he answers." },
+    }),
   fn("reply", "END the turn with a plain Mongolian answer: facts asked for, nothing to change, or why something cannot be done.",
     { text: { type: "string" } }, ["text"]),
-  fn("read_trip_source", "END the turn by sending a partner page or a pasted program to the new-trip reader: it becomes the usual NEW-trip review card. Pass the page url (one from the admin's message, read with read_web_page). For a program the admin pasted, pass no url: the system sends his own text.",
-    { url: { type: "string" }, note: { type: "string", description: "What the admin asked, in his words." } }),
+  fn("read_trip_source", "END the turn by sending a NEW trip's source to the new-trip reader: it becomes the usual NEW-trip review card. A partner page: pass its url (one from the admin's message, read with read_web_page). A program the admin pasted: pass nothing, the system sends his own text. Attached files that are a new trip (and nothing else changes): pass files.",
+    {
+      url: { type: "string" },
+      note: { type: "string", description: "What the admin asked, in his words." },
+      files: { type: "array", items: { type: "string" }, description: "The exact names of the attached files that make this ONE new trip (its program, its price table)." },
+      answers: { type: "array", items: { type: "number" }, description: "The numbers of his answers that are about this new trip (its price, its transport)." },
+    }),
 ];
 
 /** The tools offered on the last allowed round: only the ones that end the turn. */

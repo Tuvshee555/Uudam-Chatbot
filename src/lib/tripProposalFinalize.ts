@@ -8,7 +8,8 @@
  * clarification answer, so choosing another transport rebuilds the days.
  */
 import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
-import type { AIChangeProposal, AITripAction, ConflictItem } from "./travelTypes";
+import { pickLibraryPhotos, type LibraryPhoto } from "./tripPhotoLibrary";
+import type { AIChangeProposal, AITripAction, ConflictItem, TravelTrip } from "./travelTypes";
 import { askOpenAIChatParts } from "./openaiFallback";
 import { logWarn } from "./observability";
 import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
@@ -289,21 +290,69 @@ function countPhotos(fields: Row, days: ItineraryDay[]): number {
   return urls.size;
 }
 
-async function fillPhotos(input: { action: AITripAction; route: string; days: ItineraryDay[]; deps: PhotoDeps; trace?: Trace }): Promise<{ added: number; message: string | null }> {
-  const { action, route, days, deps } = input;
+/**
+ * The agency's own photos first: a program day with no photo takes the house photo of the same place
+ * (another saved trip's day photo, tripPhotoLibrary.ts). Returns the days with those photos and how many.
+ */
+function withHousePhotos(fields: Row, days: ItineraryDay[], library: LibraryPhoto[] | undefined): { days: ItineraryDay[]; added: number } {
+  if (!library?.length) return { days, added: 0 };
+  const existing = (Array.isArray(fields.photo_urls) ? fields.photo_urls : []).filter((url): url is string => typeof url === "string");
+  const picks = pickLibraryPhotos(library, days, { exclude: existing });
+  if (!picks.length) return { days, added: 0 };
+  const byDay = new Map(picks.map((pick) => [pick.day, pick.url]));
+  const next = days.map((day, index) => {
+    const url = byDay.get(typeof day.day === "number" ? day.day : index + 1);
+    return url && !text(day.photo) ? { ...day, photo: url } : day;
+  });
+  fields.photo_urls = Array.from(new Set([...existing, ...picks.map((pick) => pick.url)])).slice(0, MAX_TRIP_PHOTOS);
+  fields.extra = { ...record(fields.extra), itinerary_days: next };
+  return { days: next, added: picks.length };
+}
+
+export type SavedTripPhoto = { day: number; url: string; source: "house" | "web"; from?: string; credit?: Row };
+
+/**
+ * A photo for each program day of a SAVED trip that has none (the assistant's find_photos): the
+ * agency's own photos of the same places first; with `web`, the Wikimedia search for the days
+ * still empty. Nothing is written: the caller proposes each as a day photo.
+ */
+export async function photosForSavedTrip(trip: TravelTrip, options: { library: LibraryPhoto[]; web?: boolean; photos?: PhotoDeps; trace?: Trace }): Promise<SavedTripPhoto[]> {
+  const before = (Array.isArray(trip.extra?.itinerary_days) ? trip.extra.itinerary_days : []).map((entry, index) => ({ ...(record(entry) as ItineraryDay), day: index + 1 }));
+  if (!before.length) return [];
+  const fields: Row = { route_name: trip.route_name, photo_urls: [...(trip.photo_urls || [])], extra: { ...(trip.extra || {}), itinerary_days: before } };
+  const library = options.library.filter((photo) => photo.trip_id !== trip.id);
+  await fillPhotos({ action: { action: "upsert", fields } as unknown as AITripAction, route: trip.route_name, days: before, deps: options.photos || {}, trace: options.trace, library, webSearch: options.web === true });
+  const after = (record(fields.extra).itinerary_days as ItineraryDay[]) || [];
+  const credits = record(record(fields.extra).photo_credits);
+  const houseUrls = new Map(library.map((photo) => [photo.url, photo]));
+  return after.flatMap((day, index) => {
+    const url = text(day.photo);
+    if (!url || text(before[index]?.photo)) return [];
+    const house = houseUrls.get(url);
+    const credit = record(credits[url]);
+    return [{ day: index + 1, url, source: house ? "house" as const : "web" as const, ...(house ? { from: house.trip_name } : {}), ...(Object.keys(credit).length ? { credit } : house?.credit ? { credit: house.credit } : {}) }];
+  });
+}
+
+async function fillPhotos(input: { action: AITripAction; route: string; days: ItineraryDay[]; deps: PhotoDeps; trace?: Trace; library?: LibraryPhoto[];
+  /** false = the agency's own photos only, no search on the web. */ webSearch?: boolean }): Promise<{ added: number; message: string | null }> {
+  const { action, route, deps } = input;
   const fields = action.fields as Row;
+  const house = withHousePhotos(fields, input.days, input.library);
+  const days = house.days;
+  const houseLine = house.added ? `«${route}»: манай бусад аяллын ижил газрын зургаас ${house.added} өдөрт зураг тавив.` : null;
   const extra = record(fields.extra);
   const have = countPhotos(fields, days);
   // One photo per day, never fewer than six (photosWantedFor).
   const missing = photosWantedFor(days.length) - have;
-  if (missing <= 0) return { added: 0, message: null };
+  if (missing <= 0 || input.webSearch === false) return { added: house.added, message: houseLine };
   const startedAt = Date.now();
   const budgetMs = deps.budgetMs ?? 60_000;
   const upload = deps.upload || uploadImageToCloudinary;
   const programDays = days.filter((day) => !isTransitDay(day));
   const destinations = Array.isArray(extra.destinations) ? extra.destinations.map(String) : undefined;
   const queries = await photoQueriesForTrip({ title: route, days: programDays, destinations, wanted: missing, ask: deps.ask, trace: input.trace });
-  if (!queries.length) return { added: 0, message: null };
+  if (!queries.length) return { added: house.added, message: houseLine };
   const dayOfQuery = new Map(queries.map((query) => [query.query, query.day]));
   const subject = (list: Array<{ query: string }>) => `${route}: ${list.map((query) => query.query).join(", ")}`;
   const candidates = await collectPhotoCandidates(queries.map((query) => query.query), { perQuery: 6, fetchImpl: deps.fetchImpl });
@@ -350,7 +399,7 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
     }));
     for (const entry of uploaded) if (entry) placed.push(entry);
   }
-  if (!placed.length) return { added: 0, message: null };
+  if (!placed.length) return { added: house.added, message: houseLine };
   for (const { photo, url } of placed) credits[url] = { title: photo.title, author: photo.author, license: photo.license, page: photo.pageUrl, provider: PHOTO_PROVIDER };
   const urls = placed.map((entry) => entry.url);
   const existing = (Array.isArray(fields.photo_urls) ? fields.photo_urls : []).filter((url): url is string => typeof url === "string");
@@ -369,7 +418,7 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
     if (!isTransitDay(day) && !text(day.photo)) day.photo = unplaced.shift();
   }
   fields.extra = { ...extra, itinerary_days: withPhotos, photo_credits: credits };
-  return { added: urls.length, message: `«${route}»: ${PHOTO_PROVIDER}-оос ${urls.length} зураг нэмэв (зохиогч, лицензийг хадгалсан).` };
+  return { added: urls.length + house.added, message: `${houseLine ? `${houseLine} ` : ""}«${route}»: ${PHOTO_PROVIDER}-оос ${urls.length} зураг нэмэв (зохиогч, лицензийг хадгалсан).` };
 }
 
 const squash = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
@@ -398,7 +447,9 @@ export function keptEvidence(raw: unknown, sourceText?: string): { source_eviden
  */
 const MEAL_NAMES: Record<MealKey, string> = { breakfast: "өглөөний цай", lunch: "өдрийн хоол", dinner: "оройн хоол" };
 
-export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace; sourceText?: string; now?: Date; /** The admin's note sent with the file. */ note?: string } = {}): Promise<void> {
+export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace; sourceText?: string; now?: Date; /** The admin's note sent with the file. */ note?: string;
+  /** The agency's own day photos by place (tripPhotoLibrary.ts), read only when a trip needs photos. */ loadLibrary?: () => Promise<LibraryPhoto[]> } = {}): Promise<void> {
+  let library: LibraryPhoto[] | undefined;
   scrubPartnerPrices(proposal);
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Row;
@@ -504,7 +555,8 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
         }
       }
       if (options.photos) {
-        const result = await fillPhotos({ action, route, days: built.days, deps: options.photos, trace: options.trace });
+        library ??= options.loadLibrary ? await options.loadLibrary().catch(() => []) : [];
+        const result = await fillPhotos({ action, route, days: built.days, deps: options.photos, trace: options.trace, library });
         if (result.message) setConflictItem(proposal, { text: result.message, severity: "info", type: "photos_found", data: { route_name: route, added: result.added } }, route);
       }
     } catch (error) {

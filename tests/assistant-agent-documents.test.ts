@@ -181,12 +181,91 @@ test("files that are a whole new trip are handed to the new-trip reader as they 
     () => [{ name: "search_trips", args: { query: "Гамма уулын" } }],
     () => [{ name: "read_trip_source", args: { note: "шинэ аялал" } }],
   ], { documents: [program, price] });
-  assert.equal(result.outcome.kind, "trip_source");
-  const source = result.outcome as { label: string; text: string; note: string; url?: string };
-  assert.equal(source.label, "шинэ-аялал.docx");
-  assert.equal(source.text, `Файл: ${program.name}\n${program.text}\n\nФайл: ${price.name}\n${price.text}`);
-  assert.equal(source.note, "энэ аяллыг шинээр оруулж өг, одоо байгаа аялалд бүү нэм", "the note is his own message, never the model's");
-  assert.equal(source.url, undefined);
+  // The ORIGINAL files go to the reader (a poster is read there as a picture, not as our transcription of it).
+  assert.deepEqual(result.outcome, { kind: "handoff", text: "", handoffs: [{ files: [program.name, price.name], note: "энэ аяллыг шинээр оруулж өг, одоо байгаа аялалд бүү нэм" }] },
+    "the note is his own message, never the model's");
+});
+
+test("a package: the files are taken stock of first, every open decision is asked at once as a dialog, and each new trip takes only its own answers", async () => {
+  const program = { name: "гамма-шинэ.docx", text: "ТУРШИЛТ – ГАММА УУЛЫН ШИНЭ ЖИЛИЙН АЯЛАЛ\nЛанд үнэ: том хүн 1450 юань\n1-р өдөр: Эрээн – Гамма уул\n2-р өдөр: Гамма уул – Эрээн. Автобусаар буцна" };
+  const first = await run("эдгээр файлыг оруулаад өг", [
+    () => [{ name: "search_trips", args: { query: "Гамма уулын" } }, { name: "get_trip", args: { trip_id: "t-check-a" } }],
+    // Straight to a question: sent back to say first what every file is.
+    () => [{ name: "ask_user", args: { question: "Юу хийх вэ?", options: [] } }],
+    ({ messages }) => {
+      assert.match(JSON.parse(toolResults(messages).at(-1)!).not_done, /first call take_stock with what EVERY attached file is/);
+      return [{ name: "take_stock", args: { files: [
+        { file: "нэмэлт.xlsx", kind: "extra_info", trip_ids: ["t-check-a"] },
+        { file: "гамма-шинэ.docx", kind: "new_trip", group: 1 },
+      ] } }];
+    },
+    ({ messages }) => {
+      const stock = JSON.parse(toolResults(messages).at(-1)!);
+      assert.deepEqual(stock.must_ask.map((item: { topic: string; file: string }) => [item.topic, item.file]), [["selling_price", "гамма-шинэ.docx"], ["transport", "гамма-шинэ.docx"]],
+        "a new trip with only a yuan cost and a bus home: its price and its transport are his; a two-line list has nothing to decide");
+      assert.ok(stock.do.some((line: string) => /"гамма-шинэ\.docx": a NEW trip/.test(line)));
+      return [{ name: "ask_user", args: {
+        memo: "нэмэлт.xlsx = t-check-a-гийн нэмэлт жагсаалт; гамма-шинэ.docx = шинэ аялал",
+        questions: [
+          { topic: "selling_price", file: "гамма-шинэ.docx", header: "Шинэ аяллын ₮", question: "«Гамма уулын шинэ жилийн аялал» файлд зөвхөн ланд үнэ (1450 юань) байна. Зарах үнэ хэд вэ?", options: [
+            { label: "Үнэгүйгээр нийтлэх", description: "Сайтад «Үнэ лавлах» гэж харагдана.", recommended: true },
+          ] },
+          { header: "Тээвэр", question: "Файлд автобусаар буцна гэжээ. Аль нь вэ?", options: [
+            { label: "Файлд бичсэнээр", description: "Автобусаар буцна." },
+          ] },
+          { topic: "extras", file: "нэмэлт.xlsx", header: "Нэмэлт жагсаалт", question: "Нэмэлт үйлчилгээний жагсаалтыг альфа аялалд яаж харуулах вэ?", options: [
+            { label: "Үнэтэй нь", description: "…", recommended: true },
+          ] },
+        ],
+      } }];
+    },
+  ], { documents: [EXTRAS, program] });
+  assert.equal(first.outcome.kind, "ask", JSON.stringify(first.outcome));
+  type Question = { id: string; header: string; text: string; custom_label?: string; custom_placeholder?: string; options: Array<{ label: string; description?: string; recommended?: boolean; answer: string }> };
+  const ask = (first.outcome as unknown as { ask: { text: string; memo: string; intake: string; options: unknown[]; questions: Question[] } }).ask;
+  assert.deepEqual(ask.questions.map((question) => [question.id, question.header, question.options.map((option) => `${option.recommended ? "*" : ""}${option.label}`), question.custom_label || ""]), [
+    ["q1", "Шинэ аяллын ₮", ["Ноорог болгож хадгалах"], "Зарах үнээ бичих"],
+    ["q2", "Тээвэр", ["*Стандарт галт тэрэгний өдрүүд", "Файлд бичсэнээр"], ""],
+    ["q3", "Нэмэлт жагсаалт", ["*Үнэтэй нь жагсаах", "Зөвхөн нэрсийг", "Нэмэхгүй"], ""],
+  ], "a decision the system knows gets the same choices every time: never a «publish without a price» the save refuses, the house train days recommended");
+  assert.equal(ask.questions[0].custom_placeholder, "том хүн …₮, хүүхэд …₮");
+  assert.equal(ask.questions[1].options[0].answer, "Тээвэр: Стандарт галт тэрэгний өдрүүд — Улаанбаатараас галт тэргээр гарч, галт тэргээр буцаж ирэх манай жишиг өдрүүдийг хөтөлбөрт нэмнэ.");
+  assert.match(ask.text, /^1\) Шинэ аяллын ₮: [\s\S]*\n2\) Тээвэр: [\s\S]*\n3\) Нэмэлт жагсаалт: /);
+  assert.match(ask.memo, /гамма-шинэ\.docx = шинэ аялал/);
+  assert.deepEqual(ask.options, []);
+  assert.deepEqual(JSON.parse(ask.intake).asked, [
+    { topic: "selling_price", header: "Шинэ аяллын ₮", file: "гамма-шинэ.docx" },
+    { topic: "transport", header: "Тээвэр", file: "гамма-шинэ.docx" },
+    { topic: "extras", header: "Нэмэлт жагсаалт", file: "нэмэлт.xlsx", trip_id: "t-check-a" },
+  ], "which decision each question is travels with the dialog");
+
+  // His answers, as the page sends them: one message, numbered, each answer on its own, and the stock-taking echoed.
+  const answers = ["Шинэ аяллын ₮: том хүн 1,590,000, хүүхэд 1,390,000", ask.questions[1].options[0].answer, ask.questions[2].options[0].answer];
+  const second = await run(answers.map((answer, index) => `${index + 1}) ${answer}`).join("\n"), [
+    ({ messages }) => {
+      const user = String(messages[1].content);
+      assert.match(user, /Админ таны АСУУЛТУУДАД хариулж байна/);
+      assert.match(user, /Админы шийдвэр, асуулт бүрээр:\n- Шинэ аяллын ₮ \(«гамма-шинэ\.docx»\): том хүн 1,590,000, хүүхэд 1,390,000\n- Тээвэр \(«гамма-шинэ\.docx»\): Стандарт галт тэрэгний өдрүүд/);
+      assert.match(user, /"нэмэлт\.xlsx": append_notes \{trip_ids: \[t-check-a\]/);
+      assert.match(user, /Аяллын дэлгэрэнгүй \(get_trip-ийн хариу/, "the trip the list belongs to is opened for the model straight away");
+      return [{ name: "propose_changes", args: { reply_text: "Альфа аялалд жагсаалт нэмнэ; Гамма уулын аяллыг шинээр уншина.", actions: [
+        { action: "append_notes", trip_id: "t-check-a", heading: HEADING, text: SECTION, summary: "" },
+      ] } }];
+    },
+  ], { documents: [EXTRAS, program], answerTo: { id: "agent", question: ask.text, instruction: "эдгээр файлыг оруулаад өг", memo: ask.memo, answers, intake: ask.intake } });
+  assert.equal(second.outcome.kind, "proposal", JSON.stringify(second.outcome));
+  const outcome = second.outcome as unknown as { proposal: { actions: Action[] }; handoffs: Array<{ files: string[]; note: string }> };
+  assert.deepEqual(outcome.proposal.actions.map((action) => [action.action, action.trip_id]), [["append_notes", "t-check-a"]]);
+  assert.deepEqual(outcome.handoffs, [{
+    files: ["гамма-шинэ.docx"],
+    note: "Шинэ аялал болгон нэм.\nЗарах үнэ: том хүн 1,590,000, хүүхэд 1,390,000\nТээвэр: стандарт галт тэрэгний өдрүүд — Улаанбаатараас галт тэргээр гарч, галт тэргээр буцна.",
+  }], "the new trip is handed off even though the model did not list it, and its reader is told his decisions about THIS trip only");
+
+  // Only new trips: the hand-off is the whole answer.
+  const only = await run("эдгээрийг шинэ аялал болгон оруул", [
+    () => [{ name: "propose_changes", args: { reply_text: "Шинэ аялал болгон уншина.", actions: [], new_trips: [{ files: ["гамма-шинэ.docx"] }] } }],
+  ], { documents: [program] });
+  assert.deepEqual(only.outcome, { kind: "handoff", text: "Шинэ аялал болгон уншина.", handoffs: [{ files: ["гамма-шинэ.docx"], note: "эдгээрийг шинэ аялал болгон оруул" }] });
 });
 
 test("two saved trips under one name: the length the admin said decides, else he is asked, and a tapped option settles it", async () => {
@@ -212,7 +291,7 @@ test("two saved trips under one name: the length the admin said decides, else he
     () => restore("t-twin-9"),
     ({ messages }) => {
       const refused = JSON.parse(toolResults(messages).at(-1)!);
-      assert.match(refused.refused, /ижил нэртэй 2 аялал байна; таны хэлсэн 7 өдрийнх нь trip_id=t-twin-7/);
+      assert.match(refused.refused, /ижил нэртэй 2 аялал байна; 7 өдрийнх нь trip_id=t-twin-7/);
       return [{ name: "get_trip", args: { trip_id: "t-twin-7" } }];
     },
     () => restore("t-twin-7"),

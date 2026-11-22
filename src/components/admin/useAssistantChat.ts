@@ -19,8 +19,9 @@ import { MAX_AI_INPUT_CHARS, apiErrorMessage, buildImageUploadUnit, fileToDataUr
 import { hasPlannedLines } from "@/lib/adminProposalUtils";
 import type { AIProposal, AIProposalResponse, AttachedFile, ProposalQuestionOption, TravelTrip } from "@/lib/adminTypes";
 import {
-  THREAD_KEY, agentProgressStages, answerToOf, attachmentRoute, displayText, instructionBody, isImageAttachment, openAskOf, openNewTripProposals,
-  proposalMessage, replyToMessage, restoreThread, serializeThread, unlockSave, zeroActionMessage, type ProgressStage,
+  MAX_AGENT_FILES, THREAD_KEY, agentProgressStages, answerToOf, attachmentRoute, dialogAnswer, displayText, instructionBody, isImageAttachment, openAskOf,
+  openNewTripProposals, proposalMessage, replyToMessage, restoreThread, serializeThread, unlockSave, wantsSavedTripCheck, zeroActionMessage,
+  type DialogPicks, type ProgressStage,
 } from "./assistantChatLogic";
 import type { AssistantAskMsg, AssistantAttachment, AssistantChatMessage, AssistantProposalMsg, AssistantResponse } from "./assistantChatTypes";
 import { MAX_AI_SOURCE_TEXT_CHARS, createFileParser } from "./assistantFileParse";
@@ -48,6 +49,8 @@ export const ASSISTANT_INTRO: AssistantChatMessage = {
 };
 
 type Toast = { success: (message: string) => void; error: (message: string) => void };
+/** One attached file as text (/api/admin/file-text); `similar` counts the saved trips it looks like. */
+type FileText = { id: string; name: string; text: string; similar: number };
 
 function storage(): Storage | null {
   try {
@@ -103,6 +106,9 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
   // The files' text of the last message about saved trips: an answer to the assistant's question
   // about them (typed or tapped) carries it again, so the question never loses the file.
   const askDocuments = useRef<Array<{ name: string; text: string }> | null>(null);
+  // The files themselves, kept while that conversation runs: one the assistant calls a whole new
+  // trip is handed to the new-trip reader as the file it is.
+  const askFiles = useRef<AttachedFile[] | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { tripsRef.current = trips; }, [trips]);
   useEffect(() => { detailsRef.current = tripDetails; }, [tripDetails]);
@@ -220,9 +226,11 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
    * The files of a message about saved trips, each read as text by the server (Word, Excel, PDF, a
    * price photo). A file that cannot be read is named in a toast and left out; the rest still go.
    */
-  async function readDocuments(files: AttachedFile[]): Promise<Array<{ name: string; text: string }>> {
-    const documents: Array<{ name: string; text: string }> = [];
+  async function readDocuments(files: AttachedFile[], options: { known?: Map<string, FileText>; quiet?: boolean; match?: boolean } = {}): Promise<FileText[]> {
+    const documents: FileText[] = [];
     for (const [index, file] of files.entries()) {
+      const known = options.known?.get(file.id);
+      if (known) { documents.push(known); continue; }
       setBusyLabel(files.length > 1 ? `«${file.name}» уншиж байна… ${index + 1}/${files.length}` : `«${file.name}» уншиж байна…`);
       try {
         // A photo is shrunk to fit one request; a document must fit as it is.
@@ -232,17 +240,38 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
         const res = await fetchWithAdmin("/api/admin/file-text", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filename: file.name, mimeType: file.mimeType, dataBase64: dataUrl.slice(dataUrl.indexOf(",") + 1) }),
+          body: JSON.stringify({ filename: file.name, mimeType: file.mimeType, dataBase64: dataUrl.slice(dataUrl.indexOf(",") + 1), ...(options.match ? { match: true } : {}) }),
         });
-        const data = (await readJsonSafe(res)) as { ok?: boolean; message?: string; document?: { name?: string; text?: string } };
+        const data = (await readJsonSafe(res)) as { ok?: boolean; message?: string; document?: { name?: string; text?: string }; similar?: unknown[] };
         if (!res.ok || !data.document?.text) throw new Error(data.message || "уншиж чадсангүй");
-        documents.push({ name: data.document.name || file.name, text: data.document.text });
+        documents.push({ id: file.id, name: data.document.name || file.name, text: data.document.text, similar: Array.isArray(data.similar) ? data.similar.length : 0 });
       } catch (error) {
         const reason = error instanceof Error && error.message ? error.message : "уншиж чадсангүй";
-        toast.error(reason.includes(file.name) ? reason : `«${file.name}»: ${reason}`);
+        if (!options.quiet) toast.error(reason.includes(file.name) ? reason : `«${file.name}»: ${reason}`);
       }
     }
     return documents;
+  }
+
+  /**
+   * Files the assistant called whole new trips: each set goes to the new-trip reader as the
+   * original files (a poster is read as a picture), with the admin's own decisions as the note.
+   */
+  async function runHandoffs(handoffs: AssistantResponse["handoffs"]) {
+    const kept = askFiles.current || [];
+    for (const handoff of handoffs || []) {
+      const names = new Set((handoff.files || []).map((name) => name.trim()));
+      const files = kept.filter((file) => names.has(file.name.trim()));
+      if (!files.length) {
+        pushMessage({ id: uid(), role: "assistant", kind: "note", tone: "error", text: `Шинэ аялал болгох файл (${[...names].join(", ")}) энэ хуудсанд үлдээгүй байна. Файлаа дахин хавсаргаад «шинэ аялал болгон нэм» гэж илгээнэ үү.` });
+        continue;
+      }
+      const sourceNames = files.map((file) => file.name);
+      setBusyStages(null);
+      setBusyProgress(3);
+      setBusyLabel(sourceNames.length > 1 ? `${sourceNames.length} файлыг шинэ аялал болгон уншиж байна…` : `«${sourceNames[0]}»-г шинэ аялал болгон уншиж байна…`);
+      await readFiles(handoff.note || "", files, [], sourceNames);
+    }
   }
 
   async function postAssistant(body: Record<string, unknown>): Promise<AssistantResponse> {
@@ -277,7 +306,7 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
    * `requestAsk` is the question that option belongs to when that question sits on a stored
    * proposal: the answer then goes to that request.
    */
-  async function sendAssistant(override?: { instruction: string; shown: string; requestAsk?: AssistantAskMsg; answers?: AssistantAskMsg }) {
+  async function sendAssistant(override?: { instruction: string; shown: string; requestAsk?: AssistantAskMsg; answers?: AssistantAskMsg; dialogAnswers?: string[] }) {
     const text = override ? override.instruction.trim() : aiInput.trim();
     const files = override ? [] : attachedFiles;
     const driveFileIds = override ? [] : extractGoogleDriveFileIds(text);
@@ -287,9 +316,10 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
       toast.error(`AI заавар хэт урт байна. ${MAX_AI_INPUT_CHARS} тэмдэгтээс богино бичнэ үү.`);
       return;
     }
-    const route = attachmentRoute(text, files);
-    const fileFlow = route.kind === "files" || driveFileIds.length > 0;
-    const ask = override ? override.requestAsk ?? null : fileFlow ? null : openAskOf(messages);
+    const firstRoute = attachmentRoute(text, files);
+    const mayReadFiles = firstRoute.kind === "files" || driveFileIds.length > 0;
+    // A message with files is a new instruction, never the answer to a question on a stored card.
+    const ask = override ? override.requestAsk ?? null : mayReadFiles || firstRoute.kind === "agent_files" ? null : openAskOf(messages);
     const sourceNames = [
       ...files.map((file) => file.name),
       ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
@@ -304,15 +334,30 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
     if (ask && !override) patchMessage(ask.id, { answered: displayText(text).slice(0, 120) || "✓" });
     setBusyKey("ai-send");
     setBusyStages(null);
-    setBusyProgress(fileFlow ? 3 : null);
-    setBusyLabel(fileFlow
+    setBusyProgress(mayReadFiles ? 3 : null);
+    setBusyLabel(mayReadFiles
       ? (sourceNames.length > 1 ? `${sourceNames.length} файл уншиж байна…` : `«${sourceNames[0] || "Файл"}» уншиж байна…`)
       : "");
     try {
-      if (fileFlow) {
+      let route = firstRoute;
+      const known = new Map<string, FileText>();
+      // One document and no "new trip" said: is it a trip the catalogue already has? Then the
+      // assistant takes stock first and asks «шинэчлэх үү, шинээр нэмэх үү?»; otherwise the reader,
+      // as before. Until 2026-11-21 the file of a live trip quietly became a second trip.
+      if (route.kind === "files" && driveFileIds.length === 0 && wantsSavedTripCheck(text, files)) {
+        setBusyLabel("Энэ аялал бүртгэлд байгаа эсэхийг шалгаж байна…");
+        for (const document of await readDocuments(files.filter((file) => !isImageAttachment(file)), { quiet: true, match: true })) known.set(document.id, document);
+        if ([...known.values()].some((document) => document.similar > 0)) {
+          route = { kind: "agent_files", files: files.slice(0, MAX_AGENT_FILES), skipped: Math.max(0, files.length - MAX_AGENT_FILES), reason: "check" };
+        }
+      }
+      if (route.kind === "files" || driveFileIds.length > 0) {
+        setBusyProgress(3);
+        setBusyLabel(sourceNames.length > 1 ? `${sourceNames.length} файл уншиж байна…` : `«${sourceNames[0] || "Файл"}» уншиж байна…`);
         await readFiles(text, files, driveFileIds, sourceNames);
         return;
       }
+      setBusyProgress(null);
       if (ask?.requestId != null) {
         // The question sits on a stored proposal: the answer revises that request.
         setBusyStages(agentProgressStages(text));
@@ -329,31 +374,47 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
         attachments = urls.map((url) => ({ url, kind: "image" as const }));
       }
       let documents: Array<{ name: string; text: string }> = [];
+      let intake = false;
       if (route.kind === "agent_files") {
-        documents = await readDocuments(route.files);
-        if (!documents.length) throw new Error("Файлаас уншигдах зүйл гарсангүй, тиймээс зааврыг илгээсэнгүй. Файлаа шалгаад дахин оролдоно уу.");
+        const read = await readDocuments(route.files, { known, quiet: route.reason !== "words" });
+        // A set the assistant cannot read whole as text (a scanned PDF, a zip) keeps the reader.
+        if (route.reason !== "words" && read.length < route.files.length) {
+          setBusyProgress(3);
+          await readFiles(text, files, driveFileIds, sourceNames);
+          return;
+        }
+        if (!read.length) throw new Error("Файлаас уншигдах зүйл гарсангүй, тиймээс зааврыг илгээсэнгүй. Файлаа шалгаад дахин оролдоно уу.");
         if (route.skipped > 0) toast.error(`Нэг удаад ${route.files.length} хүртэл файл илгээнэ — үлдсэн ${route.skipped}-г алгаслаа.`);
+        documents = read.map((document) => ({ name: document.name, text: document.text }));
         askDocuments.current = documents;
+        askFiles.current = route.files;
+        intake = route.reason !== "words";
       } else if (askDocuments.current && (override?.answers || (ask && !override))) {
         documents = askDocuments.current;
       } else {
         askDocuments.current = null;
+        askFiles.current = null;
       }
       setBusyLabel("");
       setBusyStages(documents.length ? DOCUMENT_STAGES : agentProgressStages(text));
+      const answered = override?.answers ?? (ask && !override ? ask : null);
       const data = await postAssistant(instructionBody({
-        instruction: text,
+        // Files with no words: the assistant works out what they are and asks.
+        instruction: text || `Файл орууллаа: ${sourceNames.join(", ")}`,
         sessionId: session.current,
         documents,
+        intake,
         // A tapped option travels with the question and its first instruction, like a typed answer: on
         // 2026-11-14 a tapped «хүүхэд ор эзлэхгүй» was read alone and the adult price and «the other
-        // departures like 12/4» from the first message were lost.
-        answerTo: override?.answers ? answerToOf(override.answers) : ask && !override ? answerToOf(ask) : null,
+        // departures like 12/4» from the first message were lost. A dialog's answers go one by one too.
+        answerTo: answered ? { ...answerToOf(answered), ...(override?.dialogAnswers?.length ? { answers: override.dialogAnswers } : {}) } : null,
         attachments,
         // A typed message may be about a new trip read but not saved yet: the server edits that card.
         openProposals: ask ? [] : openNewTripProposals(messages),
       }));
       pushReply(data, text);
+      // Files that are whole new trips: each becomes its own review card, read from the original file.
+      if (data.handoffs?.length) await runHandoffs(data.handoffs);
     } catch (err) {
       // The question stays open when its answer never arrived.
       if (ask) patchMessage(ask.id, { answered: undefined });
@@ -446,6 +507,15 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
     void sendAssistant({ instruction: option.answer, shown: option.label, ...(message.requestId != null ? { requestAsk: message } : { answers: message }) });
   }
 
+  /** A dialog of several questions, answered in one go: every answer travels numbered, in the questions' order. */
+  function submitAskDialog(message: AssistantAskMsg, picks: DialogPicks) {
+    if (busyKey === "ai-send") return;
+    const answer = dialogAnswer(message, picks);
+    if (!answer) return;
+    patchMessage(message.id, { answered: "✓", dialogAnswers: answer.summary });
+    void sendAssistant({ instruction: answer.instruction, shown: answer.shown, answers: message, dialogAnswers: answer.answers });
+  }
+
   /** An expired proposal's instruction sent again for a fresh proposal on today's data. */
   function resendInstruction(message: AssistantProposalMsg) {
     if (!message.instruction.trim() || message.instruction.startsWith("[File]")) {
@@ -466,11 +536,13 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
     setTripDetails({});
     setAiInput("");
     setAttachedFiles([]);
+    askDocuments.current = null;
+    askFiles.current = null;
   }
 
   return {
     messages, aiInput, setAiInput, attachedFiles, dragOver, setDragOver, busyLabel, busyProgress, busyStages, tripDetails,
-    chatEndRef, inputRef, attachFiles, removeAttachedFile, sendAssistant, sendQuickAction, chooseAskOption,
+    chatEndRef, inputRef, attachFiles, removeAttachedFile, sendAssistant, sendQuickAction, chooseAskOption, submitAskDialog,
     resendInstruction, newConversation, ...proposalActions,
   };
 }

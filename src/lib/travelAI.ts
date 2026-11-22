@@ -53,6 +53,7 @@ type ProposalSource = {
 };
 
 import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
+import { buildPhotoLibrary } from "./tripPhotoLibrary";
 import { liftDayStates, withPricedDaysOnCalendar, withRowYearsOfCalendar } from "./tripDayStates";
 import { cleanRowHotels, cleanTripTitle, settleRowInfantFares, unsetZeroFares } from "./tripRowFares";
 import { guardFileProposal, mergeSameFileNewTrips } from "./fileProposalGuards";
@@ -1774,7 +1775,9 @@ export async function generateAIProposalFromContentBatched(input: {
       // missing photos — what makes a file-created trip equal to one added on the web.
       // The photo search only gets the time the batches left of the route's budget.
       const remainingMs = FILE_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt);
-      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined, sourceText: allSourceText, note: input.note });
+      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined, sourceText: allSourceText, note: input.note,
+        // The agency's own photos of the same places come first (other trips' day photos).
+        loadLibrary: async () => buildPhotoLibrary(await listTrips({ limit: 250, includeArchived: true })) });
 
       return merged;
     },

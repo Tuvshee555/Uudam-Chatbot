@@ -104,6 +104,59 @@ file is evidence and wins over the file (it used to be deleted as "not in the fi
 тэрэгтэй» in the note replaces a partner's "by bus back to Ulaanbaatar" with the standard train
 return (`withoutBusReturn`); and a theme line plus a route line make the name together.
 
+## Several files at once: taking stock, then one dialog of questions (2026-11-22)
+
+The owner wanted the assistant to work like Claude did by hand on 2026-11-21: understand every
+file first, ask every open decision at once — a tab per question, each choice with what it does,
+one recommended, «Өөр» to type his own answer — and then do all of it.
+
+- **When.** Two or more documents, a single document the page found to look like a saved trip, or
+  «…энэ файлаар шинэчил» with no trip named (`intakeNeeded` in `assistantAgent/intake.ts`). Not
+  when he only says the files are a new trip, asks a question about a file, or answers a question.
+- **take_stock.** Before it may ask or propose, the model says what every file is: `saved_program`,
+  `new_trip`, `schedule`, `extra_info` or `other`, with its trip. The answer is checked in code
+  (`stockProblems`): every file once, a program compared first, the trip whose name shares the most
+  of the file's title words (then the same number of days, then the live one), a schedule on the
+  same trip as its program, a list for the trips of the programs sent with it. Wrong → sent back
+  (the third answer is taken). The real package of 2026-11-21 went from 3 files on the wrong trip
+  to all 5 right.
+- **must_ask.** The code then names the decisions that are the admin's alone (`mustAsk`): update a
+  saved trip or add another (also when he wrote «шинэчил» but the trip is live and unnamed — "this
+  trip is already on the site"), a new trip's selling price when the file has only yuan, the
+  transport when a program starts at the border or comes back by bus, how to show a priced list,
+  and a price remark that reads two ways. The model asks them in ONE `ask_user {questions[]}`; any
+  it leaves out are added in the system's own words, and a model that proposes instead is sent
+  back twice, then the system asks itself.
+- **Same choices every time.** Update/new, selling price («Ноорог болгож хадгалах» or type the
+  price — never "publish without a price", which save refuses), transport («Стандарт галт тэрэгний
+  өдрүүд» recommended / «Файлд бичсэнээр»), a priced list («Үнэтэй нь жагсаах» recommended /
+  «Зөвхөн нэрсийг» / «Нэмэхгүй») are written by `fixedChoices`; a price remark keeps the model's
+  readings plus «Одоохондоо хөндөхгүй».
+- **His answers.** The page shows the dialog (`AssistantAskDialog.tsx`) and sends all answers in
+  one message with the stock-taking echoed back (`answer_to.intake`). The next turn reads them as
+  decisions (`decisionsOf`), opens the trips straight away and gets the work per file
+  (`todoLines`). Its proposal is checked (`proposalGaps`): every saved program compared, an archived
+  trip he wants live gets its status, a coming date, a price and the child band the schedule
+  writes, a priced list keeps every row. Missing parts are sent back, then said on the card.
+- **New trips** among the files are handed to the new-trip reader by the system itself, each with
+  a note holding only his decisions about THAT trip (price, transport) and a free infant fare the
+  file states (a birth-year child band marked «үнэгүй» → «Нярай … үнэгүй»).
+- **«Шинэ аялал нэмэх»** no longer opens the blank form: it asks how the trip comes in — a file, a
+  pasted program, a web page, or the form (last).
+- **Photos.** `find_photos` gives every empty program day a photo: first the agency's own photos
+  of the same places (`tripPhotoLibrary.ts`; a train or border day takes the train-day photo of a
+  trip to the same places), then Wikimedia with `web: true`. New trips from the reader get the
+  same house photos first.
+
+Checked on a replay of the real 2026-11-21 package against the catalogue as it was before
+(`tmp/replay-intake.ts`, git-ignored; config in `uudam-eval/assistant-walk/replay-1121.json`): the
+dialog asked the same four questions Claude asked, and with the owner's real answers the proposal
+matched what was saved by hand (the archived check-up trip restored with the coming dates and
+fares, the live one's four hotels and one sentence, the 54-item list on both, the new trip's file to
+the reader with its price, train days and free infant). The age band was the one miss; it is now a checked gap.
+
+In the real tab on 2026-11-22: a program of a live check-up trip with one hotel changed, sent with «аяллын хөтөлбөрийг энэ файлаар шинэчил», got the question ««…» бүртгэлд аль хэдийн идэвхтэй байна (сайтад нийтлэгдсэн) … 3, 4-р өдрийн буудал … өөрчлөгдөнө. Юу хийх вэ?»; the same file unchanged got "nothing to change" with the trip and its status named. The new trip of 2026-11-21 got a house photo on each of its six empty days and its infant fare set free (with the birth years as the band) through the tab. Two guards came from that run: a message that sets a price but whose proposal changes no fare is sent back once (the model had dropped «үнэгүй» when rewriting a refused proposal), and an age band keeps only the numbers the admin or his file wrote (it had added «0-23 сар»).
+
 ## Cost and time per instruction (gpt-4.1)
 
 | Kind | Rounds | Cost | Time |

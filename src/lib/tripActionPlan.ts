@@ -341,6 +341,9 @@ const VERB_KEYS: Record<string, (action: Row) => Row> = {
     for (const key of ["position", "day"]) if (typeof action[key] === "number" && Number.isFinite(action[key])) kept[key] = Math.trunc(action[key] as number);
     if (action.remove === true) kept.remove = true;
     else if (text(action.new_url)) kept.new_url = text(action.new_url);
+    // A credit line is a small record of plain strings (title, author, license, page, provider).
+    const credit = action.credit && typeof action.credit === "object" && !Array.isArray(action.credit) ? Object.fromEntries(Object.entries(action.credit as Row).filter(([, value]) => typeof value === "string").map(([key, value]) => [key.slice(0, 40), (value as string).slice(0, 300)]).slice(0, 8)) : null;
+    if (credit && Object.keys(credit).length && kept.remove !== true) kept.credit = credit;
     return kept;
   },
   append_notes: (action) => {

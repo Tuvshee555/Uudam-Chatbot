@@ -12,7 +12,8 @@ import { formatDateMn } from "../assistantBrain";
 import { isHostedPhotoUrl } from "../tripPhotoEdit";
 import type { TravelTrip } from "../travelTypes";
 import { chatbotIdsInText, identityLinks, resolveLink, resolveLinksInText, urlsInText, withScheme, type LinkResolution } from "./links";
-import { compareProgram, type ProgramComparison } from "./programCompare";
+import { decisionsOf, intakeNeeded, mustAsk, stockFilesOf, stockProblems, todoLines, tripsNamedIn, unpackIntake, type Decision, type Intake, type IntakeContext, type MustAsk } from "./intake";
+import { compareProgram, fileDaysOf, type ProgramComparison } from "./programCompare";
 import { isPartnerTrip, searchTrips, tripDepartures, tripDetailJson } from "./readTools";
 import type { AgentAttachment, AgentDeps, AgentDocument, AgentInput, PosterPhotoView } from "./types";
 import { readWebPage, WEB_DATA_NOTICE } from "./webPage";
@@ -77,6 +78,30 @@ export type TurnState = {
   /** Pages the model may read: the links in the admin's words (and where his short links lead). */
   allowedUrls: Map<string, string>;
   fetched: Map<string, string>;
+  /** How many days the attached program had when it was compared with a trip: of two same-name trips, the file is the one of its own length. */
+  comparedFileDays: Map<string, number>;
+  /** Credit lines of the photos find_photos returned, by url (they travel into replace_photo). */
+  photoCredits: Map<string, Record<string, unknown>>;
+  /** A slow tool ran (the web photo search): the turn gets more time. */
+  slow: boolean;
+  /** The answers of a dialog this message replies to, one per question (the page sends them apart). */
+  answers: string[];
+  /** This message answers a question of the assistant. */
+  answering: boolean;
+  /** The attached files must be taken stock of before the turn ends (intake.ts). */
+  intakeRequired: boolean;
+  /** What each attached file is (take_stock, or echoed back with his answers) and the questions asked about them. */
+  intake: Intake | null;
+  /** His answers to those questions, read back as decisions. */
+  decisions: Decision[];
+  /** The decisions only he can make, not asked yet (none once he answered). */
+  mustAsk: MustAsk[];
+  /** Trips his words, links or tapped options name. */
+  named: Set<string>;
+  /** Times the model was sent back to take stock, to ask or to fill a gap (a few at most). */
+  intakeNudges: number;
+  /** The model was already sent back once for a price his message sets but the proposal left out. */
+  fareNudged: boolean;
   /** Trips whose saved program was compared with the attached file in this turn (compare_program), with the result. */
   compared: Map<string, Extract<ProgramComparison, { ok: true }>>;
   seen: Set<string>;
@@ -92,7 +117,7 @@ export type TurnState = {
   preloaded: TravelTrip[];
 };
 
-const TOOL_LIMITS: Record<string, number> = { search_trips: 6, get_trip: 6, resolve_link: 6, read_web_page: 2, host_image: 4, compare_program: 3 };
+const TOOL_LIMITS: Record<string, number> = { search_trips: 6, get_trip: 6, resolve_link: 6, read_web_page: 2, host_image: 4, compare_program: 3, find_photos: 2, take_stock: 3 };
 const TOOL_RESULT_MAX_CHARS = 16_000;
 export const MAX_DOCUMENTS = 6;
 export const DOCUMENT_MAX_CHARS = 24_000;
@@ -147,10 +172,21 @@ export async function openTurn(input: AgentInput, deps: AgentDeps, now: Date): P
   for (const trip of chatbotIdsInText(withoutOptionTags(instruction), input.trips)) chosen.add(trip.id);
   const linkTrips = new Set(identity.map((link) => link.trip_id).filter((id): id is string => Boolean(id)));
   for (const id of chosen) if (linkTrips.size) linkTrips.add(id);
+  const documents = turnDocuments(input.documents);
+  const answering = Boolean(input.answerTo?.question);
+  const answers = (input.answerTo?.answers || []).map((answer) => String(answer || "").trim()).filter(Boolean).slice(0, 6);
+  const words = withoutOptionTags(adminText);
+  const named = new Set([...linkTrips, ...chosen, ...tripsNamedIn(words, input.trips).map((trip) => trip.id)]);
+  // With his answers the page sends back what each file is and which questions these were.
+  const intake = answering ? unpackIntake(input.answerTo?.intake, documents, byId) : null;
   const state: TurnState = {
     trips: input.trips, byId, now, deps, adminText, instruction, answerToInstruction: String(input.answerTo?.instruction || ""),
     attachments: (input.attachments || []).filter((item) => item && typeof item.url === "string" && /^https:\/\//.test(item.url)).slice(0, 6),
-    documents: turnDocuments(input.documents),
+    documents,
+    comparedFileDays: new Map(), photoCredits: new Map(), slow: false,
+    answers, answering,
+    intakeRequired: intakeNeeded({ documents: documents.length, words, flagged: input.intake === true, named: named.size, answering, revising: Boolean(input.revising) }),
+    intake, decisions: intake ? decisionsOf(intake.asked, answers) : [], mustAsk: [], named, intakeNudges: 0, fareNudged: false,
     links,
     allowedUrls: new Map(),
     fetched: new Map(), compared: new Map(), seen: new Set([...linkTrips, ...chosen]), seenBeforeWeb: null,
@@ -165,7 +201,9 @@ export async function openTurn(input: AgentInput, deps: AgentDeps, now: Date): P
   for (const link of links) if (link.target) allow(state, link.target);
   for (const attachment of state.attachments) if (isHostedPhotoUrl(attachment.url)) state.hosted.add(attachment.url);
   for (const action of input.revising?.proposal.actions || []) if (action.trip_id && byId.has(action.trip_id)) state.seen.add(action.trip_id);
-  const preload = [...new Set([...linkTrips, ...chosen, ...(input.revising?.proposal.actions || []).map((action) => action.trip_id || "")])]
+  // His answers about files: the saved trips they belong to are opened for the model straight away.
+  const intakeTrips = (intake?.files || []).flatMap((file) => file.trip_ids);
+  const preload = [...new Set([...linkTrips, ...chosen, ...(input.revising?.proposal.actions || []).map((action) => action.trip_id || ""), ...intakeTrips])]
     .map((id) => byId.get(id)).filter((trip): trip is TravelTrip => Boolean(trip)).slice(0, PRELOAD_MAX);
   state.preloaded = preload;
   for (const trip of preload) { state.fetched.set(trip.id, trip.updated_at); state.seen.add(trip.id); }
@@ -212,6 +250,29 @@ async function getTripTool(state: TurnState, args: Args): Promise<string> {
   return tripDetailJson(trip, state.now, await posterFor(trip, state.deps), { full: state.documents.length > 0 });
 }
 
+/** A photo for every program day that has none: house photos of the same places, then (web) Wikimedia. */
+async function findPhotosTool(state: TurnState, args: Args): Promise<string> {
+  const trip = state.byId.get(str(args.trip_id));
+  if (!trip) return json({ error: "Ийм trip_id бүртгэлд алга. search_trips-ээр хайж, буцаасан trip_id-г ашигла." });
+  if (!state.fetched.has(trip.id)) return json({ error: "Call get_trip for this trip first." });
+  const web = args.web === true;
+  if (web) state.slow = true;
+  const found = await state.deps.findPhotos(trip, state.trips, { web });
+  for (const photo of found) {
+    state.hosted.add(photo.url);
+    if (photo.credit) state.photoCredits.set(photo.url, photo.credit);
+  }
+  const days = Array.isArray(trip.extra?.itinerary_days) ? (trip.extra.itinerary_days as Array<Record<string, unknown>>) : [];
+  const still = days.map((day, index) => ({ day: index + 1, title: str(day.title), has: Boolean(str(day.photo)) }))
+    .filter((day) => !day.has && !found.some((photo) => photo.day === day.day));
+  return json({
+    ok: true,
+    photos: found.map((photo) => ({ day: photo.day, new_url: photo.url, from: photo.source === "house" ? `манай «${photo.from}» аяллын зураг` : "Wikimedia Commons" })),
+    days_still_without_photo: still.map((day) => ({ day: day.day, title: day.title })),
+    apply: "Propose each as replace_photo {day, new_url}. Train and border days need no photo. " + (web ? "" : "For the days still without one you may call find_photos again with web:true (a slower search of Wikimedia Commons)."),
+  });
+}
+
 /** An updated program file against the saved days: exact differences, worked out in code (programCompare.ts). */
 async function compareProgramTool(state: TurnState, args: Args): Promise<string> {
   if (!state.documents.length) return json({ error: "No file is attached to this message: compare_program reads the attached file's days." });
@@ -219,6 +280,7 @@ async function compareProgramTool(state: TurnState, args: Args): Promise<string>
   if (!trip) return json({ error: "Ийм trip_id бүртгэлд алга. search_trips-ээр хайж, буцаасан trip_id-г ашигла." });
   if (!state.fetched.has(trip.id)) return json({ error: "Call get_trip for this trip first." });
   const result = compareProgram(trip, args.file_days, state.documents.map((document) => document.text).join("\n\n"));
+  state.comparedFileDays.set(trip.id, fileDaysOf(args.file_days).length);
   if (result.ok) state.compared.set(trip.id, result);
   return json(result);
 }
@@ -270,6 +332,36 @@ async function hostImageTool(state: TurnState, args: Args): Promise<string> {
   }
 }
 
+/** What the intake rules see of this turn (intake.ts). */
+export function intakeContext(state: TurnState): IntakeContext {
+  return { documents: state.documents, byId: state.byId, adminWords: withoutOptionTags(state.adminText), answered: state.answering, named: state.named };
+}
+
+/**
+ * The model says what every attached file is; the system answers with the decisions only the admin
+ * can make (must_ask) and the work each file means (do). The classification is checked: every file
+ * once, trips the catalogue has, one trip for a program or a schedule.
+ */
+async function takeStockTool(state: TurnState, args: Args): Promise<string> {
+  if (!state.documents.length) return json({ error: "No file is attached to this message." });
+  const stock = stockFilesOf(args.files, state.documents, state.byId);
+  if ("error" in stock) return json({ ok: false, error: stock.error });
+  // Checked against the files' own titles and this turn's comparisons; the third answer is taken as it is.
+  const problems = stockProblems(stock.files, { documents: state.documents, trips: state.trips, byId: state.byId, compared: new Set(state.compared.keys()) });
+  if (problems.length && (state.counts.take_stock || 0) < 3) return json({ ok: false, problems, hint: "Fix these (look again with search_trips / get_trip / compare_program where needed), then call take_stock again with EVERY file." });
+  const context = intakeContext(state);
+  state.intake = { files: stock.files, asked: state.intake?.asked ?? [] };
+  state.mustAsk = mustAsk(stock.files, context);
+  return json({
+    ok: true,
+    must_ask: state.mustAsk.map((item) => ({ topic: item.topic, file: item.file, ...(item.trip_id ? { trip_id: item.trip_id, trip: state.byId.get(item.trip_id)?.route_name } : {}), why: item.why, ...(item.quote?.length ? { quote: item.quote } : {}) })),
+    do: todoLines(state.intake, state.decisions, context),
+    next: state.mustAsk.length
+      ? "Call ask_user with questions[]: exactly one question per must_ask entry, each with its topic and file. Write each question's text yourself (the trip or file, the figures or sentence found, what compare_program found). For saved_or_new, selling_price, transport and extras the system writes the choices; for price_remark give each reading as a choice with its tugrug figures. Ask nothing else; change nothing yet."
+      : "Nothing to ask the admin: do every line of `do` in ONE propose_changes (the system hands the new trips to the reader itself).",
+  });
+}
+
 const READ_TOOL_RUNNERS: Record<string, (state: TurnState, args: Args) => Promise<string>> = {
   search_trips: searchTool,
   get_trip: getTripTool,
@@ -277,6 +369,8 @@ const READ_TOOL_RUNNERS: Record<string, (state: TurnState, args: Args) => Promis
   read_web_page: readWebPageTool,
   host_image: hostImageTool,
   compare_program: compareProgramTool,
+  find_photos: findPhotosTool,
+  take_stock: takeStockTool,
 };
 
 /** Runs one read tool call; the result is the tool message's content. Never throws. */

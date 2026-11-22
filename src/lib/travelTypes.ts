@@ -183,6 +183,8 @@ export type AITripAction = {
   new_url?: string;
   /** replace_photo: remove the photo instead of replacing it. */
   remove?: boolean;
+  /** replace_photo: the new photo's credit line (title, author, license, page), kept under extra.photo_credits. */
+  credit?: Record<string, unknown>;
   /** append_notes: the heading of the section added to the trip's description, and its lines (tripNotesAppend.ts). */
   heading?: string;
   text?: string;

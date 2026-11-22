@@ -26,7 +26,7 @@ import { identityLinks, resolveLinksInText, urlsInText } from "./assistantAgent/
 import { openProposalRoute, unsavedTripLinkNote, type OpenProposal } from "./assistantAgent/openProposals";
 import { isFileProposal, loadChangeRequest, saveRevisedProposal } from "./assistantAgent/requests";
 import { hasBrainTokens } from "./assistantAgent/turn";
-import type { AgentAttachment, AgentDeps, AgentDocument, AgentOutcome, AnswerTo } from "./assistantAgent/types";
+import type { AgentAttachment, AgentDeps, AgentDocument, AgentOutcome, AnswerTo, NewTripHandoff } from "./assistantAgent/types";
 import { assistantContextText, type AssistantTurn } from "./assistantLog";
 import { aiBudgetMessage, aiBudgetState } from "./aiUsage";
 import { logError, logInfo, recordCounter } from "./observability";
@@ -44,6 +44,8 @@ export type AssistantReply = (
   | { kind: "ask"; ask: AssistantAskPayload; source?: "brain" | "agent" }
   | { kind: "note"; text: string }
 ) & {
+  /** Attached files that are whole new trips: the page reads each set with the new-trip reader after showing this reply. */
+  handoffs?: NewTripHandoff[];
   /** The agent's tool calls in order (search_trips, get_trip, …), for the page's progress line and the logs. */
   steps?: string[];
 };
@@ -71,6 +73,8 @@ export type AssistantReplyOptions = {
   attachments?: AgentAttachment[];
   /** Files sent with an instruction about saved trips, as text (assistantAgent rule 13). */
   documents?: AgentDocument[];
+  /** The page asks for the attached files to be taken stock of first (assistantAgent/intake.ts). */
+  intake?: boolean;
   /** New-trip cards open on the page and not saved yet (assistantAgent/openProposals.ts). */
   openProposals?: OpenProposal[];
   /** Tests: the agent's model and outside world. */
@@ -159,6 +163,8 @@ async function brainFallback(instruction: string, trips: Trips, options: Assista
   return { kind: "note", text: options.why };
 }
 
+/** Said when the files are only new trips: each is being read into its own review card. */
+export const HANDOFF_NOTE = "Файлыг шинэ аялал болгон уншиж байна — доор шалгах карт гарна.";
 const EXISTING_TRIP_KEPT = "existing_trip_kept";
 // The validator's English line for a cancel the reading proposed (it goes with the cancel).
 const READER_CANCEL_LINE = /cancels a trip and should be reviewed/i;
@@ -296,7 +302,7 @@ async function replyFromCatalogue(typed: string, trips: Trips, options: Assistan
   }
 
   const deps = { ...defaultAgentDeps(), ...(options.agentDeps || {}) } as AgentDeps;
-  const run = await runAgent({ instruction, trips, turns: options.turns, answerTo: options.answerTo, attachments, documents, today: options.now, deps });
+  const run = await runAgent({ instruction, trips, turns: options.turns, answerTo: options.answerTo, attachments, documents, intake: options.intake, today: options.now, deps });
   const outcome = run.outcome;
   if (outcome.kind === "note" && outcome.reason === "budget") {
     recordCounter("ai.budget_stop_total", 1, { route: "api.admin.ai_change" });
@@ -308,9 +314,11 @@ async function replyFromCatalogue(typed: string, trips: Trips, options: Assistan
   const steps = run.tools;
   if (outcome.kind === "proposal") {
     const request_id = await persistProposal(answeredInstruction(instruction, options.answerTo), outcome.proposal);
-    return { kind: "proposal", proposal: outcome.proposal, request_id, source: "agent", steps };
+    return { kind: "proposal", proposal: outcome.proposal, request_id, source: "agent", steps, ...(outcome.handoffs?.length ? { handoffs: outcome.handoffs } : {}) };
   }
   if (outcome.kind === "ask") return { kind: "ask", ask: outcome.ask, source: "agent", steps };
+  // Only new trips in the files: the page reads them; this reply just says so.
+  if (outcome.kind === "handoff") return { kind: "note", text: outcome.text || HANDOFF_NOTE, steps, handoffs: outcome.handoffs };
   if (outcome.kind === "trip_source") return { ...(await tripSourceReply(outcome)), steps };
   return { kind: "note", text: outcome.text, steps };
 }

@@ -56,13 +56,18 @@ function parseDocuments(value: unknown): AgentDocument[] {
 /** `answer_to: {id?, question, instruction?}`: the open question a typed answer belongs to (echoed from the ask). */
 function parseAnswerTo(value: unknown): AnswerTo | null {
   if (!value || typeof value !== "object") return null;
-  const raw = value as { id?: unknown; question?: unknown; instruction?: unknown };
+  const raw = value as { id?: unknown; question?: unknown; instruction?: unknown; memo?: unknown; answers?: unknown; intake?: unknown };
   const question = typeof raw.question === "string" ? raw.question.trim().slice(0, 2_000) : "";
   if (!question) return null;
   return {
     question,
     ...(typeof raw.id === "string" && raw.id.trim() ? { id: raw.id.trim().slice(0, 64) } : {}),
     ...(typeof raw.instruction === "string" && raw.instruction.trim() ? { instruction: raw.instruction.trim().slice(0, 6_000) } : {}),
+    // A dialog of several questions: the agent's own note comes back, and each answer on its own.
+    ...(typeof raw.memo === "string" && raw.memo.trim() ? { memo: raw.memo.trim().slice(0, 1_500) } : {}),
+    // What each file is and which questions were asked: read back and checked by the agent (intake.ts).
+    ...(typeof raw.intake === "string" && raw.intake.trim() && raw.intake.length <= 6_000 ? { intake: raw.intake } : {}),
+    ...(Array.isArray(raw.answers) ? { answers: raw.answers.filter((answer): answer is string => typeof answer === "string" && Boolean(answer.trim())).map((answer) => answer.trim().slice(0, 900)).slice(0, 6) } : {}),
   };
 }
 
@@ -204,20 +209,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       text: [answerTo ? `(хариулт: ${answerTo.question.slice(0, 200)})` : "", trimmedInstruction, attachments.length ? `[${attachments.length} зураг]` : "",
         documents.length ? `[файл: ${documents.map((document) => document.name).join(", ").slice(0, 300)}]` : ""].filter(Boolean).join(" ") });
     const openProposals = parseOpenProposals(req.body?.open_proposals);
-    const reply = await generateAssistantReply(trimmedInstruction, { turns, answerTo, attachments, documents, openProposals });
+    const reply = await generateAssistantReply(trimmedInstruction, { turns, answerTo, attachments, documents, openProposals, intake: req.body?.intake === true });
     if (reply.kind === "ask") {
       // One question with real choices (which trip, which day, which amount); nothing is saved yet.
       // answer_to is what the page sends back with a TYPED answer, so it is read as the answer.
-      const ask = { ...reply.ask, answer_to: { id: reply.ask.id, question: reply.ask.text, instruction: answeredInstruction(trimmedInstruction, answerTo).slice(0, 6_000) } };
+      const ask = { ...reply.ask, answer_to: { id: reply.ask.id, question: reply.ask.text, instruction: answeredInstruction(trimmedInstruction, answerTo).slice(0, 6_000), ...(reply.ask.memo ? { memo: reply.ask.memo } : {}), ...(reply.ask.intake ? { intake: reply.ask.intake } : {}) } };
       await logAssistantEvent({ sessionId: session_id, role: "assistant", kind: "ask",
         text: [reply.ask.text, ...reply.ask.options.slice(0, 8).map((option) => `• ${option.label}`)].join("\n") });
       return res.status(200).json({ ok: true, ask, source: reply.source || "brain", steps: reply.steps });
     }
     if (reply.kind === "note") {
       await logAssistantEvent({ sessionId: session_id, role: "assistant", kind: "note", text: reply.text });
-      return res.status(200).json({ ok: true, note: reply.text, steps: reply.steps });
+      return res.status(200).json({ ok: true, note: reply.text, steps: reply.steps, ...(reply.handoffs?.length ? { handoffs: reply.handoffs } : {}) });
     }
-    const proposal = { proposal: reply.proposal, request_id: reply.request_id, source: reply.source, steps: reply.steps };
+    const proposal = { proposal: reply.proposal, request_id: reply.request_id, source: reply.source, steps: reply.steps, ...(reply.handoffs?.length ? { handoffs: reply.handoffs } : {}) };
     await logAssistantEvent({
       sessionId: session_id,
       requestId: proposal.request_id,

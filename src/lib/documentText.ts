@@ -40,8 +40,16 @@ export function plainDocumentText(text: string): string {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+// The first real price photo came back as its table alone: the title above it (which trip, which
+// months) and the three small red remarks under it (what the price includes, a fee "added or free",
+// "a group price") were dropped — the very lines a decision hangs on (2026-11-21).
 const TRANSCRIBE_PROMPT = [
   "Transcribe every piece of text in this image exactly as written, in reading order, as plain text.",
+  "Work top to bottom in three parts and leave none out:",
+  "1. ABOVE the table: every title, subtitle and heading line (the trip's name, the route, the year and months).",
+  "2. The table itself — and first, on a line of its own, any band that runs across all its columns (the tour's own name, a note in brackets like /автобус/).",
+  "3. BELOW and BESIDE the table: every remark, condition, footnote and small or coloured line (what a price includes, a fee that is added, group sizes, phone numbers). These lines matter most; missing one is the worst mistake.",
+  "Write only the image's own text: never these part numbers or names.",
   "- A table: one line per row, the cells left to right separated by ' | ', the heading row first. Never merge two rows; never repeat the row above.",
   "- Copy every number, date, currency mark and unit digit for digit (1234 юань, 987,000 төг, 3/14).",
   "- Keep the language and spelling of the image. Do not translate, summarise, explain, correct or add anything.",

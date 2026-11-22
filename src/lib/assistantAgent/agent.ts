@@ -13,7 +13,7 @@
  * with a plain Mongolian note; nothing is half-done.
  */
 import { logInfo } from "../observability";
-import { amountsInText, type AssistantAskPayload } from "../assistantBrain";
+import { amountsInText, type AskDialogQuestion, type AssistantAskPayload } from "../assistantBrain";
 import { buildAgentProposal } from "./actions";
 import { defaultAgentDeps } from "./deps";
 import { withoutUrls } from "./links";
@@ -22,9 +22,14 @@ import { buildSystemPrompt, buildUserMessage } from "./prompt";
 import { isPartnerTrip } from "./readTools";
 import { AGENT_TOOLS, isTerminalTool, TERMINAL_ONLY_TOOLS } from "./tools";
 import {
-  agentTripTag, cleanOptionAnswer, openTurn, preloadedDetail, runReadTool, tripOptionHint, urlKey, withoutOptionTags, type TurnState,
+  ASK_TOPICS, fallbackQuestion, fixedChoices, handoffNote as intakeHandoffNote, newTripGroups, packIntake, proposalGaps, squashName, todoLines,
+  type Asked, type AskTopic,
+} from "./intake";
+import {
+  agentTripTag, cleanOptionAnswer, intakeContext, openTurn, preloadedDetail, runReadTool, tripOptionHint, urlKey, withoutOptionTags, type TurnState,
 } from "./turn";
-import type { AgentDeps, AgentInput, AgentOutcome, AgentRun, ChatMessage, ToolCall } from "./types";
+import type { TravelTrip } from "../travelTypes";
+import type { AgentDeps, AgentInput, AgentOutcome, AgentRun, ChatMessage, NewTripHandoff, ToolCall } from "./types";
 import { readWebPage } from "./webPage";
 
 export const AGENT_DEFAULT_MODEL = "gpt-4.1";
@@ -32,12 +37,14 @@ const TOTAL_MS = 60_000;
 const PER_CALL_MS = 30_000;
 const MIN_CALL_MS = 3_000;
 const MAX_ROUNDS = 6;
+// Taking stock of several files needs more looks: every trip found and opened, each program compared, then the proposal.
+const DOCUMENT_MAX_ROUNDS = 9;
 const MAX_REPAIRS = 1;
 // A runaway turn (a huge page read again and again) stops long before it costs real money.
 const MAX_TURN_PROMPT_TOKENS = 90_000;
 // A turn with attached files re-reads their text on every round and may write a long section
 // (a 60-line price list for two trips): more time, more output, a larger prompt allowance.
-const DOCUMENT_TOTAL_MS = 150_000;
+const DOCUMENT_TOTAL_MS = 165_000;
 const DOCUMENT_PER_CALL_MS = 90_000;
 const DOCUMENT_MAX_OUTPUT_TOKENS = 8_000;
 const DOCUMENT_MAX_TURN_PROMPT_TOKENS = 260_000;
@@ -49,7 +56,7 @@ const DEFERRED_TERMINAL = JSON.stringify({
   hint: "Унших хэрэгслийн хариуг харахаас өмнө бичсэн тул хийгдсэнгүй: хариуг уншаад дахин дууд.",
 });
 
-export const AGENT_TIMEOUT_NOTE = "AI туслах 60 секундэд амжиж дуусгасангүй — юу ч өөрчлөгдөөгүй. Зааврыг богиносгож (нэг мессежид 1–3 өөрчлөлт) дахин илгээнэ үү.";
+export const AGENT_TIMEOUT_NOTE = "AI туслах хугацаандаа амжиж дуусгасангүй — юу ч өөрчлөгдөөгүй. Зааврыг богиносгож (нэг мессежид 1–3 өөрчлөлт, эсвэл цөөн файл) дахин илгээнэ үү.";
 
 export function agentFailureNote(kind: AgentModelFailure | string): string {
   switch (kind) {
@@ -167,7 +174,140 @@ function guardActions(rawActions: unknown, state: TurnState): { actions: Args[];
 /* Terminal tools → the turn's outcome                              */
 /* ---------------------------------------------------------------- */
 
+const MAX_DIALOG_QUESTIONS = 4;
+// Every decision the files leave open is asked, even past the usual four.
+const MAX_INTAKE_QUESTIONS = 6;
+// Times the model is sent back to take stock, to ask, or to fill a gap before the system acts itself.
+const MAX_INTAKE_NUDGES = 2;
+// The page offers "type your own answer" under every question: a model's own «Өөр» row would be a dead button.
+const OTHER_LABEL = /^(?:өөр|өөрөөр|бусад|other|өөр хариулт)[\s.:…]*$/iu;
+const RECOMMENDED_SUFFIX = /\s*\((?:recommended|санал болгож буй|зөвлөж буй)\)\s*$/iu;
+
+const recordOf = (value: unknown): Args => (value && typeof value === "object" && !Array.isArray(value) ? (value as Args) : {});
+
+/** A question the model sent without its topic: the decision its heading and text speak of. */
+function topicOf(entry: Args, header: string, text: string): AskTopic | "other" {
+  const given = ASK_TOPICS.find((topic) => topic === str(entry.topic));
+  if (given) return given;
+  if (str(entry.topic) === "other") return "other";
+  const words = `${header} ${text}`;
+  if (/шинэчлэх|шинэ\s+аялал\s+болгон|аль\s+хэдийн|бүртгэлд\s+байна/iu.test(words)) return "saved_or_new";
+  if (/тээвэр|галт\s*тэр|автобус/iu.test(words)) return "transport";
+  if (/жагсаалт|нэмэлт\s+(?:шинжилгээ|үйлчилгээ|зүйл)/iu.test(words)) return "extras";
+  if (/эсвэл|нэмэгдэнэ|групп/iu.test(words) && /үнэ|юань|₮/iu.test(words)) return "price_remark";
+  if (/үнэ|₮|төгрөг/iu.test(words)) return "selling_price";
+  return "other";
+}
+
+const documentNamed = (state: TurnState, raw: unknown): string => {
+  const key = squashName(str(raw));
+  if (!key) return "";
+  const names = state.documents.map((document) => document.name);
+  return names.find((name) => squashName(name) === key) ?? names.find((name) => squashName(name).includes(key) || key.includes(squashName(name))) ?? "";
+};
+const tripOfFile = (state: TurnState, file: string): TravelTrip | undefined => {
+  const entry = state.intake?.files.find((item) => item.file === file);
+  return entry?.trip_ids.length === 1 ? state.byId.get(entry.trip_ids[0]) : undefined;
+};
+
+type BuiltQuestion = { question: Omit<AskDialogQuestion, "id">; asked: Asked; must: boolean };
+
+/**
+ * One question of the dialog. A decision the system knows (update or new, the selling price, the
+ * transport, an extras list) gets the system's own choices, the same words every time; the model's
+ * choices are used for the rest. An option's `answer` is what the page sends back: the heading, the
+ * label, the description, and the trip it names.
+ */
+function builtQuestion(state: TurnState, input: { header: string; text: string; topic: AskTopic | "other"; file: string; trip?: TravelTrip; options: Args[]; must: boolean }): BuiltQuestion {
+  const fixed = fixedChoices(input.topic, input.trip);
+  const own: Args[] = fixed?.options.length ? fixed.options.map((option) => ({ ...option })) : input.options;
+  // A choice the system always offers with the model's (leave the price for now) is added once.
+  const source: Args[] = [...own, ...(fixed?.append || []).filter((extra) => !own.some((option) => str(option.label) === extra.label)).map((option): Args => ({ ...option }))];
+  // The answer to "update or new?" names the trip, so the next turn opens exactly that one.
+  const tagTrip = input.topic === "saved_or_new" ? input.trip : undefined;
+  const options = source.flatMap((option) => {
+    const label = str(option.label).replace(RECOMMENDED_SUFFIX, "").slice(0, 90);
+    if (!label || OTHER_LABEL.test(label)) return [];
+    const description = str(option.description).slice(0, 320);
+    const trip = state.byId.get(str(option.trip_id)) ?? tagTrip;
+    return [{
+      label,
+      ...(description ? { description } : {}),
+      ...(option.recommended === true ? { recommended: true } : {}),
+      answer: `${input.header}: ${label}${description ? ` — ${description}` : ""}${trip ? ` ${agentTripTag(trip)}` : ""}`,
+    }];
+  }).slice(0, 5);
+  // One recommendation at most, and it stands first.
+  const first = options.findIndex((option) => option.recommended);
+  const ordered = (first > 0 ? [options[first], ...options.filter((_option, at) => at !== first)] : options)
+    .map((option, at) => (at > 0 && option.recommended ? { label: option.label, ...(option.description ? { description: option.description } : {}), answer: option.answer } : option));
+  return {
+    question: { header: input.header, text: input.text, options: ordered, ...(fixed?.custom_label ? { custom_label: fixed.custom_label } : {}), ...(fixed?.custom_placeholder ? { custom_placeholder: fixed.custom_placeholder } : {}) },
+    asked: { topic: input.topic, header: input.header, ...(input.file ? { file: input.file } : {}), ...(input.trip ? { trip_id: input.trip.id } : {}) },
+    must: input.must,
+  };
+}
+
+/**
+ * Several decisions asked together (the stock-taking of attached files): each with a tab heading, the
+ * question with its facts, and choices that say what they do. Every decision take_stock found open is
+ * asked — the model's own question for it, or the system's when the model left it out.
+ */
+function dialogQuestions(args: Args, state: TurnState): { questions: AskDialogQuestion[]; asked: Asked[] } {
+  const raw = (Array.isArray(args.questions) ? args.questions : []).map(recordOf);
+  // A single question asked while decisions are open joins the dialog.
+  if (!raw.length && state.mustAsk.length && str(args.question)) {
+    raw.push({ topic: "other", header: "Тодруулга", question: args.question, options: (Array.isArray(args.options) ? args.options : []).map(recordOf).map((option) => ({ label: option.label, trip_id: option.trip_id })) });
+  }
+  const open = [...state.mustAsk];
+  const built: BuiltQuestion[] = [];
+  raw.forEach((entry, index) => {
+    const text = str(entry.question).slice(0, 1_200);
+    if (!text) return;
+    const header = str(entry.header).replace(/\s+/g, " ").slice(0, 28) || `Асуулт ${index + 1}`;
+    const topic = topicOf(entry, header, text);
+    let file = documentNamed(state, entry.file);
+    // The open decision this question asks: the same topic and file, else the first of that topic.
+    const at = open.findIndex((item) => item.topic === topic && (!file || item.file === file));
+    const must = at >= 0 ? open.splice(at, 1)[0] : undefined;
+    if (must) file = must.file;
+    const trip = state.byId.get(must?.trip_id || "") ?? tripOfFile(state, file);
+    built.push(builtQuestion(state, { header, text, topic, file, trip, options: (Array.isArray(entry.options) ? entry.options : []).map(recordOf), must: Boolean(must) }));
+  });
+  // What the model left out is asked anyway, in the system's own words.
+  const context = intakeContext(state);
+  for (const item of open) {
+    const fallback = fallbackQuestion(item, context);
+    built.push(builtQuestion(state, { ...fallback, topic: item.topic, file: item.file, trip: state.byId.get(item.trip_id || "") ?? tripOfFile(state, item.file), options: fallback.options as unknown as Args[], must: true }));
+  }
+  const cap = state.mustAsk.length ? Math.min(MAX_INTAKE_QUESTIONS, Math.max(MAX_DIALOG_QUESTIONS, state.mustAsk.length)) : MAX_DIALOG_QUESTIONS;
+  // Over the cap, the model's own extra questions give way first.
+  let kept = built;
+  while (kept.length > cap) {
+    const extra = kept.map((entry) => entry.must).lastIndexOf(false);
+    kept = extra >= 0 ? kept.filter((_entry, at) => at !== extra) : kept.slice(0, cap);
+  }
+  return { questions: kept.map((entry, index) => ({ id: `q${index + 1}`, ...entry.question })), asked: kept.map((entry) => entry.asked) };
+}
+
 function askOutcome(args: Args, state: TurnState): AgentOutcome {
+  const { questions, asked } = dialogQuestions(args, state);
+  if (questions.length) {
+    const memo = str(args.memo).slice(0, 1_500);
+    const ask: AssistantAskPayload = {
+      id: "agent",
+      // The same questions as plain text: the log, and what a typed answer is read against.
+      text: questions.map((question, index) => `${index + 1}) ${question.header}: ${question.text}`).join("\n").slice(0, 2_000),
+      options: [],
+      allow_custom: true,
+      custom_placeholder: "Эсвэл бүгдэд нь нэг дор бичиж хариулна уу…",
+      questions,
+      ...(memo ? { memo } : {}),
+      // What each file is and which decision each question is: comes back with his answers.
+      ...(state.intake ? { intake: packIntake({ files: state.intake.files, asked }) } : {}),
+    };
+    return { kind: "ask", ask };
+  }
   const question = str(args.question).slice(0, 1_200);
   if (!question) return { kind: "note", text: "Тодруулах зүйл байна, гэвч асуултаа гаргаж чадсангүй. Зааврыг дэлгэрэнгүй бичнэ үү.", reason: "reply" };
   // A question about ONE trip (which child tier, which date): every option carries that trip, so a
@@ -197,11 +337,73 @@ function askOutcome(args: Args, state: TurnState): AgentOutcome {
     options,
     allow_custom: true,
     custom_placeholder: options.length ? "Эсвэл хариултаа бичнэ үү…" : "Хариултаа бичнэ үү…",
+    ...(state.intake ? { intake: packIntake({ files: state.intake.files, asked: [] }) } : {}),
   };
   return { kind: "ask", ask };
 }
 
+
+/**
+ * What the new-trip reader is told with a handed-off file: the admin's own decisions and nothing
+ * the model wrote. After a dialog these are the answers the model points at by number (the price
+ * and the transport of THIS trip, not another trip's); otherwise his whole message.
+ */
+function handoffNote(state: TurnState, numbers: unknown): string {
+  const said = state.answers;
+  if (!said.length) return withoutOptionTags(state.instruction).slice(0, 2_000);
+  const picked = (Array.isArray(numbers) ? numbers : []).map(Number)
+    .filter((value, index, all) => Number.isInteger(value) && value >= 1 && value <= said.length && all.indexOf(value) === index)
+    .map((value) => said[value - 1]);
+  return ["Шинэ аялал болгон нэм.", ...(picked.length ? picked : said)].map((line) => withoutOptionTags(line)).join("\n").slice(0, 2_000);
+}
+
+/**
+ * Attached files the model calls whole NEW trips: the page sends the ORIGINAL files to the
+ * new-trip reader (a poster is read as a picture there, not as our transcription of it).
+ * A name the turn does not hold is dropped; a file is handed off once.
+ */
+function newTripHandoffs(raw: unknown, state: TurnState): NewTripHandoff[] {
+  const byName = new Map(state.documents.map((document) => [squashName(document.name), document.name]));
+  const taken = new Set<string>();
+  const out: NewTripHandoff[] = [];
+  for (const item of Array.isArray(raw) ? raw.slice(0, 4) : []) {
+    const entry = item && typeof item === "object" ? (item as Args) : {};
+    const files = (Array.isArray(entry.files) ? entry.files : []).map((name) => {
+      const key = squashName(str(name));
+      return key ? byName.get(key) ?? [...byName.entries()].find(([known]) => known.includes(key) || key.includes(known))?.[1] ?? "" : "";
+    }).filter((name) => name && !taken.has(name));
+    if (!files.length) continue;
+    for (const name of files) taken.add(name);
+    out.push({ files: [...new Set(files)], note: handoffNote(state, entry.answers) });
+  }
+  return out;
+}
+
+/**
+ * The new trips among the attached files, each with the note its reader gets. Once the files were taken
+ * stock of, the system knows them itself (a file the model forgot to list is not lost) and the note holds
+ * the admin's decisions about THAT trip in plain words; otherwise the model's list, as before.
+ */
+function handoffsFor(state: TurnState, raw: unknown): NewTripHandoff[] {
+  if (state.intake) {
+    const groups = newTripGroups(state.intake.files, state.decisions, state.documents);
+    const words = withoutOptionTags(state.answerToInstruction || state.instruction);
+    const textOf = (files: string[]) => state.documents.filter((document) => files.includes(document.name)).map((document) => document.text).join("\n");
+    if (groups.length) return groups.map((files) => ({ files, note: intakeHandoffNote(files, state.decisions, words, textOf(files), state.now) }));
+    // A file the stock-taking called a saved trip's is never read as a new one.
+    const saved = new Set(state.intake.files.filter((file) => file.kind !== "new_trip" && file.kind !== "other").map((file) => file.file));
+    return newTripHandoffs(raw, state).map((handoff) => ({ ...handoff, files: handoff.files.filter((name) => !saved.has(name)) })).filter((handoff) => handoff.files.length);
+  }
+  return newTripHandoffs(raw, state);
+}
+
 async function tripSourceOutcome(args: Args, state: TurnState): Promise<AgentOutcome> {
+  // Attached files that are a new trip go to the reader as the files they are.
+  if (!str(args.url) && state.documents.length) {
+    const named = handoffsFor(state, [{ files: args.files, answers: args.answers }]);
+    const handoffs = named.length ? named : [{ files: state.documents.map((document) => document.name), note: handoffNote(state, args.answers) }];
+    return { kind: "handoff", handoffs, text: "" };
+  }
   // The reader's note is the admin's own message, never words the model (or a page) wrote.
   const note = withoutOptionTags(state.instruction).slice(0, 2_000);
   const key = urlKey(str(args.url));
@@ -215,11 +417,6 @@ async function tripSourceOutcome(args: Args, state: TurnState): Promise<AgentOut
     }
     if (!page) return { kind: "note", text: "Энэ холбоос таны мессежид алга тул уншихгүй. Холбоосыг нь хуулж оруулна уу.", reason: "refused" };
     return { kind: "trip_source", label: (page.title || page.url).slice(0, 200), text: `Эх сурвалж: ${page.url}\nГарчиг: ${page.title}\n\n${page.text}`, note, url: page.url };
-  }
-  // Attached files that are a whole new trip: their own text is the source (rule 13).
-  if (state.documents.length) {
-    const text = state.documents.map((document) => `Файл: ${document.name}\n${document.text}`).join("\n\n");
-    return { kind: "trip_source", label: state.documents[0].name.slice(0, 200), text, note };
   }
   // A pasted program: the admin's own words are the source, never a copy the model re-typed.
   const pasted = withoutOptionTags([state.answerToInstruction, state.instruction].filter(Boolean).join("\n\n"));
@@ -250,28 +447,66 @@ function comparisonNotes(state: TurnState, tripIds: string[]): string[] {
   }
   return notes;
 }
-type Finish = { outcome: AgentOutcome } | { retry: string };
+/** `nudge`: the model is sent back by the stock-taking rules (counted apart from the repairs of a refused proposal). */
+type Finish = { outcome: AgentOutcome } | { retry: string; nudge?: boolean };
 
-async function finish(calls: ToolCall[], state: TurnState, repairsLeft: number): Promise<Finish> {
+const TAKE_STOCK_FIRST = JSON.stringify({
+  ok: false,
+  not_done: "Files are attached: first call take_stock with what EVERY attached file is (after search_trips / get_trip / compare_program showed you). The system then says what to ask the admin and what to do. Nothing was saved or asked.",
+});
+
+async function finish(calls: ToolCall[], state: TurnState, repairsLeft: number, canNudge = false): Promise<Finish> {
   const parsed = calls.map((call) => ({ name: call.function.name, args: parseArgs(call.function.arguments) }));
   const ask = parsed.find((entry) => entry.name === "ask_user");
-  if (ask) return { outcome: askOutcome(ask.args, state) };
   const proposes = parsed.filter((entry) => entry.name === "propose_changes");
+  const source = parsed.find((entry) => entry.name === "read_trip_source");
+  const nudge = (retry: string): Finish => {
+    state.intakeNudges += 1;
+    return { retry, nudge: true };
+  };
+  // Files to take stock of: what each file is comes before any question or proposal (intake.ts).
+  if ((ask || proposes.length || source) && state.intakeRequired && !state.intake && canNudge) return nudge(TAKE_STOCK_FIRST);
+  if (ask) return { outcome: askOutcome(ask.args, state) };
+  // Decisions only the admin can make come before any change: asked by the model, or by the system itself.
+  if ((proposes.length || source) && state.mustAsk.length && !state.answering) {
+    if (canNudge) {
+      return nudge(JSON.stringify({ ok: false, not_done: "These decisions are the admin's: ask them first with ONE ask_user questions[] (one question per entry, with its topic and file). Nothing was proposed.", must_ask: state.mustAsk.map((item) => ({ topic: item.topic, file: item.file, why: item.why })) }));
+    }
+    return { outcome: askOutcome({}, state) };
+  }
   if (proposes.length) {
     const guarded = guardActions(proposes.flatMap((entry) => (Array.isArray(entry.args.actions) ? entry.args.actions : [])), state);
+    // Files that are whole new trips ride along: each becomes its own review card on the page.
+    const handoffs = handoffsFor(state, proposes.flatMap((entry) => (Array.isArray(entry.args.new_trips) ? entry.args.new_trips : [])));
+    const replyText = proposes.map((entry) => str(entry.args.reply_text)).filter(Boolean).join(" ");
+    // His message sets a price («нярай үнэгүй», «100 мянгаар нэм») and the proposal changes none: sent back once.
+    // On 2026-11-22 a first proposal was refused for another part and its rewrite dropped «нярай … үнэгүй».
+    if (!state.documents.length && !state.fareNudged && canNudge && setsPrice(withoutOptionTags(state.instruction)) && !changesFare(proposes.flatMap((entry) => (Array.isArray(entry.args.actions) ? entry.args.actions.map(recordOf) : [])))) {
+      state.fareNudged = true;
+      return { retry: JSON.stringify({ ok: false, not_done: "His message also sets a price (an amount, or «үнэгүй» = set 0), but no action changes a fare. Nothing was proposed.", hint: "Call propose_changes again with EVERY part of his message: the fare (fare_change_all or set_date_price) AND the other changes. If the price really must stay, say why in reply_text." }), nudge: true };
+    }
+    // What the files and his decisions call for but the proposal lacks: sent back once or twice, then said on the card.
+    const gaps = state.intake ? proposalGaps({ intake: state.intake, decisions: state.decisions, actions: guarded.actions, context: intakeContext(state), compared: new Set(state.compared.keys()), now: state.now }) : [];
+    if (gaps.length && canNudge) {
+      return nudge(JSON.stringify({ ok: false, not_done: "The proposal is not complete yet. Nothing was proposed.", missing: gaps.map((gap) => gap.model), hint: "Add what is missing and call propose_changes again with EVERY action (the earlier ones too)." }));
+    }
+    const gapLines = gaps.map((gap) => gap.admin);
+    // Only new trips, no change of a saved trip: the hand-off is the whole answer.
+    if (!guarded.actions.length && !guarded.refusals.length && handoffs.length) return { outcome: { kind: "handoff", handoffs, text: [replyText, ...gapLines].filter(Boolean).join(" ") } };
     // Everything refused by the guard: say why, never the model's own "will archive" line.
     if (!guarded.actions.length && guarded.refusals.length) {
-      return { outcome: { kind: "note", text: `Өөрчлөх зүйл алга. ${[...new Set(guarded.refusals)].join(" ")}`, reason: "refused" } };
+      const text = `Өөрчлөх зүйл алга. ${[...new Set(guarded.refusals)].join(" ")}`;
+      return { outcome: handoffs.length ? { kind: "handoff", handoffs, text } : { kind: "note", text, reason: "refused" } };
     }
-    const replyText = proposes.map((entry) => str(entry.args.reply_text)).filter(Boolean).join(" ");
     const built = buildAgentProposal(guarded.actions, replyText, {
       trips: state.trips, now: state.now, fetched: state.fetched, seen: state.seen,
       linkTrips: state.linkTrips, linkUnresolved: state.linkUnresolved, hosted: state.hosted,
-      adminText: withoutUrls(withoutOptionTags(state.adminText)), pinned: state.chosen,
+      adminText: withoutUrls(withoutOptionTags(state.adminText)), pinned: state.chosen, photoCredits: state.photoCredits, comparedFileDays: state.comparedFileDays,
       fileTurn: state.documents.length > 0, rewriteAsked: REWRITE_WORDS.test(withoutUrls(withoutOptionTags(state.adminText))),
       // Where a description section's numbers may come from: his words, his files, and the saved
       // descriptions he had opened (one trip's list copied to another).
       sources: [state.adminText, ...state.documents.map((document) => document.text), ...[...state.fetched.keys()].map((id) => state.byId.get(id)?.notes || "")],
+      bandSources: [state.adminText, ...state.documents.map((document) => document.text)],
     });
     if ("proposal" in built) {
       // What the file states differently but was left alone (meals, days only one side has): said on the card by code.
@@ -283,19 +518,59 @@ async function finish(calls: ToolCall[], state: TurnState, repairsLeft: number):
         built.proposal.conflict_items!.push({ text: refusal, severity: "warning", type: "agent_refused" });
         built.proposal.conflicts.push(refusal);
       }
-      return { outcome: { kind: "proposal", proposal: built.proposal } };
+      for (const line of gapLines) {
+        built.proposal.conflict_items!.push({ text: line, severity: "warning", type: "intake_gap" });
+        built.proposal.conflicts.push(line);
+      }
+      return { outcome: { kind: "proposal", proposal: built.proposal, ...(handoffs.length ? { handoffs } : {}) } };
     }
     if (built.fixable && repairsLeft > 0) {
-      return { retry: JSON.stringify({ ok: false, refused: built.note, hint: "Засах боломжтой бол get_trip-ийн бодит өгөгдлөөр дахин propose_changes; тодорхойгүй бол ask_user; болохгүй бол reply-гаар шалтгааныг хэл." }) };
+      return { retry: JSON.stringify({ ok: false, refused: built.note, hint: "Засах боломжтой бол get_trip-ийн бодит өгөгдлөөр дахин propose_changes — БҮХ өөрчлөлтөө (зөв байсан хэсгийг ч, new_trips-ээ ч) дахин бич; тодорхойгүй бол ask_user; болохгүй бол reply-гаар шалтгааныг хэл." }) };
     }
     const text = [built.note, ...guarded.refusals].join(" ").trim();
-    return { outcome: { kind: "note", text, reason: "refused" } };
+    // The saved-trip part failed; the new trips of the same message are still read.
+    return { outcome: handoffs.length ? { kind: "handoff", handoffs, text } : { kind: "note", text, reason: "refused" } };
   }
-  const source = parsed.find((entry) => entry.name === "read_trip_source");
   if (source) return { outcome: await tripSourceOutcome(source.args, state) };
   const reply = parsed.find((entry) => entry.name === "reply");
   const text = str(reply?.args.text).slice(0, 4_000);
-  return { outcome: { kind: "note", text: text || "Ойлгосонгүй. Юуг өөрчлөхийг бичнэ үү.", reason: "reply" } };
+  return { outcome: { kind: "note", text: withComparedTrips(text || "Ойлгосонгүй. Юуг өөрчлөхийг бичнэ үү.", state), reason: "reply" } };
+}
+
+/** His words set a price: «үнэгүй» (free) or an amount beside a price word. */
+function setsPrice(admin: string): boolean {
+  return /үнэгүй|(?:^|[^a-z])uneg[uү]i/iu.test(admin) || (PRICE_WORDS.test(admin) && amountsInText(admin).length > 0);
+}
+
+/** Some action changes a fare: a trip-wide or one-date price, or a price field. */
+function changesFare(actions: Args[]): boolean {
+  return actions.some((action) => ["fare_change_all", "set_date_price"].includes(str(action.action))
+    || Object.keys(recordOf(action.fields)).some((key) => /_price$/.test(key)));
+}
+
+const COMPARED_STATUS: Record<string, string> = { active: "сайтад идэвхтэй", archived: "архивт", paused: "түр зогссон", sold_out: "дүүрсэн", draft: "ноорог", cancelled: "цуцалсан" };
+
+/**
+ * An answer about an attached program says which saved trip it was compared with and whether that
+ * trip is live: on 2026-11-22 «аяллын хөтөлбөрийг энэ файлаар шинэчил» was answered "everything
+ * matches" without naming the trip (the owner wants it to say "this trip is already live").
+ */
+function withComparedTrips(text: string, state: TurnState): string {
+  if (!state.documents.length) return text;
+  const trips = [...state.compared.keys()].map((id) => state.byId.get(id)).filter((trip): trip is TravelTrip => Boolean(trip) && !text.includes(trip!.route_name));
+  if (!trips.length) return text;
+  return `${text}\n\nТулгасан аялал: ${trips.map((trip) => `«${trip.route_name}» (${[COMPARED_STATUS[trip.status] || trip.status, str(trip.duration_text)].filter(Boolean).join(", ")})`).join("; ")}.`;
+}
+
+/** For his answers to questions about files: the decisions, and the work each file means (intake.ts). */
+function intakeBrief(state: TurnState): string[] | undefined {
+  if (!state.intake || !state.answering) return undefined;
+  const decisions = state.decisions.map((decision) => `- ${decision.header}${decision.file ? ` («${decision.file}»)` : ""}: ${decision.text}`);
+  const work = todoLines(state.intake, state.decisions, intakeContext(state)).map((line) => `- ${line}`);
+  return [
+    ...(decisions.length ? ["Админы шийдвэр, асуулт бүрээр:", ...decisions] : []),
+    "Файл бүрийн ажил (систем таны take_stock болон түүний хариултаас гаргасан — яг үүнийг хий; шинэ аяллыг систем өөрөө уншуулна):", ...work,
+  ];
 }
 
 /* ---------------------------------------------------------------- */
@@ -312,10 +587,11 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
   const startedAt = deps.now();
   const now = input.today ?? new Date(startedAt);
   const withDocuments = Array.isArray(input.documents) && input.documents.some((document) => document && typeof document.text === "string" && document.text.trim());
-  const totalMs = input.totalMs ?? (withDocuments ? DOCUMENT_TOTAL_MS : TOTAL_MS);
+  let totalMs = input.totalMs ?? (withDocuments ? DOCUMENT_TOTAL_MS : TOTAL_MS);
   const perCallMs = withDocuments ? DOCUMENT_PER_CALL_MS : PER_CALL_MS;
   const maxTurnPromptTokens = withDocuments ? DOCUMENT_MAX_TURN_PROMPT_TOKENS : MAX_TURN_PROMPT_TOKENS;
-  const maxRounds = Math.max(1, Math.min(input.maxRounds ?? MAX_ROUNDS, MAX_ROUNDS));
+  const roundCap = withDocuments ? DOCUMENT_MAX_ROUNDS : MAX_ROUNDS;
+  const maxRounds = Math.max(1, Math.min(input.maxRounds ?? roundCap, roundCap));
   const model = input.model || process.env.OPENAI_ASSISTANT_MODEL || AGENT_DEFAULT_MODEL;
   const tools: string[] = [];
   const usage = { prompt: 0, completion: 0 };
@@ -337,6 +613,7 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
         documents: state.documents, links: state.links, revising: input.revising,
         chosenTrips: [...state.chosen].map((id) => state.byId.get(id)!).map((trip) => ({ id: trip.id, name: trip.route_name, partner: isPartnerTrip(trip) })),
         preloaded: await preloadedDetail(state),
+        intake: intakeBrief(state),
       }),
     },
   ];
@@ -380,12 +657,14 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
       // The last round offered only the finishing tools: a read there is not run.
       const content = last ? JSON.stringify({ error: "Унших хэрэгслийн ээлж дууссан. Байгаа мэдээллээрээ дуусга (propose_changes / ask_user / reply)." })
         : await runReadTool(state, call.function.name, parseArgs(call.function.arguments));
+      // The web photo search takes up to a minute: the turn is given the long budget once it ran.
+      if (state.slow && input.totalMs === undefined) totalMs = Math.max(totalMs, DOCUMENT_TOTAL_MS);
       messages.push({ role: "tool", tool_call_id: call.id, content });
     }
     if (!terminals.length || deferred) continue;
-    const finished = await finish(terminals, state, last ? 0 : repairsLeft);
+    const finished = await finish(terminals, state, last ? 0 : repairsLeft, !last && state.intakeNudges < MAX_INTAKE_NUDGES);
     if ("outcome" in finished) return done(finished.outcome, round);
-    repairsLeft -= 1;
+    if (!finished.nudge) repairsLeft -= 1;
     for (const call of terminals) messages.push({ role: "tool", tool_call_id: call.id, content: finished.retry });
   }
   return done({ kind: "note", text: "Даалгаврыг дуусгаж чадсангүй — юу ч өөрчлөгдөөгүй. Зааврыг тодорхой бичээд дахин илгээнэ үү.", reason: "model_failed" }, maxRounds);

@@ -38,6 +38,10 @@ export function notesSectionText(value: unknown): string {
   const out: string[] = [];
   for (const line of lines) {
     if (!line && (!out.length || !out[out.length - 1])) continue;
+    // A group heading written on the line of its first item ("Эмэгтэйчүүдийн шинжилгээ: TCT шинжилгээ: 170 юань",
+    // a real reading of 2026-11-21) is two lines: the site shows the heading as the group, the rest as its item.
+    const glued = /^([^:：\d]{3,60})[:：]\s+([^:：]+[:：]\s*\d[\d\s.,]*\s*(?:юань|¥|₮|төг\S*)?)$/u.exec(line);
+    if (glued) { out.push(`${glued[1].trim()}:`, glued[2].trim()); continue; }
     out.push(line);
   }
   while (out.length && !out[out.length - 1]) out.pop();

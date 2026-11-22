@@ -3,10 +3,12 @@ import { Icons, cx } from "@/components/ui";
 import {
   ActionGlyph,
   ComposerActionMenu,
+  NewTripMenu,
   QuickActionList,
   QuickActionStep,
   useQuickAction,
   type ActionKey,
+  type NewTripWay,
   type QuickActionKind,
 } from "./AssistantQuickActions";
 import { ProposalCard, type EditDraftTrip } from "./ProposalCard";
@@ -19,7 +21,8 @@ import {
   MAX_AI_INPUT_CHARS,
   formatBytes,
 } from "@/lib/adminUtils";
-import { displayText, openAskOf, replyCaption, stageAt, type ProgressStage } from "./assistantChatLogic";
+import { AssistantAskDialog } from "./AssistantAskDialog";
+import { displayText, openAskOf, replyCaption, stageAt, type DialogPicks, type ProgressStage } from "./assistantChatLogic";
 import type { AssistantAskMsg, AssistantChatMessage, AssistantProposalMsg, ReplyMeta } from "./assistantChatTypes";
 import { thumb } from "./tripReview/photoThumb";
 
@@ -185,6 +188,7 @@ export function AssistantTab({
   clarifyBusyId,
   onSend,
   onChooseOption,
+  onSubmitAskDialog,
   onQuickAction,
   onEditTripPrice,
   onNewTrip,
@@ -220,6 +224,8 @@ export function AssistantTab({
   onSend: () => void;
   /** The admin tapped one of the choices the assistant offered. */
   onChooseOption: (message: AssistantAskMsg, option: ProposalQuestionOption) => void;
+  /** A dialog of several questions, answered in one go. */
+  onSubmitAskDialog?: (message: AssistantAskMsg, picks: DialogPicks) => void;
   onQuickAction: (kind: QuickActionKind, trip: TravelTrip, value?: number | boolean) => void;
   onEditTripPrice: (trip: TravelTrip) => void;
   onNewTrip: () => void;
@@ -251,6 +257,9 @@ export function AssistantTab({
 
   const quick = useQuickAction({ trips: existingTrips, busy, onQuick: onQuickAction, onEditPrice: onEditTripPrice, onNewTrip });
   const { step } = quick;
+  // The way a new trip is being typed in (a pasted program or a link): it holds until the thread moves on.
+  const [typedTrip, setTypedTrip] = useState<{ way: NewTripWay; at: number } | null>(null);
+  const newTripWay = typedTrip && typedTrip.at === messages.length ? typedTrip.way : null;
   const stepPhase = step?.phase ?? null;
   // A question the assistant asked, still its latest word: the composer answers it.
   const openAsk = openAskOf(messages);
@@ -277,7 +286,10 @@ export function AssistantTab({
       : stepPhase === "value" ? "Үлдсэн суудлын тоо…"
         : "Дээрх сонголтоос нэгийг нь дарна уу"
     : openAsk ? (openAsk.customPlaceholder || "Хариултаа бичээрэй…")
-      : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй (ж: «шинэ аялал болгон нэм», «… аяллын хөтөлбөрийг энэ файлаар шинэчил»)…" : "Юуг өөрчлөх вэ? Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй…";
+      : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй — эсвэл зүгээр л илгээ, би юу болохыг нь шалгаад асууна…"
+        : newTripWay === "paste" ? "Шинэ аяллын хөтөлбөр, үнэ, огноогоо энд буулгаад илгээнэ үү…"
+          : newTripWay === "link" ? "Аяллын хуудасны холбоосыг энд буулгана уу (https://…) — шинэ аялал болгон уншина…"
+            : "Юуг өөрчлөх вэ? Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй…";
 
   useEffect(() => {
     const input = inputRef.current;
@@ -295,6 +307,16 @@ export function AssistantTab({
 
   const startAction = (key: ActionKey) => {
     quick.start(key);
+    inputRef.current?.focus();
+  };
+
+  // «Шинэ аялал нэмэх»: the way chosen in its menu. A file opens the picker, the form opens the
+  // blank editor; a pasted program or a link is typed below, and the composer says so.
+  const chooseNewTripWay = (way: NewTripWay) => {
+    if (way === "form") { setTypedTrip(null); quick.openForm(); return; }
+    quick.closeNewMenu();
+    if (way === "file") { setTypedTrip(null); onPickFile(); return; }
+    setTypedTrip({ way, at: messages.length });
     inputRef.current?.focus();
   };
 
@@ -426,7 +448,9 @@ export function AssistantTab({
               <span className="h-px flex-1 bg-line" />
             </div>
             <div className="mt-3 w-full text-left">
-              {step ? <QuickActionStep controller={quick} busy={busy} /> : <QuickActionList onStart={startAction} busy={busy} />}
+              {step ? <QuickActionStep controller={quick} busy={busy} />
+                : quick.newMenu ? <NewTripMenu busy={busy} onChoose={chooseNewTripWay} onCancel={quick.closeNewMenu} />
+                  : <QuickActionList onStart={startAction} busy={busy} />}
             </div>
           </div>
         ) : (
@@ -446,10 +470,12 @@ export function AssistantTab({
               onCancelProposal={onCancelProposal}
               onResendInstruction={onResendInstruction}
               onChooseOption={onChooseOption}
+              onSubmitAskDialog={onSubmitAskDialog ?? noDialog}
               onEditDraftTrip={onEditDraftTrip}
             />
           ))}
           {step && <QuickActionStep controller={quick} busy={busy} />}
+          {!step && quick.newMenu && <NewTripMenu busy={busy} onChoose={chooseNewTripWay} onCancel={quick.closeNewMenu} />}
           </div>
         )}
 
@@ -620,6 +646,8 @@ export function AssistantTab({
   );
 }
 
+const noDialog = () => undefined;
+
 /* ----------------------------------------------------------------
    One message in the conversation.
    ---------------------------------------------------------------- */
@@ -636,6 +664,7 @@ function ChatBubble({
   onCancelProposal,
   onResendInstruction,
   onChooseOption,
+  onSubmitAskDialog,
   onEditDraftTrip,
 }: {
   message: AssistantChatMessage;
@@ -653,6 +682,7 @@ function ChatBubble({
   onCancelProposal: (id: string) => void;
   onResendInstruction?: (message: AssistantProposalMsg) => void;
   onChooseOption: (message: AssistantAskMsg, option: ProposalQuestionOption) => void;
+  onSubmitAskDialog: (message: AssistantAskMsg, picks: DialogPicks) => void;
   onEditDraftTrip?: EditDraftTrip;
 }) {
   if (message.role === "admin") {
@@ -687,6 +717,16 @@ function ChatBubble({
             )
           )}
         </div>
+      </div>
+    );
+  }
+
+  if (message.kind === "ask" && message.questions?.length) {
+    // Several decisions at once: one dialog, a tab per question, every answer sent together.
+    return (
+      <div className="animate-fade-up flex flex-col items-start">
+        <AssistantAskDialog message={message} busy={busy} onSubmit={onSubmitAskDialog} />
+        <ReplyCaption meta={message.meta} />
       </div>
     );
   }

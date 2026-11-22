@@ -34,7 +34,11 @@ export function isHostedPhotoUrl(url: unknown, cloudName: string | null | undefi
   return !cloud || match[1].toLowerCase() === cloud;
 }
 
-export type PhotoEditInput = { old_url?: string; position?: number; day?: number; new_url?: string; remove?: boolean };
+export type PhotoEditInput = {
+  old_url?: string; position?: number; day?: number; new_url?: string; remove?: boolean;
+  /** The new photo's credit line (title, author, license, page), kept under extra.photo_credits. */
+  credit?: unknown;
+};
 
 export type PhotoEditPlan = {
   fields: TripMutationFields;
@@ -152,6 +156,9 @@ export function planPhotoEdit(trip: TravelTrip, input: PhotoEditInput, posterDat
     delete kept[old];
     if (Object.keys(kept).length) extra.photo_credits = kept;
   }
+  // The new photo's own credit (a photo found on Wikimedia, or one of ours that carries a credit).
+  const credit = record(input.credit);
+  if (!remove && Object.keys(credit).length) extra.photo_credits = { ...record(extra.photo_credits ?? credits), [newUrl]: credit };
   const fields: TripMutationFields = { photo_urls: nextPhotos, ...(Object.keys(extra).length ? { extra } : {}) };
 
   let nextPoster: Row | undefined;

@@ -16,7 +16,7 @@ export const QUICK_ACTIONS: ReadonlyArray<{
   question: string;
   icon: ActionIcon;
 }> = [
-  { key: "new", label: "Шинэ аялал нэмэх", body: "Хоосон маягт нээгдэнэ. Нэр, огноо, үнээ бөглөнө.", question: "", icon: "plus" },
+  { key: "new", label: "Шинэ аялал нэмэх", body: "Файл, хуулсан текст, вэб холбоос эсвэл гараар — яаж оруулахаа сонгоно.", question: "", icon: "plus" },
   { key: "price", label: "Үнэ өөрчлөх", body: "Аяллаа сонгоод шинэ үнийг оруулна.", question: "Аль аяллын үнийг өөрчлөх вэ?", icon: "tag" },
   { key: "seats", label: "Суудал шинэчлэх", body: "Үлдсэн суудлын тоог шууд засна.", question: "Аль аяллын суудлыг шинэчлэх вэ?", icon: "users" },
   { key: "food", label: "Хоол багтсан эсэх", body: "Хоол үнэд орсон эсэхийг тэмдэглэнэ.", question: "Аль аяллын хоолны мэдээллийг засах вэ?", icon: "utensils" },
@@ -81,15 +81,21 @@ export function useQuickAction({
 }) {
   const [step, setStep] = useState<QuickStep | null>(null);
   const [input, setInput] = useState("");
+  // «Шинэ аялал нэмэх» first asks how the trip comes in (NewTripMenu); the blank form is one of the ways.
+  const [newMenu, setNewMenu] = useState(false);
 
   const start = useCallback((key: ActionKey) => {
     if (busy) return;
     setInput("");
-    if (key === "new") { setStep(null); onNewTrip(); return; }
+    if (key === "new") { setStep(null); setNewMenu(true); return; }
+    setNewMenu(false);
     setStep({ action: key, trip: null, phase: "trip" });
-  }, [busy, onNewTrip]);
+  }, [busy]);
 
-  const cancel = useCallback(() => { setStep(null); setInput(""); }, []);
+  const cancel = useCallback(() => { setStep(null); setInput(""); setNewMenu(false); }, []);
+  /** The blank form, chosen in the new-trip menu. */
+  const openForm = useCallback(() => { setNewMenu(false); onNewTrip(); }, [onNewTrip]);
+  const closeNewMenu = useCallback(() => setNewMenu(false), []);
 
   const candidates = useMemo(() => {
     if (!step || step.phase !== "trip") return [];
@@ -139,7 +145,7 @@ export function useQuickAction({
 
   const definition = step ? QUICK_ACTIONS.find((entry) => entry.key === step.action) ?? null : null;
 
-  return { step, definition, input, setInput, start, cancel, candidates, pickTrip, changeTrip, finish, seatsValid, seatsNumber, enterAction };
+  return { step, definition, input, setInput, start, cancel, candidates, pickTrip, changeTrip, finish, seatsValid, seatsNumber, enterAction, newMenu, openForm, closeNewMenu };
 }
 
 export type QuickActionController = ReturnType<typeof useQuickAction>;
@@ -330,6 +336,65 @@ export function QuickActionList({ onStart, busy }: { onStart: (key: ActionKey) =
   );
 }
 
+/* ----------------------------------------------------------------
+   «Шинэ аялал нэмэх»: how the new trip comes in. Until 2026-11-21 the
+   button opened the blank form at once; the owner wanted the choices
+   first — a file, a pasted program, a web page — and the hand-filled
+   form last, since the assistant reads the first three by itself.
+   ---------------------------------------------------------------- */
+export type NewTripWay = "file" | "paste" | "link" | "form";
+
+const NEW_TRIP_WAYS: ReadonlyArray<{ way: NewTripWay; label: string; body: string; icon: "upload" | "file" | "search" | "edit" }> = [
+  { way: "file", label: "Файл оруулах", body: "Постер, Word, PDF, Excel эсвэл зураг. Би уншаад шалгах карт гаргана.", icon: "upload" },
+  { way: "paste", label: "Хөтөлбөрийн текст буулгах", body: "Хөтөлбөр, үнэ, огноогоо доор хуулж буулгаад илгээнэ.", icon: "file" },
+  { way: "link", label: "Вэб хуудаснаас авах", body: "Хамтрагчийн эсвэл өөр сайтын аяллын хуудасны холбоосыг буулгана.", icon: "search" },
+  { way: "form", label: "Гараар бөглөх", body: "Хоосон маягт нээгдэнэ. Нэр, огноо, үнээ өөрөө бичнэ.", icon: "edit" },
+];
+
+export function NewTripMenu({ busy, onChoose, onCancel }: { busy: boolean; onChoose: (way: NewTripWay) => void; onCancel: () => void }) {
+  return (
+    <div className="animate-fade-up flex justify-start" role="group" aria-label="Шинэ аялал нэмэх">
+      <div className="w-full min-w-0 max-w-3xl overflow-hidden rounded-2xl rounded-bl-md border border-brand-border bg-surface shadow-xs">
+        <div className="flex items-start gap-3 px-4 pt-3.5 pb-3">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand">
+            <Icons.plus size={16} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-brand">Шинэ аялал нэмэх</p>
+            <p className="mt-0.5 text-[15px] font-semibold leading-6 text-ink">Шинэ аяллаа яаж оруулах вэ?</p>
+          </div>
+          <button type="button" onClick={onCancel} aria-label="Болих" title="Болих (Esc)" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink">
+            <Icons.close size={15} />
+          </button>
+        </div>
+        <ul className="border-t border-line p-1.5" aria-label="Оруулах арга">
+          {NEW_TRIP_WAYS.map((entry) => {
+            const Icon = Icons[entry.icon];
+            return (
+              <li key={entry.way}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onChoose(entry.way)}
+                  className="group flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-ink-muted transition-colors group-hover:bg-surface group-hover:text-brand">
+                    <Icon size={15} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-ink">{entry.label}</span>
+                    <span className="mt-0.5 block text-xs leading-5 text-ink-muted">{entry.body}</span>
+                  </span>
+                  <Icons.chevronRight size={14} className="shrink-0 text-ink-subtle opacity-0 transition-opacity group-hover:opacity-100" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
+}
 /* ----------------------------------------------------------------
    The "+" menu in the composer: attach a file or start an action,
    from the one place the admin is already typing.

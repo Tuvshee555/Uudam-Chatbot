@@ -100,13 +100,24 @@ export function isSavedTripInstruction(text: string, files: Array<Pick<AttachedF
   return !PRICE_LIST_WORDS.test(words) && files.some((file) => !isImageAttachment(file));
 }
 
+/** A document the server reads as text without a model: Word (.docx, .doc), Excel, CSV, PDF, plain text. */
+export function isTextDocument(file: Pick<AttachedFile, "name" | "mimeType">): boolean {
+  return /\.(docx?|xlsx|xlsm|xls|csv|pdf|txt|text|md)$/i.test(String(file.name || "").trim());
+}
+
+/**
+ * Why files go to the agent as text: the admin's own words ("words"), several documents at once
+ * that it must sort out ("package"), or one document that looks like a trip already saved ("check").
+ */
+export type AgentFilesReason = "words" | "package" | "check";
+
 export type AttachmentRoute =
   | { kind: "none" }
   /** Photos with an explicit photo edit: hosted first, then sent to the agent with the text. */
   | { kind: "agent_images"; images: AttachedFile[]; skipped: number }
-  /** Files with an instruction about saved trips: read as text, then sent to the agent with the words. */
-  | { kind: "agent_files"; files: AttachedFile[]; skipped: number }
-  /** Documents, mixed files, or images with anything else (or nothing) said: the file → trip reader. */
+  /** Files read as text and sent to the agent with the words: it takes stock, asks, and proposes exact edits. */
+  | { kind: "agent_files"; files: AttachedFile[]; skipped: number; reason: AgentFilesReason }
+  /** One document, mixed files, or images with anything else (or nothing) said: the file → trip reader. */
   | { kind: "files" };
 
 export function attachmentRoute(text: string, files: AttachedFile[]): AttachmentRoute {
@@ -115,10 +126,69 @@ export function attachmentRoute(text: string, files: AttachedFile[]): Attachment
   if (allImages && String(text || "").trim() && isPhotoInstruction(text)) {
     return { kind: "agent_images", images: files.slice(0, MAX_AGENT_IMAGES), skipped: Math.max(0, files.length - MAX_AGENT_IMAGES) };
   }
-  if (isSavedTripInstruction(text, files)) {
-    return { kind: "agent_files", files: files.slice(0, MAX_AGENT_FILES), skipped: Math.max(0, files.length - MAX_AGENT_FILES) };
-  }
+  const agentFiles = (reason: AgentFilesReason): AttachmentRoute => ({ kind: "agent_files", files: files.slice(0, MAX_AGENT_FILES), skipped: Math.max(0, files.length - MAX_AGENT_FILES), reason });
+  if (isSavedTripInstruction(text, files)) return agentFiles("words");
+  // Several documents at once (two programs, a price list, a schedule photo beside them) are a package
+  // to sort out: which is a trip already saved, which is new, which is extra information. The reader
+  // takes "a document and its pictures" as ONE new trip, which a package is not (2026-11-21).
+  const documents = files.filter((file) => !isImageAttachment(file));
+  if (documents.length >= 2 && documents.every(isTextDocument) && !onlyNewTripSaid(text)) return agentFiles("package");
   return { kind: "files" };
+}
+
+// "Шинэ аялал болгон нэм" and nothing about a saved trip: the reader's job. The same words beside
+// "шинэчил" or "сэргээ" ("нэгийг нь шинэчил, нөгөөг нь шинэ аялал болгон нэм") are a package to sort out.
+function onlyNewTripSaid(text: string): boolean {
+  const words = String(text || "");
+  return NEW_TRIP_WORDS.test(words) && !SAVED_TRIP_WORDS.test(words) && !UPDATE_WORDS.test(words);
+}
+
+/**
+ * True when one document is sent with no "new trip" said: the page first asks the server whether
+ * it looks like a trip already saved, and only then chooses between the assistant and the reader.
+ */
+export function wantsSavedTripCheck(text: string, files: AttachedFile[]): boolean {
+  const documents = files.filter((file) => !isImageAttachment(file));
+  return documents.length === 1 && isTextDocument(documents[0]) && !onlyNewTripSaid(text);
+}
+
+/* ---------------------------------------------------------------- */
+/* A dialog of several questions                                    */
+/* ---------------------------------------------------------------- */
+
+/** What the admin picked for each question of a dialog: an option (by its place) or his own words. */
+export type DialogPicks = Record<string, { option?: number; text?: string }>;
+
+/**
+ * The answers of a dialog as one message: numbered in the questions' order, so the assistant can
+ * point at "answer 3" for the trip it belongs to. Null until every question has an answer.
+ * `shown` is what the thread prints (labels, no tags); `summary` stays on the answered dialog.
+ */
+export function dialogAnswer(message: Pick<AssistantAskMsg, "questions">, picks: DialogPicks): { instruction: string; shown: string; answers: string[]; summary: Array<{ header: string; answer: string }> } | null {
+  const questions = message.questions || [];
+  if (!questions.length) return null;
+  const answers: string[] = [];
+  const summary: Array<{ header: string; answer: string }> = [];
+  for (const question of questions) {
+    const pick = picks[question.id] || {};
+    const typed = String(pick.text || "").replace(/\s+/g, " ").trim().slice(0, 600);
+    const option = typeof pick.option === "number" ? question.options[pick.option] : undefined;
+    if (typed) {
+      answers.push(`${question.header}: ${typed}`);
+      summary.push({ header: question.header, answer: typed });
+    } else if (option) {
+      answers.push(option.answer);
+      summary.push({ header: question.header, answer: option.label });
+    } else {
+      return null;
+    }
+  }
+  return {
+    instruction: answers.map((answer, index) => `${index + 1}) ${answer}`).join("\n"),
+    shown: summary.map((entry) => `${entry.header}: ${entry.answer}`).join("\n"),
+    answers,
+    summary,
+  };
 }
 
 /* ---------------------------------------------------------------- */
@@ -158,6 +228,8 @@ export function instructionBody(input: {
   /** Files read as text (/api/admin/file-text), for an instruction about saved trips. */
   documents?: Array<{ name: string; text: string }>;
   openProposals?: OpenProposalRef[];
+  /** Files the assistant must first take stock of (a package, or one file that looks like a saved trip). */
+  intake?: boolean;
 }): Record<string, unknown> {
   const attachments = (input.attachments || []).filter((item) => /^https:\/\//.test(item.url)).slice(0, MAX_AGENT_IMAGES);
   const documents = (input.documents || []).filter((item) => item.text.trim()).slice(0, MAX_AGENT_FILES);
@@ -167,6 +239,7 @@ export function instructionBody(input: {
     ...(input.answerTo?.question ? { answer_to: input.answerTo } : {}),
     ...(attachments.length ? { attachments: attachments.map((item) => ({ url: item.url, kind: "image" as const })) } : {}),
     ...(documents.length ? { documents: documents.map((item) => ({ name: item.name, text: item.text })) } : {}),
+    ...(documents.length && input.intake ? { intake: true } : {}),
     ...(input.openProposals?.length ? { open_proposals: input.openProposals } : {}),
   };
 }
@@ -332,6 +405,8 @@ export function replyToMessage(data: AssistantResponse, ctx: ReplyContext): Assi
       allowCustom: data.ask.allow_custom === true,
       customPlaceholder: data.ask.custom_placeholder,
       ...(data.ask.answer_to?.question ? { answerTo: data.ask.answer_to } : {}),
+      // Several questions at once: the page shows them as one dialog.
+      ...(Array.isArray(data.ask.questions) && data.ask.questions.length ? { questions: data.ask.questions } : {}),
       ...withMeta,
     };
   }

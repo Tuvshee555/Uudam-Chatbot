@@ -6,6 +6,11 @@
  */
 import type { AdminMsg, AIProposal, AskMsg, NoteMsg, ProposalMsg, ProposalQuestionOption } from "@/lib/adminTypes";
 
+/** One choice of a dialog question: what it does, and what goes back to the assistant when it is chosen. */
+export type AskDialogOption = { label: string; description?: string; recommended?: boolean; answer: string };
+/** One question of a dialog the assistant asks all at once (its tab heading, the question, the choices). */
+export type AskDialogQuestion = { id: string; header: string; text: string; options: AskDialogOption[]; custom_label?: string; custom_placeholder?: string };
+
 /** Who built a reply: the agent, the code-side brain, the bulk model path, or the file reader. */
 export type ReplySource = "agent" | "brain" | "model" | "file";
 
@@ -19,7 +24,17 @@ export type ReplyMeta = {
 };
 
 /** The open question a typed answer belongs to: the route sends it with the ask and gets it back. */
-export type AnswerToRef = { id?: string; question: string; instruction?: string };
+export type AnswerToRef = {
+  id?: string;
+  question: string;
+  instruction?: string;
+  /** The assistant's own note written with a dialog; it comes back with the answers. */
+  memo?: string;
+  /** A dialog's answers, one per question in its order. */
+  answers?: string[];
+  /** What each attached file is and which questions were asked: the server's own note, sent back as it came. */
+  intake?: string;
+};
 
 export type AssistantAdminMsg = AdminMsg & {
   /** Photos sent with the instruction, already on our Cloudinary (shown as thumbnails). */
@@ -34,6 +49,10 @@ export type AssistantAskMsg = AskMsg & {
    */
   requestId?: number | null;
   meta?: ReplyMeta;
+  /** Several questions asked together: shown as one dialog and answered in one go. */
+  questions?: AskDialogQuestion[];
+  /** What was answered to each, once the dialog is sent (the dialog then reads as history). */
+  dialogAnswers?: Array<{ header: string; answer: string }>;
 };
 
 export type AssistantNoteMsg = NoteMsg & { meta?: ReplyMeta };
@@ -66,6 +85,8 @@ export type AssistantAskPayload = {
   allow_custom?: boolean;
   custom_placeholder?: string;
   answer_to?: AnswerToRef;
+  questions?: AskDialogQuestion[];
+  memo?: string;
 };
 
 /** Every field the assistant route may answer with (instruction, clarification, quick action). */
@@ -84,6 +105,8 @@ export type AssistantResponse = {
   retry_after_ms?: number;
   reset?: number;
   max_chars?: number;
+  /** Attached files the assistant called whole new trips: each set is read by the new-trip reader next. */
+  handoffs?: Array<{ files: string[]; note: string }>;
 };
 
 /** An image the agent receives with the instruction (hosted by the page first). */

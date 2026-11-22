@@ -355,7 +355,7 @@ test("a model that times out ends the turn with a Mongolian note; the total budg
   const { AgentModelError } = await import("../src/lib/assistantAgent/openaiTools");
   const failed = await run("альфа 12/2 дүүрсэн", [() => { throw new AgentModelError("timeout", "openai.chat timed out after 30000ms"); }]);
   assert.equal(failed.outcome.kind, "note");
-  assert.match((failed.outcome as { text: string }).text, /60 секундэд амжиж дуусгасангүй — юу ч өөрчлөгдөөгүй/);
+  assert.match((failed.outcome as { text: string }).text, /хугацаандаа амжиж дуусгасангүй — юу ч өөрчлөгдөөгүй/);
   assert.equal(failed.modelFailure, "timeout");
 
   // A slow model: the clock runs past the 60 s budget between rounds.

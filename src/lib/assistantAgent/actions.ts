@@ -48,6 +48,12 @@ export type ProposalContext = {
   hosted: Set<string>;
   /** What a section added to a description may quote numbers from: the admin's words and his attached files. */
   sources?: string[];
+  /** Where an age band's numbers may come from: his words and his files (not trip texts). */
+  bandSources?: string[];
+  /** The number of days of the attached program compared with a trip in this turn (compare_program), by trip. */
+  comparedFileDays?: Map<string, number>;
+  /** Credit lines of the photos find_photos returned in this turn, by url. */
+  photoCredits?: Map<string, Record<string, unknown>>;
   /** The admin's own words (no option tags, no links), and the trips he picked by tapping an option. */
   adminText?: string;
   pinned?: Set<string>;
@@ -136,10 +142,23 @@ function itineraryDayAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): S
   return action;
 }
 
+/**
+ * A band keeps only the parts whose numbers the admin (or his file) wrote: asked for «нярай (2024–2026
+ * онд төрсөн)», the model added «0-23 сар» of its own (2026-11-22) — a band he never set, and one that
+ * contradicts his (a child born in early 2024 is almost three at a winter departure).
+ */
+function ownBandParts(band: string, sources: string[]): string {
+  const said = new Set(sources.join(" ").match(/\d+/g) || []);
+  const parts = band.split(/\s*[,;]\s*/).filter(Boolean);
+  const kept = parts.filter((part) => (part.match(/\d+/g) || []).every((number) => said.has(number)));
+  return kept.length && kept.length < parts.length ? kept.join(", ") : band;
+}
+
 function ageBandsAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAction {
   const bands = record(raw.bands);
   const action: StoredAction = base("set_age_bands", trip, ctx);
-  for (const key of ["infant", "child", "adult"]) if (text(bands[key] ?? raw[key])) action[key] = text(bands[key] ?? raw[key]);
+  const sources = ctx.bandSources?.length ? ctx.bandSources : [ctx.adminText || ""];
+  for (const key of ["infant", "child", "adult"]) if (text(bands[key] ?? raw[key])) action[key] = ownBandParts(text(bands[key] ?? raw[key]), sources);
   return action;
 }
 
@@ -157,6 +176,8 @@ function photoAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAc
     ...(typeof raw.position === "number" ? { position: Math.trunc(raw.position) } : {}),
     ...(typeof raw.day === "number" ? { day: Math.trunc(raw.day) } : {}),
     ...(remove ? { remove: true } : { new_url: newUrl }),
+    // A photo find_photos brought keeps its credit line (a Wikimedia photo's author and licence).
+    ...(!remove && ctx.photoCredits?.get(newUrl) ? { credit: ctx.photoCredits.get(newUrl) } : {}),
   };
 }
 
@@ -219,13 +240,15 @@ function twinProblem(trip: TravelTrip, ctx: ProposalContext): string | null {
   if (ctx.pinned?.has(trip.id) || ctx.linkTrips.has(trip.id)) return null;
   const twins = ctx.trips.filter((other) => nameKey(other.route_name) === nameKey(trip.route_name));
   if (twins.length < 2) return null;
-  const stated = statedDays(ctx.adminText || "");
+  // The length he said; or, when a program file was compared with one of them, that file's own length.
+  const fromFile = twins.map((entry) => ctx.comparedFileDays?.get(entry.id)).find((days): days is number => typeof days === "number" && days > 0) ?? null;
+  const stated = statedDays(ctx.adminText || "") ?? fromFile;
   const live = (entry: TravelTrip) => !["archived", "cancelled", "draft"].includes(entry.status);
   let meant = stated ? twins.filter((entry) => programDays(entry.duration_text) === stated) : twins.filter(live);
   // Two of the stated length: the live one is the one on sale.
   if (meant.length > 1 && meant.some(live)) meant = meant.filter(live);
   if (meant.length === 1) {
-    return meant[0].id === trip.id ? null : `ижил нэртэй ${twins.length} аялал байна; ${stated ? `таны хэлсэн ${stated} өдрийнх нь` : "идэвхтэй нь"} trip_id=${meant[0].id} — түүнийг get_trip хийгээд ашигла`;
+    return meant[0].id === trip.id ? null : `ижил нэртэй ${twins.length} аялал байна; ${stated ? `${stated} өдрийнх нь` : "идэвхтэй нь"} trip_id=${meant[0].id} — түүнийг get_trip хийгээд ашигла`;
   }
   const described = twins.map((entry) => `${entry.duration_text || "хугацаа бичээгүй"}, ${STATE_WORDS[entry.status] || entry.status} (trip_id=${entry.id})`).join("; ");
   return `ижил нэртэй ${twins.length} аялал байна: ${described} — аль нь болохыг ask_user-ээр асуу (сонголт бүрт хугацаа, төлөвийг бич)`;
