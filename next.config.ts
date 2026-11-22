@@ -12,6 +12,7 @@ const ADMIN_SECURITY_HEADERS = [
 const CATALOGUE_RENDER_FILES = [
   "./public/fonts/*.ttf",
   "./public/poster/uudam-logo.jpg",
+  "./public/poster/magnai-logo.jpg",
   "./node_modules/@sparticuz/chromium/bin/**",
   "./node_modules/playwright-core/browsers.json",
   "./node_modules/playwright-core/package.json",

@@ -5,6 +5,7 @@
  */
 import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFString, type PDFRef } from "pdf-lib";
 import type { CatalogueSnapshot } from "../types";
+import { brandText } from "../../brand";
 import { catalogueDocumentTitle } from "./html";
 import { planPages, type PagePlan } from "./layout";
 import { cardTitle } from "./layout";
@@ -92,11 +93,11 @@ export async function stampPdf(raw: Buffer, snapshot: CatalogueSnapshot, version
   const doc = await PDFDocument.load(raw, { updateMetadata: false });
   const when = new Date(Date.parse(snapshot.generatedAt));
   doc.setTitle(catalogueDocumentTitle(snapshot));
-  doc.setAuthor("UUDAM Travel");
+  doc.setAuthor(brandText("UUDAM Travel"));
   doc.setSubject(`Хамт олны аяллын сонголт · ${snapshot.issueLabel} · ${versionLabel}`);
-  doc.setKeywords(["UUDAM Travel", "байгууллагын аялал", "хамт олны аялал", snapshot.edition, versionLabel]);
-  doc.setCreator("UUDAM Travel catalogue");
-  doc.setProducer("UUDAM Travel catalogue (Chromium + pdf-lib)");
+  doc.setKeywords([brandText("UUDAM Travel"), "байгууллагын аялал", "хамт олны аялал", snapshot.edition, versionLabel]);
+  doc.setCreator(brandText("UUDAM Travel catalogue"));
+  doc.setProducer(brandText("UUDAM Travel catalogue (Chromium + pdf-lib)"));
   if (Number.isFinite(when.getTime())) {
     doc.setCreationDate(when);
     doc.setModificationDate(when);

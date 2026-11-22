@@ -201,7 +201,7 @@ export type TesterPairingContext = {
  * is unknown, expired, used or over the attempt limit consumes nothing and reveals nothing. Facebook only.
  */
 export async function handleTesterPairingTurn(ctx: TesterPairingContext): Promise<boolean> {
-  // The corporate catalogue is the primary brand's (its name, its prices): a secondary never sends it.
+  // Catalogue testers are the primary brand's staff accounts; a secondary brand pairs none.
   if (isSecondaryBrand()) return false;
   if (ctx.platform !== "facebook" || !readTesterCode(ctx.text)) return false;
   try {
@@ -228,7 +228,6 @@ const SILENT_STATUSES: ReadonlySet<CatalogueDeliveryStatus> = new Set([
  * when the message is none of its business (the existing flow answers).
  */
 export async function handleCatalogueTurn(ctx: CatalogueTurnContext): Promise<boolean> {
-  if (isSecondaryBrand()) return false;
   const text = ctx.text.trim();
   if (!text) return false;
 

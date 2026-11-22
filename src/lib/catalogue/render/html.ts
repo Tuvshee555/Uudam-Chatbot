@@ -7,6 +7,7 @@
  * forbids scripts and any non-data: resource.
  */
 import type { CatalogueSnapshot } from "../types";
+import { brandText } from "../../brand";
 import { planPages } from "./layout";
 import { CATALOGUE_TITLE, closingPage, coverPage, sectionPage } from "./pages";
 import { tripPage } from "./tripPages";
@@ -17,7 +18,7 @@ import { buildCss } from "./theme";
 export { escapeHtml, safeHref, CATALOGUE_TITLE };
 
 export function catalogueDocumentTitle(snapshot: CatalogueSnapshot): string {
-  return `UUDAM Travel · ${CATALOGUE_TITLE} · ${snapshot.issueLabel}`;
+  return brandText(`UUDAM Travel · ${CATALOGUE_TITLE} · ${snapshot.issueLabel}`);
 }
 
 export function buildCatalogueHtml(snapshot: CatalogueSnapshot, assets: RenderAssets): string {
@@ -34,7 +35,7 @@ export function buildCatalogueHtml(snapshot: CatalogueSnapshot, assets: RenderAs
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'">
 <meta name="viewport" content="width=720">
-<meta name="author" content="UUDAM Travel">
+<meta name="author" content="${escapeHtml(brandText("UUDAM Travel"))}">
 <title>${escapeHtml(catalogueDocumentTitle(snapshot))}</title>
 <style>${buildCss(assets.fonts)}</style>
 </head>

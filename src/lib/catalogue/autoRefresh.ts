@@ -163,5 +163,10 @@ export async function refreshCatalogues(opts: { now?: Date; only?: "quick" | "co
     const counts = await deliverHeldCatalogues(result.edition, sendHeldCatalogue).catch(() => null);
     if (counts?.sent) result.heldSent = counts.sent;
   }
+  // A sister brand's bot prints its own copy of what was just published (catalogue/brandCopy.ts).
+  if (results.some((result) => result.status === "published")) {
+    const { pingSisterCatalogueRefresh } = await import("./brandCopy");
+    await pingSisterCatalogueRefresh().catch(() => undefined);
+  }
   return results;
 }

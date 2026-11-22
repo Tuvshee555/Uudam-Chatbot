@@ -3,6 +3,7 @@ import { isSecondaryBrand } from "../../../lib/brand";
 import { safeSecretCompare } from "../../../lib/adminAuth";
 import { waitUntil } from "@vercel/functions";
 import { refreshCatalogues } from "../../../lib/catalogue/autoRefresh";
+import { refreshBrandCatalogueCopies } from "../../../lib/catalogue/brandCopy";
 
 // GitHub Actions calls this every 30 minutes (.github/workflows/catalogue-refresh.yml). It renders a PDF
 // only when the published catalogue is out of date, so most calls finish in seconds.
@@ -20,8 +21,17 @@ function isCronAuthorized(req: NextApiRequest): boolean {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
-  // The catalogue belongs to the primary brand; a secondary deployment never builds one (brand.ts).
-  if (isSecondaryBrand()) return res.status(200).json({ ok: true, skipped: "secondary_brand" });
+  // A secondary brand (brand.ts) never builds the catalogue: it renders its own copy of each published
+  // edition and sends the held requests of its own page (catalogue/brandCopy.ts).
+  if (isSecondaryBrand()) {
+    res.setHeader("Cache-Control", "no-store");
+    if (req.query.async === "1") {
+      waitUntil(refreshBrandCatalogueCopies().catch(() => undefined));
+      return res.status(202).json({ ok: true, accepted: true });
+    }
+    const copies = await refreshBrandCatalogueCopies();
+    return res.status(copies.some((copy) => copy.status === "failed") ? 503 : 200).json({ ok: true, results: copies });
+  }
   const only = req.query.edition === "quick" || req.query.edition === "complete" ? req.query.edition : undefined;
   if (req.query.async === "1") {
     // The bot found the file out of date while answering a customer: accept at once, rebuild in the background.

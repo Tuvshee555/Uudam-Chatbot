@@ -4,6 +4,8 @@ import { logError, recordCounter } from "@/lib/observability";
 import { getClientKey, rateLimitAsync } from "@/lib/rateLimit";
 import { PUBLIC_TOKEN_RE } from "@/lib/catalogue/schema";
 import { getPublicFileByToken, getPublicFileMetaByToken } from "@/lib/catalogue/versions";
+import { isSecondaryBrand } from "@/lib/brand";
+import { getBrandCatalogueFile } from "@/lib/catalogue/brandCopy";
 
 /**
  * Public, token-addressed catalogue PDF: GET/HEAD /api/catalogue/file/<token>.
@@ -152,8 +154,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
-    const meta = await getPublicFileMetaByToken(token);
+    let meta = await getPublicFileMetaByToken(token);
     if (!meta) return notFound(res, method);
+    // A secondary brand's link opens its own copy of the published version (catalogue/brandCopy.ts).
+    let ownBytes: Buffer | null = null;
+    if (isSecondaryBrand()) {
+      const own = await getBrandCatalogueFile(meta.id);
+      if (!own) return notFound(res, method);
+      meta = { ...meta, fileName: own.fileName, sizeBytes: own.sizeBytes, pageCount: own.pageCount, sha256: own.sha256 };
+      ownBytes = own.bytes;
+    }
 
     const etag = `"${meta.sha256}"`;
     res.setHeader("ETag", etag);
@@ -179,7 +189,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // The metadata read above proved the token is still published, so bytes remembered under its
     // content hash are safe to serve without another trip to the database.
-    let bytes = cachedBytes(meta.sha256, meta.sizeBytes);
+    let bytes = ownBytes ?? cachedBytes(meta.sha256, meta.sizeBytes);
     if (!bytes) {
       const file = await getPublicFileByToken(token);
       if (!file) return notFound(res, method); // pruned between the two reads

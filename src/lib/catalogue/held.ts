@@ -11,6 +11,7 @@
  * so a consultant who took the chat over meanwhile, a paused bot, a stale file or the kill switch still stop it.
  */
 import { queryNeon } from "../neonDb";
+import { getEnv } from "../env";
 
 /** How long a held request waits for a fresh file. Later, the staff lead written with the hold is the follow-up. */
 export const HOLD_MS = 2 * 60 * 60_000;
@@ -44,8 +45,13 @@ async function loadHeld(edition: string, now: Date): Promise<HeldRequest[]> {
   // Expired holds go first: past two hours the staff lead is the follow-up, never a surprise file.
   await queryNeon(`DELETE FROM catalogue_held_requests WHERE held_at < $1 OR last_inbound_at < $2`,
     [new Date(now.getTime() - HOLD_MS).toISOString(), new Date(now.getTime() - WINDOW_MS).toISOString()]).catch(() => null);
+  // Only this deployment's pages: each brand's bot (brand.ts) sends its own customers' held files, and a
+  // request for another brand's page is neither sent nor dropped here.
+  let pages: string[] = [];
+  try { pages = getEnv().facebookPages.map((page) => page.pageId); } catch { pages = []; }
   const result = await queryNeon<{ sender_id: string; page_id: string; edition: string; platform: string; last_inbound_at: string | Date; held_at: string | Date }>(
-    `SELECT sender_id, page_id, edition, platform, last_inbound_at, held_at FROM catalogue_held_requests WHERE edition = $1 ORDER BY held_at LIMIT 50`, [edition]).catch(() => null);
+    `SELECT sender_id, page_id, edition, platform, last_inbound_at, held_at FROM catalogue_held_requests
+      WHERE edition = $1 AND page_id = ANY($2::text[]) ORDER BY held_at LIMIT 50`, [edition, pages]).catch(() => null);
   const iso = (value: string | Date) => new Date(value).toISOString();
   return (result?.rows || []).map((row) => ({ senderId: row.sender_id, pageId: row.page_id, edition: row.edition, platform: row.platform,
     lastInboundAt: iso(row.last_inbound_at), heldAt: iso(row.held_at) }));

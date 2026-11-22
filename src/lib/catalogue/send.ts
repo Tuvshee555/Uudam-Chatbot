@@ -18,6 +18,7 @@
  */
 import { buildFbFileMessageBody, classifyFbFailure, sendFbFileAttachmentDetailed, uploadPdfBufferDetailed, type FbSendDetail, type FbUploadDetail } from "../fbAttachmentUpload";
 import { BOOKING_WEBSITE_URL } from "../bookingWebsite";
+import { brandText, isSecondaryBrand } from "../brand";
 import { isMetaOutboundDisabled } from "../metaOutboundKillSwitch";
 import { BOT_MESSAGE_METADATA } from "../messenger";
 import { hashIdentifier, logInfo, logWarn, recordCounter } from "../observability";
@@ -144,6 +145,27 @@ async function pingRefresh(edition?: CatalogueEdition, always = false): Promise<
   }
 }
 
+/** A secondary brand's copy of a published version (brandCopy.ts), shaped like the primary's file. */
+async function brandVersionPdf(id: string): Promise<{ bytes: Buffer; meta: CatalogueVersionMeta } | null> {
+  const [{ getBrandCatalogueFile }, store] = await Promise.all([import("./brandCopy"), import("./store")]);
+  const [file, meta] = await Promise.all([getBrandCatalogueFile(id), store.getVersionMeta(id)]);
+  if (!file || !meta) return null;
+  return { bytes: file.bytes, meta: { ...meta, fileName: file.fileName, sizeBytes: file.sizeBytes, pageCount: file.pageCount, sha256: file.sha256 } };
+}
+
+/**
+ * Freshness on a secondary brand: the primary's drift check, read on the real catalogue (its customers'
+ * trips carry the brand's fares, which would always "drift"), plus "this brand's copy is not rendered yet".
+ * Either holds the request, answers with the website link and asks for a refresh — the same path as a
+ * stale file. The primary: unchanged.
+ */
+async function brandAwareDrift(published: CatalogueVersionMeta, nowIso: string): Promise<LiveDrift | null> {
+  if (!isSecondaryBrand()) return checkLiveDrift(published, nowIso);
+  const [{ hasBrandCatalogueFile }, { runInBrandAdminMode }] = await Promise.all([import("./brandCopy"), import("../brandAdminMode")]);
+  if (!(await hasBrandCatalogueFile(published.id))) return { drifted: true, reasons: ["Энэ брэндийн каталог бэлдэгдэж байна"] };
+  return runInBrandAdminMode(() => checkLiveDrift(published, nowIso));
+}
+
 export function defaultSendDeps(): SendDeps {
   return {
     now: () => new Date(),
@@ -152,7 +174,8 @@ export function defaultSendDeps(): SendDeps {
     store: {
       getPublished: async (edition) => (await import("./store")).getPublished(edition),
       getVersionMeta: async (id) => (await import("./store")).getVersionMeta(id),
-      getVersionPdf: async (id) => (await import("./store")).getVersionPdf(id),
+      // A secondary brand sends its own copy of the published version (brandCopy.ts).
+      getVersionPdf: async (id) => (isSecondaryBrand() ? brandVersionPdf(id) : (await import("./store")).getVersionPdf(id)),
       claimSend: async (input) => (await import("./store")).claimSend(input),
       finishSend: async (sendId, outcome) => (await import("./store")).finishSend(sendId, outcome),
       getCachedFbAttachment: async (versionId, pageId) => (await import("./store")).getCachedFbAttachment(versionId, pageId),
@@ -177,8 +200,9 @@ export function defaultSendDeps(): SendDeps {
       return null;
     },
     killSwitch: () => isMetaOutboundDisabled(),
-    checkDrift: (published, nowIso) => checkLiveDrift(published, nowIso),
-    upload: uploadPdfBufferDetailed,
+    checkDrift: (published, nowIso) => brandAwareDrift(published, nowIso),
+    // The file name customers see is in this brand's name ("UUDAM_…" → "MAGNAI_…" on a secondary brand).
+    upload: (bytes, fileName, pageToken) => uploadPdfBufferDetailed(bytes, brandText(fileName), pageToken),
     sendFile: sendFbFileAttachmentDetailed,
     sendDirectText: async (recipientId, text, pageToken, trace) => {
       const { sendTextMessage } = await import("../messenger");

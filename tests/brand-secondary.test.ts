@@ -316,3 +316,34 @@ test("the brand's admin edits everything except the primary's own operations", (
   delete process.env.BRAND;
   assert.equal(secondaryBrandRefusesAdminWrite("api.admin.catalogue.generate", "POST"), false);
 });
+
+test("the corporate catalogue as the brand prints it: its fares (once), name, phone and website", async () => {
+  const { brandCatalogueSnapshot } = await import("../src/lib/catalogue/brandCopy");
+  const snapshot = {
+    edition: "quick", generatedAt: "2099-01-01T00:00:00.000Z", asOfDay: "2099-01-01", issueLabel: "2099.01.01", seasonLabel: "2099",
+    trips: [{
+      tripId: "trip-invented-1", code: "A01", title: "Зорвэл хотын аялал", editorialTitle: "Зорвэл", destinationKey: "зорвэл",
+      heroQuality: "good", gallery: [], kicker: "Зорвэл", groupKey: "sea", durationText: "6 өдөр", transportLabel: "Шууд нислэг",
+      highlights: ["UUDAM-ын тусгай үнэ 3,383,000₮"],
+      price: { kind: "from", amountMnt: 3_333_000, date: null, display: "3,333,000₮-с" },
+      dates: { nextDeparture: "2099-02-01", departures: ["2099-02-01", "2099-03-01"], label: "2099.02.01-ний хөдлөлт",
+        schedule: [{ date: "2099-02-01", adultMnt: 3_333_000 }, { date: "2099-03-01", adultMnt: 3_383_000 }] },
+      detailUrl: "https://uudamtravel.mn/mn/trips/zorvel", photo: null, warnings: [],
+    }],
+    coverTripId: null, groups: [], warnings: [], contentHash: "invented",
+    contact: { phones: ["1234 5678", "2345 6789"], siteLabel: "uudamtravel.mn", siteUrl: "https://uudamtravel.mn" },
+  } as unknown as import("../src/lib/catalogue/types").CatalogueSnapshot;
+  delete process.env.BRAND;
+  assert.deepEqual(brandCatalogueSnapshot(snapshot), snapshot, "the primary prints the snapshot as published");
+  process.env.BRAND = "magnai";
+  process.env.BRAND_CONTACT_PHONES = "8765 4321";
+  process.env.BRAND_WEBSITE_URL = "https://magnai-site.example";
+  const branded = brandCatalogueSnapshot(snapshot);
+  const card = branded.trips[0] as unknown as { price: { amountMnt: number; display: string }; dates: { schedule: Array<{ adultMnt: number }> }; detailUrl: string; highlights: string[] };
+  assert.equal(card.price.amountMnt, 3_283_000);
+  assert.equal(card.price.display, "3,283,000₮-с");
+  assert.deepEqual(card.dates.schedule.map((row) => row.adultMnt), [3_283_000, 3_333_000], "each fare lowered once");
+  assert.deepEqual(card.highlights, ["MAGNAI-ын тусгай үнэ 3,333,000₮"]);
+  assert.equal(card.detailUrl, "https://magnai-site.example/mn/trips/zorvel");
+  assert.deepEqual(branded.contact, { phones: ["8765 4321"], siteLabel: "magnai-site.example", siteUrl: "https://magnai-site.example" });
+});

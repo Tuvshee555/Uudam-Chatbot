@@ -3,6 +3,7 @@
  * conversion used by the in-browser fit pass. Pure and browser-free.
  */
 import { pad2 } from "./layout";
+import { brandText } from "../../brand";
 import type { RenderAssets, RenderImage } from "./renderTypes";
 
 const PX_PER_PT = 4 / 3;
@@ -48,7 +49,7 @@ export function imageTag(img: RenderImage | null | undefined, alt: string, cls =
  */
 export function logoCorner(assets: RenderAssets, size: "cover" | "closing" | "guide"): string {
   const src = safeImageSrc(assets.logoDataUri);
-  return `<div class="logo ${size}">${src ? `<img src="${src}" alt="UUDAM Travel Agency">` : ""}</div>`;
+  return `<div class="logo ${size}">${src ? `<img src="${src}" alt="${escapeHtml(brandText("UUDAM Travel Agency"))}">` : ""}</div>`;
 }
 
 export type FootOptions = {
@@ -62,7 +63,7 @@ export type FootOptions = {
 };
 
 export function footHtml(o: FootOptions): string {
-  const left = o.back ? `<a class="back" href="#contents">Агуулга</a>` : o.brand ? `<span class="brand">UUDAM Travel</span>` : `<span></span>`;
+  const left = o.back ? `<a class="back" href="#contents">Агуулга</a>` : o.brand ? `<span class="brand">${escapeHtml(brandText("UUDAM Travel"))}</span>` : `<span></span>`;
   return `<footer class="foot">${left}<span class="credit">${o.credit ? `Фото: ${escapeHtml(o.credit)}` : ""}</span><span class="pn">${pad2(o.page)} / ${pad2(o.total)}</span></footer>`;
 }
 

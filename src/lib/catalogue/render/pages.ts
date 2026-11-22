@@ -3,6 +3,7 @@
  * trips, and the closing page. The approved UUDAM logo sits flush in a corner (never inside a tile).
  */
 import type { CatalogueSnapshot } from "../types";
+import { brandText } from "../../brand";
 import {
   DISCLAIMER,
   GROUP_PRICE_NOTE,
@@ -40,7 +41,7 @@ export function coverPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: R
   // Credit on the left, the way into the book on the right (a small link, not a button).
   const caption = `<div class="caption"><span>${cover?.credit ? `Фото: ${escapeHtml(cover.credit)}` : ""}</span><a class="go" href="#contents">Агуулга</a></div>`;
   const block = `<div class="block">
-    <div class="eyebrow">UUDAM Travel · Байгууллагын аялал</div>
+    <div class="eyebrow">${escapeHtml(brandText("UUDAM Travel · Байгууллагын аялал"))}</div>
     <h1 data-fit-min="${px(26)}" data-fit-maxh="${px(37 * 1.14 * 2 + 2)}">${COVER_TITLE_LINES.map(escapeHtml).join("<br>")}</h1>
     <div class="rule"></div>
     <p class="invite">${escapeHtml(COVER_INVITE)}</p>
@@ -166,7 +167,7 @@ export function closingPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets:
   const empty = plan.chapters.length === 0;
   return `<section class="page closing${notes.length || !band ? " compact" : ""}" id="closing" data-page="${plan.closingPage}">
   ${empty ? `<span class="anchor" id="${GUIDE_ID}"></span>` : ""}
-  <div class="band${band ? "" : " plain"}">${band ? imageTag(assets.closing, "") : `<span class="bk">UUDAM Travel · Байгууллагын аялал</span>`}</div>
+  <div class="band${band ? "" : " plain"}">${band ? imageTag(assets.closing, "") : `<span class="bk">${escapeHtml(brandText("UUDAM Travel · Байгууллагын аялал"))}</span>`}</div>
   ${logoCorner(assets, "closing")}
   <div class="body">
     <span class="kick">Хамт олондоо зориулсан санал</span>

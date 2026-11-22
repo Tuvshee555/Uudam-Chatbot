@@ -6,6 +6,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { CatalogueRenderError, type RenderFontFace } from "./renderTypes";
+import { getBrand } from "../../brand";
 import { SANS, SERIF } from "./theme";
 
 /** Repo-approved poster logo. Do not substitute another file or a text wordmark. */
@@ -41,9 +42,11 @@ async function read(rel: string): Promise<Buffer> {
 export function loadStaticAssets(): Promise<StaticAssets> {
   if (!cached) {
     const pending = (async () => {
-      const [logoBytes, ...fontBytes] = await Promise.all([read(LOGO_FILE), ...FONT_FILES.map(f => read(`public/fonts/${f.file}`))]);
+      // This deployment's brand logo (brand.ts): the primary's is LOGO_FILE.
+      const logoFile = getBrand().posterLogoPath;
+      const [logoBytes, ...fontBytes] = await Promise.all([read(logoFile), ...FONT_FILES.map(f => read(`public/fonts/${f.file}`))]);
       if (logoBytes[0] !== 0xff || logoBytes[1] !== 0xd8) {
-        throw new CatalogueRenderError("render_failed", `${LOGO_FILE} JPEG биш байна.`);
+        throw new CatalogueRenderError("render_failed", `${logoFile} JPEG биш байна.`);
       }
       const fonts = FONT_FILES.map((f, i) => ({
         family: f.family,

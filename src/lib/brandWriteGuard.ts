@@ -30,6 +30,11 @@ export const SECONDARY_WRITABLE_TABLES = new Set([
   "travel_error_logs",
   "travel_sweep_lock",
   "travel_page_control",
+  // Its own corporate-catalogue sends: the send log, its page's file uploads, held requests and its copies.
+  "catalogue_sends",
+  "catalogue_fb_attachments",
+  "catalogue_held_requests",
+  "brand_catalogue_files",
 ]);
 
 export type WriteVerdict =
