@@ -60,9 +60,20 @@ async function budget(): Promise<{ exceeded: boolean; message: string }> {
   return { exceeded: state.exceeded, message: state.exceeded ? aiBudgetMessage(state) : "" };
 }
 
+/**
+ * Which model runs the assistant: OpenAI's gpt-4.1 by default; Claude with ASSISTANT_PROVIDER=anthropic
+ * (and ANTHROPIC_API_KEY), its model from ASSISTANT_ANTHROPIC_MODEL (default claude-sonnet-5-5).
+ */
+export function assistantProvider(): "openai" | "anthropic" {
+  return String(process.env.ASSISTANT_PROVIDER || "").trim().toLowerCase() === "anthropic" ? "anthropic" : "openai";
+}
+
 export function defaultAgentDeps(): AgentDeps {
+  const anthropic = assistantProvider() === "anthropic";
   return {
-    chat: openAIToolChat,
+    // Loaded only when chosen: the OpenAI path never imports the Anthropic SDK.
+    chat: anthropic ? async (input) => (await import("./anthropicTools")).anthropicToolChat(input) : openAIToolChat,
+    ...(anthropic ? { defaultModel: process.env.ASSISTANT_ANTHROPIC_MODEL?.trim() || "claude-sonnet-5-5", stableTools: true } : {}),
     safeFetch: async (url, options) => (await import("../safeFetch")).safeFetch(url, options),
     hostImage: async (source) => (await import("../websiteTripSync")).hostImage(source),
     shortLinkLocation,

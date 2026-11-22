@@ -40,7 +40,8 @@ export type ToolCall = { id: string; type: "function"; function: { name: string;
 
 export type ChatMessage =
   | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  /** `raw`: the provider's own content blocks, sent back unchanged on the next call (Claude's thinking blocks must be). */
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; raw?: unknown }
   | { role: "tool"; tool_call_id: string; content: string };
 
 export type ToolDefinition = {
@@ -49,7 +50,7 @@ export type ToolDefinition = {
 };
 
 export type ChatResult = {
-  message: { content: string | null; tool_calls?: ToolCall[] };
+  message: { content: string | null; tool_calls?: ToolCall[]; raw?: unknown };
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens?: number; cached_tokens?: number };
   finishReason?: string;
 };
@@ -89,6 +90,13 @@ export type AgentDeps = {
    * places, and with `web` the Wikimedia search (slow). Every url returned is on our Cloudinary.
    */
   findPhotos: (trip: TravelTrip, catalogue: TravelTrip[], options: { web: boolean }) => Promise<FoundDayPhoto[]>;
+  /** The model this chat runs when the caller names none (the Claude adapter: ASSISTANT_ANTHROPIC_MODEL). */
+  defaultModel?: string;
+  /**
+   * The tool list must stay the same for the whole turn (Claude checks that tools and earlier messages are
+   * unchanged since a thinking block): the last round then keeps every tool and is told in words to finish.
+   */
+  stableTools?: boolean;
 };
 
 /** One photo find_photos proposes for a program day. */

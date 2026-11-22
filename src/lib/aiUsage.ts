@@ -20,6 +20,9 @@ const PRICE_PER_MILLION_USD: Record<string, [number, number, number]> = {
   "gpt-4.1": [2, 8, 0.5],
   "gpt-4.1-mini": [0.4, 1.6, 0.1],
   "gpt-4.1-nano": [0.1, 0.4, 0.025],
+  // Claude for the admin assistant (anthropicTools.ts); a cache write costs 1.25× input and is counted here at input price.
+  "claude-sonnet-5-5": [2, 10, 0.1],
+  "claude-opus-5-5": [4, 20, 0.2],
 };
 
 export function estimateCostUsd(model: string, usage: AiUsage): number | null {

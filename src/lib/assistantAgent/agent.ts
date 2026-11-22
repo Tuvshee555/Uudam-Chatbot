@@ -56,6 +56,8 @@ const DEFERRED_TERMINAL = JSON.stringify({
   hint: "Унших хэрэгслийн хариуг харахаас өмнө бичсэн тул хийгдсэнгүй: хариуг уншаад дахин дууд.",
 });
 
+const LAST_ROUND_NOTE = "Энэ бол сүүлийн ээлж: унших хэрэгсэл дахин ажиллахгүй. Байгаа мэдээллээрээ propose_changes, ask_user, reply эсвэл read_trip_source-оор одоо дуусга.";
+
 export const AGENT_TIMEOUT_NOTE = "AI туслах хугацаандаа амжиж дуусгасангүй — юу ч өөрчлөгдөөгүй. Зааврыг богиносгож (нэг мессежид 1–3 өөрчлөлт, эсвэл цөөн файл) дахин илгээнэ үү.";
 
 export function agentFailureNote(kind: AgentModelFailure | string): string {
@@ -604,7 +606,7 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
   const maxTurnPromptTokens = withDocuments ? DOCUMENT_MAX_TURN_PROMPT_TOKENS : MAX_TURN_PROMPT_TOKENS;
   const roundCap = withDocuments ? DOCUMENT_MAX_ROUNDS : MAX_ROUNDS;
   const maxRounds = Math.max(1, Math.min(input.maxRounds ?? roundCap, roundCap));
-  const model = input.model || process.env.OPENAI_ASSISTANT_MODEL || AGENT_DEFAULT_MODEL;
+  const model = input.model || deps.defaultModel || process.env.OPENAI_ASSISTANT_MODEL || AGENT_DEFAULT_MODEL;
   const tools: string[] = [];
   const usage = { prompt: 0, completion: 0 };
   const done = (outcome: AgentOutcome, rounds: number, modelFailure?: string): AgentRun => {
@@ -635,10 +637,12 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
     if (remaining < MIN_CALL_MS) return done({ kind: "note", text: AGENT_TIMEOUT_NOTE, reason: "timeout" }, round - 1, "timeout");
     if (usage.prompt > maxTurnPromptTokens) return done({ kind: "note", text: "Энэ даалгавар хэт урт болов — юу ч өөрчлөгдөөгүй. Хэсэг хэсгээр нь илгээнэ үү.", reason: "model_failed" }, round - 1);
     const last = round === maxRounds;
+    // A chat whose tool list must not change (Claude) keeps every tool on the last round and is told in words.
+    if (last && deps.stableTools && round > 1) messages.push({ role: "user", content: LAST_ROUND_NOTE });
     let result;
     try {
       result = await deps.chat({
-        messages, tools: last ? TERMINAL_ONLY_TOOLS : AGENT_TOOLS, toolChoice: "required",
+        messages, tools: last && !deps.stableTools ? TERMINAL_ONLY_TOOLS : AGENT_TOOLS, toolChoice: "required",
         timeoutMs: Math.max(1_000, Math.min(perCallMs, remaining - 500)), model, maxOutputTokens: withDocuments ? DOCUMENT_MAX_OUTPUT_TOKENS : 4_000,
       });
     } catch (error) {
@@ -652,7 +656,7 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
       const text = String(result.message.content || "").trim();
       return done({ kind: "note", text: text || "Ойлгосонгүй. Юуг өөрчлөхийг бичнэ үү.", reason: "reply" }, round);
     }
-    messages.push({ role: "assistant", content: result.message.content ?? null, tool_calls: calls });
+    messages.push({ role: "assistant", content: result.message.content ?? null, tool_calls: calls, ...(result.message.raw !== undefined ? { raw: result.message.raw } : {}) });
     const terminals = calls.filter((call) => isTerminalTool(call.function.name));
     const reads = calls.filter((call) => !isTerminalTool(call.function.name));
     // A proposal, question or answer written in the same breath as reads was written before

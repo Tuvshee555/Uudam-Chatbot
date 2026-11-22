@@ -40,6 +40,7 @@
     "eval:chatbot": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx --test scripts/chatbot-eval.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
     "@sparticuz/chromium": "^149.0.0",
     "@types/pg": "^8.20.0",
     "@vercel/blob": "^2.5.0",

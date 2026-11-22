@@ -159,6 +159,20 @@ In the real tab on 2026-11-22: a program of a live check-up trip with one hotel 
 
 Polish of 2026-11-22: a priced list must keep the file's own groups (`listGroupHeadings`: a row with no price above priced rows) — a flat list is sent back with the headings to write, so the site shows each group as a block; a list line's typing slips are fixed in code («8төрөлт» → «8 төрөлт», «BБамбай» → «Бамбай»; capital codes like «СА199» stay); a long tab name is cut between words; a price question always names its trip; and a card replacing a day's photo says «Ачаалж байна…» until the trip is loaded instead of «Зураггүй».
 
+## Running the assistant on Claude (optional, 2026-11-22)
+
+gpt-4.1 stays the default. `ASSISTANT_PROVIDER=anthropic` plus `ANTHROPIC_API_KEY` runs the same agent loop on
+Claude (`assistantAgent/anthropicTools.ts`, official `@anthropic-ai/sdk`); `ASSISTANT_ANTHROPIC_MODEL` picks the model
+(default `claude-sonnet-5-5`) and `ASSISTANT_ANTHROPIC_EFFORT` its effort (default `medium`). What differs from the
+OpenAI path, in code: the model's own content blocks (thinking blocks) are sent back unchanged on the next round;
+tool choice is `auto` (forced choice is refused by this model); the tool list stays the same for the whole turn, so
+the last round is told in words to finish; the prompt prefix is cached automatically; a safety decline is re-run on
+a fallback model server-side. Spend is recorded per model like every AI call (Claude Sonnet 5.5: $2 / $10 per
+million tokens, cached reads $0.10).
+
+Compare before switching: run `scripts/assistant-intake-replay.ts` (ask, then answer) once with each provider on
+the same config and read the dialogs, the proposals, the time and the cost side by side.
+
 ## Cost and time per instruction (gpt-4.1)
 
 | Kind | Rounds | Cost | Time |
