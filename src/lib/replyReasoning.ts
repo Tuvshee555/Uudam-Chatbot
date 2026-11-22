@@ -20,6 +20,7 @@
  * AI model get the extra reasoning call.
  */
 
+import { claudeEnabled } from "./anthropicChat";
 import { askOpenAI } from "./openaiProvider";
 import { buildTemporalPromptContext } from "./travelDates";
 import { isLikelyContextDependentText, normalizeContextText } from "./contextualText";
@@ -34,6 +35,9 @@ const MAX_TRIP_INDEX_LINES = 80;
 const MAX_ANALYSIS_CHARS = 1_600;
 const REASONING_TIMEOUT_MS = 12_000;
 const REASONING_MAX_OUTPUT_TOKENS = 400;
+// Claude Haiku counts the same text as about 30% more tokens, and its notes ran into 400 on the
+// first production messages (2026-11-22): the same note needs about 600 there.
+const CLAUDE_REASONING_MAX_OUTPUT_TOKENS = 600;
 
 /**
  * A second model call is useful only when the current message actually depends
@@ -166,7 +170,7 @@ export async function analyzeBeforeReply(input: {
       correlationId: input.correlationId,
       source,
       temperature: 0,
-      maxOutputTokens: REASONING_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: claudeEnabled() ? CLAUDE_REASONING_MAX_OUTPUT_TOKENS : REASONING_MAX_OUTPUT_TOKENS,
       timeoutMs: REASONING_TIMEOUT_MS,
       maxRetries: 0,
       preferOpenAI: true,
