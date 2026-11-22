@@ -11,6 +11,7 @@ import {
 } from "./adminSession";
 import { getClientKey, rateLimitAsync } from "./rateLimit";
 import { recordCounter } from "./observability";
+import { getBrand, isSecondaryBrand } from "./brand";
 
 /**
  * Who may use the admin API. Exactly two ways in:
@@ -97,6 +98,19 @@ export async function chargeFailedAdminAuth(
  */
 const GET_WITH_SIDE_EFFECTS = new Set(["api.admin.website-sync", "api.subscribe_feed"]);
 
+/**
+ * The admin writes a secondary brand's deployment makes (brand.ts): its own customers' leads,
+ * conversations, documents and pauses. Trips, settings, posters, the catalogue and partner data are
+ * shared with the primary brand and edited only in its admin (the database refuses them anyway:
+ * brandWriteGuard.ts); answering 403 first keeps the admin from showing a save that changed nothing.
+ */
+const SECONDARY_BRAND_WRITE_ROUTES = new Set(["api.admin.leads", "api.admin.conversation", "api.admin.customer-documents", "api.pause"]);
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export function secondaryBrandRefusesAdminWrite(route: string, method: string | undefined): boolean {
+  return isSecondaryBrand() && !READ_METHODS.has((method || "GET").toUpperCase()) && !SECONDARY_BRAND_WRITE_ROUTES.has(route);
+}
+
 export async function requireAdminAccess(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -104,7 +118,13 @@ export async function requireAdminAccess(
   options: AdminAccessOptions = {},
 ) {
   const allowApiToken = options.allowApiToken !== false && !GET_WITH_SIDE_EFFECTS.has(route);
-  if (hasAdminAccess(req, { ...options, allowApiToken })) return true;
+  if (hasAdminAccess(req, { ...options, allowApiToken })) {
+    if (secondaryBrandRefusesAdminWrite(route, req.method)) {
+      res.status(403).json({ error: `${getBrand().nameMn}: аялал, тохиргоо хоёр брэндэд нэг. Үүнийг Уудам Трэвэлийн админаас засна уу.` });
+      return false;
+    }
+    return true;
+  }
   if (await chargeFailedAdminAuth(req, res, route)) {
     res.status(401).json({ error: "unauthorized" });
   }

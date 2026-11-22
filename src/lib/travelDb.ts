@@ -4,6 +4,9 @@ import { getEnv } from "./env";
 import { fixMojibake } from "./encoding";
 import { recordCounter } from "./observability";
 import { queryNeon } from "./neonDb";
+import { brandText, getBrand, ownedBrandSql } from "./brand";
+import { applyBrandFares } from "./brandFares";
+import { applyBrandToSettings } from "./brandSettings";
 import { connectedTripMutation, type PosterWrite } from "./connectedTripStore";
 import { flushWebsiteSync, withWebsiteDepartureAvailability } from "./websiteTripSync";
 import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
@@ -545,7 +548,8 @@ export async function getTravelBotSettings(): Promise<TravelBotSettings> {
     `,
   );
 
-  const value = mapBotSettingsRow(result?.rows?.[0]);
+  // A secondary brand reads the shared settings in its own words (brandSettings.ts).
+  const value = applyBrandToSettings(mapBotSettingsRow(result?.rows?.[0]));
   botSettingsCache = { value, expiresAt: Date.now() + 5_000 };
   return value;
 }
@@ -674,6 +678,16 @@ export async function updateTravelBotSettings(
   return updated;
 }
 
+/**
+ * Trips as this deployment's brand quotes them: a secondary brand's fares and name (brandFares.ts); the
+ * primary's trips pass unchanged. Applied after every schedule write, so nothing branded is ever stored.
+ */
+function brandTrips(trips: TravelTrip[]): TravelTrip[] {
+  const brand = getBrand();
+  if (brand.isPrimary) return trips;
+  return trips.map((trip) => applyBrandFares(trip, brand.fareDiscountMnt, brandText));
+}
+
 export function mapTripRow(row: Record<string, unknown>): TravelTrip {
   return {
     id: String(row.id || ""),
@@ -792,10 +806,10 @@ export async function listTrips(options?: {
     scheduled.filter((entry) => entry.changed).map((entry) => entry.trip),
   );
   const sanitized = scheduled.map((entry) => entry.trip);
-  return withWebsiteDepartureAvailability(filterTripsForListing(sanitized, {
+  return brandTrips(await withWebsiteDepartureAvailability(filterTripsForListing(sanitized, {
     status,
     includeArchived: options?.includeArchived,
-  }));
+  })));
 }
 
 export async function getTripById(id: string): Promise<TravelTrip | null> {
@@ -832,7 +846,7 @@ export async function getTripById(id: string): Promise<TravelTrip | null> {
   if (!result?.rows?.[0]) return null;
   const sanitized = sanitizeTripScheduleForCurrentDate(mapTripRow(result.rows[0]));
   if (sanitized.changed) await persistTripScheduleMaintenance([sanitized.trip]);
-  return (await withWebsiteDepartureAvailability([sanitized.trip]))[0];
+  return brandTrips(await withWebsiteDepartureAvailability([sanitized.trip]))[0];
 }
 
 export async function getBotControl(): Promise<BotControl> {
@@ -1864,6 +1878,7 @@ export async function getMessengerRecipients(
       FROM travel_leads
       WHERE platform = $1
         AND sender_id <> ''
+        AND ${ownedBrandSql()}
       ORDER BY sender_id
       LIMIT $2
     `,

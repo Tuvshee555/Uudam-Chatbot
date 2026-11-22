@@ -7,6 +7,7 @@
  */
 
 import { queryNeon } from "./neonDb";
+import { getBrand, ownedBrandSql } from "./brand";
 import { ensureTravelSchema } from "./travelSchema";
 import type { LeadKind, LeadCrmStatus, TravelLead, LeadStats } from "./travelTypes";
 
@@ -65,7 +66,10 @@ function ensureLeadActivityColumn(): Promise<void> {
 }
 
 /** Test sessions (/api/demo and the QA scripts behind it) never count as a customer lead. */
-const REAL_SENDER = `sender_id NOT LIKE 'demo:%'`;
+/** A real customer's lead (not a demo session) of this deployment's brand (brand.ts). */
+function realSender(alias = ""): string {
+  return `${alias}sender_id NOT LIKE 'demo:%' AND ${ownedBrandSql(alias)}`;
+}
 
 /**
  * Returns true if an unresolved lead of the same kind already exists for this
@@ -136,9 +140,9 @@ export async function createLead(input: {
   const result = await queryNeon<Record<string, unknown>>(
     `
       INSERT INTO travel_leads (
-        kind, platform, sender_id, customer_message, contact_phone, context, status
+        kind, platform, sender_id, customer_message, contact_phone, context, status, brand
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'new')
+      VALUES ($1, $2, $3, $4, $5, $6, 'new', $7)
       RETURNING *
     `,
     [
@@ -148,6 +152,7 @@ export async function createLead(input: {
       input.customerMessage.slice(0, 2000),
       (input.contactPhone || "").slice(0, 40),
       (input.context || "").slice(0, 4000),
+      getBrand().storageKey,
     ],
   );
   return result?.rows?.[0] ? mapLeadRow(result.rows[0]) : null;
@@ -178,7 +183,7 @@ export async function listLeads(limit = 50, options: { offset?: number; search?:
              s.paused_at AS bot_paused_at, s.takeover_source AS bot_takeover_source
       FROM travel_leads l
       LEFT JOIN travel_senders s ON s.sender_id = l.sender_id
-      WHERE l.${REAL_SENDER} AND ${LEAD_SEARCH_SQL}
+      WHERE ${realSender("l.")} AND ${LEAD_SEARCH_SQL}
       ORDER BY (l.status = 'new') DESC, ${activity.replace(/(last_activity_at|created_at)/g, "l.$1")} DESC, l.id DESC
       LIMIT $2 OFFSET $3
     `,
@@ -192,7 +197,7 @@ export async function countLeads(search?: string): Promise<number> {
   const ready = await ensureTravelSchema();
   if (!ready) return 0;
   const result = await queryNeon<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM travel_leads l WHERE l.${REAL_SENDER} AND ${LEAD_SEARCH_SQL}`,
+    `SELECT COUNT(*)::text AS count FROM travel_leads l WHERE ${realSender("l.")} AND ${LEAD_SEARCH_SQL}`,
     [leadSearchPattern(search)],
   );
   return Number(result?.rows?.[0]?.count || 0);
@@ -202,7 +207,7 @@ export async function countNewLeads(): Promise<number> {
   const ready = await ensureTravelSchema();
   if (!ready) return 0;
   const result = await queryNeon<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM travel_leads WHERE status = 'new' AND ${REAL_SENDER}`,
+    `SELECT COUNT(*)::text AS count FROM travel_leads WHERE status = 'new' AND ${realSender()}`,
   );
   return Number(result?.rows?.[0]?.count || 0);
 }
@@ -260,17 +265,17 @@ export async function getLeadStats(): Promise<LeadStats> {
         COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date = (NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date)::text AS today,
         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::text AS last7days,
         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::text AS last30days
-      FROM travel_leads WHERE ${REAL_SENDER}
+      FROM travel_leads WHERE ${realSender()}
     `),
     queryNeon<{ platform: string; count: string }>(`
       SELECT COALESCE(NULLIF(platform, ''), 'unknown') AS platform, COUNT(*)::text AS count
-      FROM travel_leads WHERE ${REAL_SENDER}
+      FROM travel_leads WHERE ${realSender()}
       GROUP BY 1
       ORDER BY COUNT(*) DESC
     `),
     queryNeon<{ kind: string; count: string }>(`
       SELECT COALESCE(NULLIF(kind, ''), 'handoff') AS kind, COUNT(*)::text AS count
-      FROM travel_leads WHERE ${REAL_SENDER}
+      FROM travel_leads WHERE ${realSender()}
       GROUP BY 1
       ORDER BY COUNT(*) DESC
     `),
@@ -280,7 +285,7 @@ export async function getLeadStats(): Promise<LeadStats> {
       SELECT to_char((created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date, 'YYYY-MM-DD') AS day, COUNT(*)::text AS count
       FROM travel_leads
       WHERE (created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date > (NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date - 7
-        AND ${REAL_SENDER}
+        AND ${realSender()}
       GROUP BY 1
       ORDER BY 1
     `),

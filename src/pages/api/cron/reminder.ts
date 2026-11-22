@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getBrand } from "../../../lib/brand";
 import { dbClaimReminder, dbGetPendingReminders, listTrips } from "../../../lib/travelOps";
 import { sendTextMessage, sendImageMessage } from "../../../lib/messenger";
 import { getEnv } from "../../../lib/env";
@@ -27,18 +28,22 @@ function isCronAuthorized(req: NextApiRequest): boolean {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
-  waitUntil(flushWebsiteSync(undefined, 30));
-  // Daily cleanup of the error log (7-day retention). Also prunes hourly as
-  // errors arrive, but a quiet week would otherwise never trigger that.
-  waitUntil(pruneErrorLogs().then(() => {}).catch(() => {}));
-  // listTrips() is where a trip with every departure date now in the past
-  // gets archived (and the website/bot stop showing it) — otherwise that
-  // transition only happens the next time someone messages the bot or opens
-  // the admin. Runs once a day regardless of traffic so a quiet trip doesn't
-  // stay live past its last date just because nobody asked about it.
-  waitUntil(listTrips({ limit: 5000 }).then(() => {}));
-  waitUntil(runDailyHealthCheck());
-  waitUntil(retryDueCustomerImages(12).then(() => {}).catch(() => {}));
+  // The shared catalogue, website sync, error log, health check and image retries are the primary
+  // brand's daily work; a secondary deployment only sends its own customers' reminders (brand.ts).
+  if (getBrand().isPrimary) {
+    waitUntil(flushWebsiteSync(undefined, 30));
+    // Daily cleanup of the error log (7-day retention). Also prunes hourly as
+    // errors arrive, but a quiet week would otherwise never trigger that.
+    waitUntil(pruneErrorLogs().then(() => {}).catch(() => {}));
+    // listTrips() is where a trip with every departure date now in the past
+    // gets archived (and the website/bot stop showing it) — otherwise that
+    // transition only happens the next time someone messages the bot or opens
+    // the admin. Runs once a day regardless of traffic so a quiet trip doesn't
+    // stay live past its last date just because nobody asked about it.
+    waitUntil(listTrips({ limit: 5000 }).then(() => {}));
+    waitUntil(runDailyHealthCheck());
+    waitUntil(retryDueCustomerImages(12).then(() => {}).catch(() => {}));
+  }
 
   const env = getEnv();
   // PSIDs are page-scoped: a sender who messaged page B does not exist for

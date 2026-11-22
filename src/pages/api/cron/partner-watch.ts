@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { isSecondaryBrand } from "../../../lib/brand";
 import { safeSecretCompare } from "../../../lib/adminAuth";
 import { runPartnerWatch } from "../../../lib/partnerWatch/run";
 
@@ -18,6 +19,8 @@ function isCronAuthorized(req: NextApiRequest): boolean {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
+  // Partner changes are reviewed in the primary brand's admin (brand.ts).
+  if (isSecondaryBrand()) return res.status(200).json({ ok: true, skipped: "secondary_brand" });
   res.setHeader("Cache-Control", "no-store");
   try {
     const results = await runPartnerWatch();

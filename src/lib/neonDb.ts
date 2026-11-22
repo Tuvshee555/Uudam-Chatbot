@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
+import { installBrandWriteGuard } from "./brandWriteGuard";
 import { getEnv } from "./env";
 import { logError, logInfo, recordCounter } from "./observability";
 
@@ -36,6 +37,8 @@ function createPool(connectionString: string): Pool {
     statement_timeout: 20_000,
     options: "-c client_encoding=UTF8",
   });
+  // A secondary brand's deployment reads the shared catalogue but writes only its own customers' rows.
+  installBrandWriteGuard(p);
   return p;
 }
 

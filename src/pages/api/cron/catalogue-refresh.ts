@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { isSecondaryBrand } from "../../../lib/brand";
 import { safeSecretCompare } from "../../../lib/adminAuth";
 import { waitUntil } from "@vercel/functions";
 import { refreshCatalogues } from "../../../lib/catalogue/autoRefresh";
@@ -19,6 +20,8 @@ function isCronAuthorized(req: NextApiRequest): boolean {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
+  // The catalogue belongs to the primary brand; a secondary deployment never builds one (brand.ts).
+  if (isSecondaryBrand()) return res.status(200).json({ ok: true, skipped: "secondary_brand" });
   const only = req.query.edition === "quick" || req.query.edition === "complete" ? req.query.edition : undefined;
   if (req.query.async === "1") {
     // The bot found the file out of date while answering a customer: accept at once, rebuild in the background.

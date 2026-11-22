@@ -15,6 +15,7 @@
  * and as the one follow-up message when the customer leaves the answer on seen (runFollowUpSweep).
  */
 import { BOOKING_WEBSITE_URL, publishedTripWebsiteLink } from "./bookingWebsite";
+import { websiteHostPattern } from "./brand";
 import type { ConstraintLedger } from "./constraintLedger";
 import { withBookableDepartureDates } from "./departureAvailability";
 import { FOLLOW_UP_ALL_TRIPS_WEB_LINE, FOLLOW_UP_TRIP_WEB_LINE, NEXT_QUESTION_BUDGET, NEXT_QUESTION_DATE, NEXT_QUESTION_DESTINATION,
@@ -38,8 +39,8 @@ const TEXT: Record<Exclude<NextQuestionSlot, "pick">, string> = {
 /** The programme PDF already went out (programme fast path) in this conversation. */
 const PROGRAM_SENT = /хөтөлбөрийг\s+хавсаргалаа/iu;
 /** A website link the bot already showed: not repeated in the follow-up. */
-const TRIP_LINK_SHOWN = /uudamtravel\.mn\/(?:mn\/|en\/|ko\/)?trips\//iu;
-const SITE_SHOWN = /uudamtravel\.mn/iu;
+const TRIP_LINK_SHOWN = new RegExp(`(?:${websiteHostPattern()})\\/(?:mn\\/|en\\/|ko\\/)?trips\\/`, "iu");
+const SITE_SHOWN = new RegExp(`(?:${websiteHostPattern()})`, "iu");
 
 export type NextQuestion = { slot: NextQuestionSlot; text: string };
 

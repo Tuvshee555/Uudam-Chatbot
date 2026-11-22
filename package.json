@@ -19,7 +19,7 @@
     "qa:current-catalog": "node --env-file=.env --env-file=.env.local --import tsx scripts/qa-current-catalog-demo.ts",
     "qa:real": "node scripts/replay-real-conversations.mjs",
     "qa:accuracy": "node --import tsx scripts/chatbot-accuracy.ts",
-    "qa:accuracy:fixture": "node --import tsx scripts/chatbot-accuracy.ts --pipeline-fixture --require-pass",
+    "qa:accuracy:fixture": "node scripts/primary-brand.mjs --import tsx scripts/chatbot-accuracy.ts --pipeline-fixture --require-pass",
     "qa:conversations": "node scripts/conversation-gate.mjs",
     "qa:scenarios": "node scripts/conversation-scenario-report.mjs run",
     "qa:quality": "node --import tsx scripts/chatbot-quality.ts",

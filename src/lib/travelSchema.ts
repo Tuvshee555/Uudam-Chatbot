@@ -207,6 +207,10 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_leads
           ADD COLUMN IF NOT EXISTS lead_status TEXT NOT NULL DEFAULT 'new_lead';
       `);
+      // Which brand's page the lead came from (brand.ts): '' = the primary (every older row).
+      await client.query(`
+        ALTER TABLE travel_leads ADD COLUMN IF NOT EXISTS brand TEXT NOT NULL DEFAULT '';
+      `);
       // Who took a lead (Leads tab). The notify_* columns are kept only so existing rows and
       // the idempotent ALTER stay valid; nothing writes or reads them any more.
       await client.query(`
@@ -597,6 +601,11 @@ export async function ensureTravelSchema() {
       // app, "staff_web" = Business Suite on a computer), set with last_staff_reply_at.
       await client.query(`
         ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS takeover_source TEXT NOT NULL DEFAULT '';
+      `);
+      // Which brand's page the customer writes to (brand.ts): '' = the primary (every older row). Each
+      // brand's deployment sweeps and lists only its own customers; a page-scoped id never moves brand.
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS brand TEXT NOT NULL DEFAULT '';
       `);
       // The one follow-up question after a customer leaves the bot's answer on seen (followUp.ts):
       // what the last answer armed and when ('' = nothing armed), and when one was last sent.

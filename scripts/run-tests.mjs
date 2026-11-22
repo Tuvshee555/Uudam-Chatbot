@@ -42,6 +42,8 @@ const env = { ...process.env };
 for (const key of Object.keys(env)) {
   if (/OPENAI|ANTHROPIC|GEMINI|^EVAL_|^LIVE_REPLAY_/i.test(key)) delete env[key];
   if (/DATABASE_URL|^NEON_|^BOOKING_|^REDIS_URL|^UPSTASH|^KV_|^STAFF_NOTIFY|^TELEGRAM_/i.test(key)) delete env[key];
+  // Suites run as the primary brand (src/lib/brand.ts); brand tests set BRAND themselves.
+  if (/^BRAND(?:_|$)/.test(key)) delete env[key];
 }
 env.OPENAI_API_KEY = "test-openai-key-mocked";
 env.AI_USAGE_ENVIRONMENT = "test";

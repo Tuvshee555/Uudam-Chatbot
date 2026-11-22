@@ -276,6 +276,8 @@ export type PosterProps = {
   onDayPhotoFile: PosterOnDayPhotoFileFn;
   dayPhotoInputRefs: DayPhotoInputRefs;
   posterStyle: PosterStyleSettings;
+  /** The header wordmark: the primary's «UUDAM / TRAVEL AGENCY» unless a brand's PDF passes its own (brand.ts). */
+  wordmark?: { name: string; sub: string };
 };
 
 export default function Poster({
@@ -292,6 +294,7 @@ export default function Poster({
   onDayPhotoFile,
   dayPhotoInputRefs,
   posterStyle,
+  wordmark = { name: "UUDAM", sub: "TRAVEL AGENCY" },
 }: PosterProps) {
   const priceTable = getPriceTable(t);
   const priceNoteBoxes = getPriceNoteBoxes(t, priceTable);
@@ -349,9 +352,9 @@ export default function Poster({
 
   const Logo = (): ReactNode => (
     <>
-      <img className="logo" src={logoSrc} alt="UUDAM" />
+      <img className="logo" src={logoSrc} alt={wordmark.name} />
       <div className="name">
-        UUDAM<small>TRAVEL AGENCY</small>
+        {wordmark.name}<small>{wordmark.sub}</small>
       </div>
     </>
   );

@@ -13,17 +13,19 @@
  */
 
 import { dbClaimGreeting, dbClaimSeasonSend } from "./travelDb";
+import { brandText } from "./brand";
 import type { TravelTrip } from "./travelOps";
 import { getTripBrochureAsset, resolveTripFromUserMessage } from "./travelFastPaths";
 
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 5;
 
-export const DEFAULT_WELCOME_TEXT =
+// In this deployment's brand's words (brand.ts brandText; unchanged for the primary).
+export const DEFAULT_WELCOME_TEXT = brandText(
   "Уудам Трэвэл-д тавтай морилно уу! 🌏\n\n" +
   "📍 Дэлгэрэнгүй мэдээлэл, үнэ, хөтөлбөрийг - uudamtravel.mn вебсайтаар нэвтэрч авна уу.\n" +
   "📞 7713 6633 / 8913 6633 / 9117 2769 / 9924 8000\n\n" +
-  "Та ямар төрлийн аялал сонирхож байна вэ? 😊";
+  "Та ямар төрлийн аялал сонирхож байна вэ? 😊");
 
 export function hasTripPhotoIntent(text: string): boolean {
   const normalized = text.normalize("NFKC").toLowerCase();

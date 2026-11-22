@@ -4,8 +4,10 @@
  * in Redis or the environment checks (bookingCollect.ts re-exports it).
  */
 import type { TravelTrip } from "./travelTypes";
+import { getBrand, knownWebsiteHosts } from "./brand";
 
-export const BOOKING_WEBSITE_URL = "https://uudamtravel.mn";
+/** This deployment's brand's website (brand.ts): uudamtravel.mn for the primary. */
+export const BOOKING_WEBSITE_URL = getBrand().websiteUrl;
 
 const PUBLIC_TRIP_STATUSES = new Set(["active", "sold_out", "paused"]);
 const TRIP_SLUG = /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,199}$/u;
@@ -29,7 +31,7 @@ export function websiteTripSlugFromUrl(value: string): string | null {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.port || url.username || url.password
-      || !["uudamtravel.mn", "www.uudamtravel.mn"].includes(url.hostname)) return null;
+      || !knownWebsiteHosts().includes(url.hostname)) return null;
     const path = /^\/(?:mn\/|en\/|ko\/)?trips\/([^/]+)\/?$/.exec(url.pathname);
     if (!path) return null;
     const slug = decodeURIComponent(path[1]);

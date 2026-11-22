@@ -3,6 +3,8 @@
  * those come from env (FACEBOOK_PAGES / TOKEN_PAGE). This is purely the
  * human-readable label shown in the admin UI for each page id.
  */
+import { getBrand } from "./brand";
+
 export const PAGE_DISPLAY_NAMES: Record<string, string> = {
   "1010493442437235": "Uudam Travel Agency",
   "596733917653582": "Uudam travel - AI",
@@ -10,5 +12,6 @@ export const PAGE_DISPLAY_NAMES: Record<string, string> = {
 
 /** Returns the configured display name for a page id, or the raw id as a fallback. */
 export function getPageDisplayName(pageId: string): string {
-  return PAGE_DISPLAY_NAMES[pageId] || pageId;
+  const brand = getBrand();
+  return PAGE_DISPLAY_NAMES[pageId] || (brand.isPrimary ? pageId : brand.nameMn);
 }

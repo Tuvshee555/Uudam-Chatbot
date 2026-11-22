@@ -9,6 +9,7 @@
  */
 
 import { queryNeon } from "./neonDb";
+import { getBrand, ownedBrandSql } from "./brand";
 import { HUMAN_OWNER_REASONS } from "./takeoverGuard";
 import { ensureTravelSchema } from "./travelSchema";
 
@@ -383,15 +384,15 @@ export async function dbTrackSender(
     prev_msg_at: string | null;
     get_started_at: string | null;
   }>(
-    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, last_msg_at, updated_at)
-     VALUES ($1, $2, NOW(), 1, NOW(), NOW())
+    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, last_msg_at, updated_at, brand)
+     VALUES ($1, $2, NOW(), 1, NOW(), NOW(), $3)
      ON CONFLICT (sender_id) DO UPDATE
        SET last_seen   = NOW(),
            platform    = EXCLUDED.platform,
            msg_count   = travel_senders.msg_count + 1,
            updated_at  = NOW()
      RETURNING msg_count, last_msg_at AS prev_msg_at, get_started_at`,
-    [senderId, platform],
+    [senderId, platform, getBrand().storageKey],
   );
   // Update last_msg_at AFTER reading the old value (so we get the gap)
   await queryNeon(
@@ -419,13 +420,13 @@ export async function dbMarkGetStarted(
   const ready = await ensureTravelSchema();
   if (!ready) return;
   await queryNeon(
-    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, get_started_at, updated_at)
-     VALUES ($1, $2, NOW(), 0, NOW(), NOW())
+    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, get_started_at, updated_at, brand)
+     VALUES ($1, $2, NOW(), 0, NOW(), NOW(), $3)
      ON CONFLICT (sender_id) DO UPDATE
        SET get_started_at = NOW(),
            last_seen      = NOW(),
            updated_at     = NOW()`,
-    [senderId, platform],
+    [senderId, platform, getBrand().storageKey],
   );
 }
 
@@ -514,6 +515,7 @@ export async function dbGetPendingReminders(): Promise<ReminderCandidate[]> {
     `SELECT sender_id, platform, last_msg_at
      FROM travel_senders
      WHERE platform = 'facebook'
+       AND ${ownedBrandSql()}
        AND last_msg_at < NOW() - INTERVAL '12 hours'
        AND last_msg_at > NOW() - INTERVAL '24 hours'
        AND (reminder_sent_at IS NULL OR reminder_sent_at < $1)
@@ -647,11 +649,11 @@ export async function dbPauseSender(
     ? UNTIL_RELEASED_AT
     : new Date(Date.now() + (chosen ? Math.min(durationMs, MAX_PAUSE_MS) : MAX_PAUSE_MS)).toISOString();
   await queryNeon(
-    `INSERT INTO travel_senders (sender_id, paused, pause_reason, paused_at, expires_at, updated_at)
-     VALUES ($1, TRUE, $2, NOW(), $3, NOW())
+    `INSERT INTO travel_senders (sender_id, paused, pause_reason, paused_at, expires_at, updated_at, brand)
+     VALUES ($1, TRUE, $2, NOW(), $3, NOW(), $4)
      ON CONFLICT (sender_id) DO UPDATE
        SET paused = TRUE, pause_reason = $2, paused_at = NOW(), expires_at = $3, updated_at = NOW()`,
-    [senderId, reason, expiresAt],
+    [senderId, reason, expiresAt, getBrand().storageKey],
   );
 }
 
@@ -673,10 +675,10 @@ export async function dbStoreSenderName(senderId: string, name: string): Promise
   const ready = await ensureTravelSchema();
   if (!ready) return;
   await queryNeon(
-    `INSERT INTO travel_senders (sender_id, display_name, updated_at)
-     VALUES ($1, $2, NOW())
+    `INSERT INTO travel_senders (sender_id, display_name, updated_at, brand)
+     VALUES ($1, $2, NOW(), $3)
      ON CONFLICT (sender_id) DO UPDATE SET display_name = $2, updated_at = NOW()`,
-    [senderId, name],
+    [senderId, name, getBrand().storageKey],
   );
 }
 
@@ -688,6 +690,7 @@ export async function dbListPaused(): Promise<SenderRow[]> {
             paused, pause_reason, paused_at, expires_at
      FROM travel_senders
      WHERE paused = TRUE
+       AND ${ownedBrandSql()}
        AND (expires_at IS NULL OR expires_at > NOW())
      ORDER BY paused_at DESC
      LIMIT 100`,
@@ -703,6 +706,7 @@ export async function dbListRecent(): Promise<SenderRow[]> {
     `SELECT sender_id, platform, display_name, last_seen, msg_count,
             paused, pause_reason, paused_at, expires_at
      FROM travel_senders
+     WHERE ${ownedBrandSql()}
      ORDER BY last_seen DESC
      LIMIT 50`,
     [],
@@ -715,7 +719,7 @@ export async function dbListSendersWithoutName(): Promise<{ sender_id: string; p
   if (!ready) return [];
   const result = await queryNeon<{ sender_id: string; platform: string }>(
     `SELECT sender_id, platform FROM travel_senders
-     WHERE display_name = '' OR display_name IS NULL
+     WHERE (display_name = '' OR display_name IS NULL) AND ${ownedBrandSql()}
      ORDER BY last_seen DESC
      LIMIT 200`,
     [],

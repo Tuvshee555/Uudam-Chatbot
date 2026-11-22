@@ -14,6 +14,31 @@ import { ensureConnectedTripSchema } from "../connectedTripStore";
 import type { PosterPdfRow } from "./pdf";
 import { isAllowedPosterPdfImageUrl } from "./pdfImagePolicy";
 import { posterPdfHeight } from "./pdfLayout";
+import { brandText, getBrand } from "../brand";
+import { applyBrandFaresToPoster, posterFareMap, tripFareMap, type FareMap } from "../brandFares";
+
+/**
+ * The fares of the trip this poster is attached to, read RAW (a secondary deployment's trip reads are
+ * already in its fares, and the map must go from the catalogue's figure to the brand's).
+ */
+async function linkedTripFares(posterId: string, discount: number): Promise<FareMap | null> {
+  const result = await queryNeon<{ adult_price: number | null; child_price: number | null; extra: Record<string, unknown> | null }>(
+    `SELECT adult_price, child_price, extra FROM travel_trip_entries WHERE extra->>'poster_trip_id' = $1 ORDER BY updated_at DESC LIMIT 1`,
+    [posterId],
+  );
+  const row = result?.rows?.[0];
+  if (!row) return null;
+  return tripFareMap({ adult_price: row.adult_price ?? null, child_price: row.child_price ?? null, extra: row.extra ?? {} }, discount);
+}
+
+/** The poster as this deployment's brand prints it: its fares and name (brandFares.ts); the primary's unchanged. */
+async function brandPosterData(poster: PosterPdfRow): Promise<PosterTrip> {
+  const brand = getBrand();
+  const data = poster.data as PosterTrip;
+  if (brand.isPrimary) return data;
+  const fares = posterFareMap(data, await linkedTripFares(poster.id, brand.fareDiscountMnt), brand.fareDiscountMnt);
+  return applyBrandFaresToPoster(data, fares, brandText) as PosterTrip;
+}
 
 const noop = () => {};
 
@@ -44,14 +69,17 @@ function optimizePosterImagesForPdf(trip: PosterTrip): PosterTrip {
 
 export async function renderPosterPdf(poster: PosterPdfRow) {
   await ensureConnectedTripSchema();
-  const trip = optimizePosterImagesForPdf(poster.data as PosterTrip);
-  const hash = createHash("sha256").update(`poster-render-v3:${JSON.stringify(trip)}`).digest("hex");
+  const brand = getBrand();
+  const trip = optimizePosterImagesForPdf(await brandPosterData(poster));
+  // The brand is part of the key: one brand's PDF is never served for the other (a secondary
+  // deployment cannot write this cache at all — brandWriteGuard.ts — so it renders every time).
+  const hash = createHash("sha256").update(`poster-render-v3:${brand.isPrimary ? "" : `${brand.key}:${brand.fareDiscountMnt}:`}${JSON.stringify(trip)}`).digest("hex");
   const cached = await queryNeon<{ pdf: Buffer }>("SELECT pdf FROM poster_pdf_cache WHERE poster_id=$1 AND hash=$2", [poster.id, hash]);
   if (cached?.rows[0]) return cached.rows[0].pdf;
   const root = process.cwd();
   const [css, logo, regular, bold] = await Promise.all([
     readFile(path.join(root,"src/styles/poster.css"),"utf8"),
-    readFile(path.join(root,"public/poster/uudam-logo.jpg")),
+    readFile(path.join(root, brand.posterLogoPath)),
     readFile(path.join(root,"public/fonts/NotoSans-Regular.ttf")),
     readFile(path.join(root,"public/fonts/NotoSans-Bold.ttf")),
   ]);
@@ -59,7 +87,8 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
     trip, upd: noop, addItem: noop, removeItem: noop, insertDay: noop, reorderDay: noop,
     addPriceRow: noop, addPriceCol: noop, removePriceCol: noop, onDayPhotoFile: noop,
     dayPhotoInputRefs: { current: {} }, page1Ref: { current: null },
-    logoSrc: `data:image/jpeg;base64,${logo.toString("base64")}`,
+    logoSrc: `data:${brand.posterLogoMime};base64,${logo.toString("base64")}`,
+    wordmark: { name: brand.wordmark, sub: brand.wordmarkSub },
     posterStyle: { headlineScale: 1, infoScale: 1, dayTitleScale: 1, dayTextScale: 1,
       photoScale: 0.75, ...trip.style },
   }));
@@ -83,6 +112,7 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
       @font-face{font-family:PosterNoto;src:url(data:font/ttf;base64,${regular.toString("base64")})}
       @font-face{font-family:PosterNoto;src:url(data:font/ttf;base64,${bold.toString("base64")});font-weight:700}
       ${css}
+      ${brand.posterCss}
       html,body{margin:0;background:white} .poster-root{font-family:PosterNoto,sans-serif}
       .poster-root .page{margin:0;box-shadow:none;break-after:auto}
       .dayrow,.photo-tile,.head,.hero,.sec,.foot{break-inside:avoid}

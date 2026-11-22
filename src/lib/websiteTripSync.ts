@@ -20,6 +20,8 @@ import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
 import { newWebsiteTripSlug } from "./websiteTripSlug";
 import { logWarn } from "./observability";
+import { installBrandWriteGuard } from "./brandWriteGuard";
+import { isSecondaryBrand } from "./brand";
 import { safeFetch, SafeFetchError } from "./safeFetch";
 import { isHostedPhotoUrl } from "./tripPhotoEdit";
 import type { DepartureDateState } from "./travelTypes";
@@ -33,6 +35,7 @@ function bookingPool() {
     pool = new Pool({ connectionString: url.toString(), max: 3, connectionTimeoutMillis: 10000,
       statement_timeout: 20000, idleTimeoutMillis: 10000, allowExitOnIdle: true });
     pool.on("error", () => console.error("Booking database connection interrupted"));
+    installBrandWriteGuard(pool);
   }
   return pool;
 }
@@ -706,6 +709,8 @@ export async function restoreDepartureRows(rows: DepartureStateRow[]): Promise<{
 }
 
 export async function flushWebsiteSync(tripId?: string, limit = 5) {
+  // Only the primary brand writes the website (brand.ts); a secondary leaves its queue alone.
+  if (isSecondaryBrand()) return { processed: 0 };
   // A deployment without the optional website connection keeps its durable
   // events pending until configured; it must not turn them all into errors.
   if (!process.env.BOOKING_DATABASE_URL) return { processed: 0 };
@@ -780,6 +785,8 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
  * Production only (or an explicit WEBSITE_REVALIDATE_URL): a local or test run
  * must never touch the live site. Failure is logged, never thrown — the rows
  * are already correct and the cache still expires on its own.
+ * WEBSITE_REVALIDATE_EXTRA_URLS (comma-separated) names sister brands' sites that show the same
+ * trips (brand.ts): each is asked too, with the same secret.
  */
 export async function notifyWebsiteTripsChanged(slugs: string[]) {
   const unique = [...new Set(slugs.filter(Boolean))];
@@ -791,17 +798,22 @@ export async function notifyWebsiteTripsChanged(slugs: string[]) {
     logWarn("website_revalidate.skipped", { reason: "WEBSITE_TRIP_SYNC_SECRET is not set", slugs: unique.length });
     return;
   }
-  try {
-    const response = await fetch(`${(explicit || BOOKING_WEBSITE_URL).replace(/\/$/, "")}/api/internal/trip-changed`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-trip-sync-secret": secret },
-      body: JSON.stringify({ slugs: unique }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) logWarn("website_revalidate.failed", { status: response.status, slugs: unique.length });
-  } catch (error) {
-    logWarn("website_revalidate.failed", { message: error instanceof Error ? error.message.slice(0, 200) : String(error) });
-  }
+  const sites = [explicit || BOOKING_WEBSITE_URL, ...(process.env.WEBSITE_REVALIDATE_EXTRA_URLS || "").split(",")]
+    .map((site) => site.trim().replace(/\/$/, ""))
+    .filter((site, index, all) => /^https?:\/\//.test(site) && all.indexOf(site) === index);
+  await Promise.all(sites.map(async (site) => {
+    try {
+      const response = await fetch(`${site}/api/internal/trip-changed`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trip-sync-secret": secret },
+        body: JSON.stringify({ slugs: unique }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) logWarn("website_revalidate.failed", { status: response.status, slugs: unique.length });
+    } catch (error) {
+      logWarn("website_revalidate.failed", { message: error instanceof Error ? error.message.slice(0, 200) : String(error) });
+    }
+  }));
 }
 
 export async function websiteSyncStatus() {

@@ -31,6 +31,7 @@ import { sendQuickReplies, sendTextMessage } from "./messenger";
 import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
 import { isMetaOutboundDisabled } from "./metaOutboundKillSwitch";
 import { queryNeon } from "./neonDb";
+import { ownedBrandSql } from "./brand";
 import { hashIdentifier, logInfo, logWarn, recordCounter } from "./observability";
 import type { NextQuestion } from "./nextQuestion";
 import { isNextQuestionText, withoutNextQuestion } from "./nextQuestionText";
@@ -99,6 +100,7 @@ async function dueCandidates(now: Date, delayMs: number): Promise<Candidate[]> {
   const result = await queryNeon<Candidate>(
     `SELECT sender_id, follow_up_slot AS slot, follow_up_question AS question, follow_up_armed_at AS armed_at FROM travel_senders
       WHERE follow_up_slot <> '' AND follow_up_question <> '' AND platform = 'facebook' AND sender_id NOT LIKE 'demo:%'
+        AND ${ownedBrandSql()}
         AND follow_up_armed_at <= $1::timestamptz AND follow_up_armed_at > $2::timestamptz
         AND (follow_up_sent_at IS NULL OR follow_up_sent_at < $3::timestamptz)
       ORDER BY follow_up_armed_at ASC LIMIT $4`,

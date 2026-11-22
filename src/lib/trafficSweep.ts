@@ -13,6 +13,7 @@ import { waitUntil } from "@vercel/functions";
 import { runFollowUpSweep } from "./followUp";
 import { runGetStartedNudgeSweep } from "./getStartedNudge";
 import { queryNeon } from "./neonDb";
+import { getBrand } from "./brand";
 import { logWarn } from "./observability";
 import { ensureTravelSchema } from "./travelSchema";
 
@@ -28,11 +29,12 @@ export function trafficSweepDisabledByEnv(env: NodeJS.ProcessEnv = process.env):
 /** Atomic: true for exactly one caller per TRAFFIC_SWEEP_MINUTES. */
 async function claimSweepSlot(): Promise<boolean> {
   const result = await queryNeon<{ id: number }>(
-    `INSERT INTO travel_sweep_lock (id, last_run_at) VALUES (1, NOW())
+    `INSERT INTO travel_sweep_lock (id, last_run_at) VALUES ($2, NOW())
        ON CONFLICT (id) DO UPDATE SET last_run_at = NOW()
        WHERE travel_sweep_lock.last_run_at < NOW() - ($1 || ' minutes')::interval
      RETURNING id`,
-    [String(TRAFFIC_SWEEP_MINUTES)],
+    // One slot per brand (brand.ts): one brand's sweep never holds back the other's customers.
+    [String(TRAFFIC_SWEEP_MINUTES), getBrand().sweepLockId],
   );
   return Boolean(result?.rows.length);
 }

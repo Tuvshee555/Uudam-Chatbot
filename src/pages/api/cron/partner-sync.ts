@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { isSecondaryBrand } from "../../../lib/brand";
 import { safeSecretCompare } from "../../../lib/adminAuth";
 import { runPartnerSync } from "../../../lib/partnerSync/run";
 
@@ -16,6 +17,8 @@ function isCronAuthorized(req: NextApiRequest): boolean {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
+  // Partner data feeds the shared catalogue, which only the primary brand writes (brand.ts).
+  if (isSecondaryBrand()) return res.status(200).json({ ok: true, skipped: "secondary_brand" });
   const results = await runPartnerSync();
   const ok = results.every((result) => result.status === "synced" || result.status === "unchanged");
   res.setHeader("Cache-Control", "no-store");

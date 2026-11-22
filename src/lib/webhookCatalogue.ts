@@ -36,6 +36,7 @@ import { REPEAT_ANSWERED_REASON, deliverCatalogue, planCatalogueDelivery, resolv
 import { TESTER_PAIRED_TEXT, readTesterCode, tryRegisterTester } from "./catalogue/testers";
 import type { CatalogueDeliveryStatus } from "./catalogue/types";
 import type { TravelTrip } from "./travelTypes";
+import { isSecondaryBrand } from "./brand";
 
 type Reply = {
   reply: string; failTag: string; rememberSource: string; counter?: string; catalogTripIds?: string[]; afterDeliver?: () => Promise<void>;
@@ -200,6 +201,8 @@ export type TesterPairingContext = {
  * is unknown, expired, used or over the attempt limit consumes nothing and reveals nothing. Facebook only.
  */
 export async function handleTesterPairingTurn(ctx: TesterPairingContext): Promise<boolean> {
+  // The corporate catalogue is the primary brand's (its name, its prices): a secondary never sends it.
+  if (isSecondaryBrand()) return false;
   if (ctx.platform !== "facebook" || !readTesterCode(ctx.text)) return false;
   try {
     const result = await tryRegisterTester({ text: ctx.text, senderId: ctx.senderId, pageId: ctx.pageId });
@@ -225,6 +228,7 @@ const SILENT_STATUSES: ReadonlySet<CatalogueDeliveryStatus> = new Set([
  * when the message is none of its business (the existing flow answers).
  */
 export async function handleCatalogueTurn(ctx: CatalogueTurnContext): Promise<boolean> {
+  if (isSecondaryBrand()) return false;
   const text = ctx.text.trim();
   if (!text) return false;
 

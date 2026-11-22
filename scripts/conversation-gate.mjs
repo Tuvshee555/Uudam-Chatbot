@@ -5,6 +5,8 @@ import { spawnSync } from "node:child_process";
 const env = { ...process.env };
 for (const key of Object.keys(env)) {
   if (/TOKEN|SECRET|API_KEY|DATABASE_URL|^NEON_|^REDIS|^UPSTASH|^VERCEL|^BOOKING_|^STAFF_|^TELEGRAM_|_SINK_|^GOOGLE_DRIVE_|^GOOGLE_CLIENT|^ADMIN_GOOGLE_|^FACEBOOK_PAGES$/i.test(key)) delete env[key];
+  // The journeys are the primary brand's replies (src/lib/brand.ts): a secondary deployment's BRAND never reaches them.
+  if (/^BRAND(?:_|$)/.test(key)) delete env[key];
 }
 Object.assign(env, { NODE_ENV: "test", OPENAI_API_KEY: "conversation-fixture-key", VERIFY_TOKEN: "conversation-fixture-token",
   TOKEN_PAGE: "conversation-fixture-token", FACEBOOK_PAGE_ID: "1234567890", META_APP_SECRET: "test-meta-secret",

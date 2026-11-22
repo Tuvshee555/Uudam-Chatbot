@@ -25,6 +25,7 @@ import { isGetStartedText, isKnownGreetingPhrase } from "./greetingPhrases";
 import { sendTextMessage } from "./messenger";
 import { isMetaOutboundDisabled } from "./metaOutboundKillSwitch";
 import { queryNeon } from "./neonDb";
+import { ownedBrandSql } from "./brand";
 import { hashIdentifier, logInfo, logWarn, recordCounter } from "./observability";
 import { classifyThread, fetchThreadMessages, latestStaffReply, staffMessagesInThread, takeoverContext, takeoverRisk } from "./staffTakeover";
 import { isStaffTakeoverSendBlocked } from "./takeoverGuard";
@@ -72,6 +73,7 @@ async function dueCandidates(now: Date, delayMs: number): Promise<Candidate[]> {
   const result = await queryNeon<Candidate>(
     `SELECT sender_id, get_started_at AS tapped_at FROM travel_senders
       WHERE get_started_at IS NOT NULL AND platform = 'facebook' AND sender_id NOT LIKE 'demo:%'
+        AND ${ownedBrandSql()}
         AND get_started_at <= $1::timestamptz AND get_started_at > $2::timestamptz
         AND (get_started_nudge_at IS NULL OR get_started_nudge_at < get_started_at)
       ORDER BY get_started_at ASC LIMIT $3`,

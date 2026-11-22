@@ -17,7 +17,16 @@ const CATALOGUE_RENDER_FILES = [
   "./node_modules/playwright-core/package.json",
 ];
 
+// A secondary brand's bot deployment (BRAND=magnai, brand.ts) has no landing page of its own: its
+// root sends visitors to that brand's website. Decided at build time; the primary is unaffected.
+const SECONDARY_BRAND_SITE = process.env.BRAND?.trim().toLowerCase() === "magnai"
+  ? (process.env.BRAND_WEBSITE_URL?.trim() || "https://magnai-travel.vercel.app")
+  : "";
+
 const nextConfig: NextConfig = {
+  async redirects() {
+    return SECONDARY_BRAND_SITE ? [{ source: "/", destination: SECONDARY_BRAND_SITE, permanent: false }] : [];
+  },
   async headers() {
     return [
       { source: "/admin", headers: ADMIN_SECURITY_HEADERS },
