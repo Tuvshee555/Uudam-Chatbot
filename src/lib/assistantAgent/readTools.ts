@@ -15,6 +15,7 @@ import { pricingDays } from "../adminDatePricing";
 import { stripAnswerTags } from "../assistantBrain";
 import { BOOKING_WEBSITE_URL, storedWebsiteTripSlug } from "../bookingWebsite";
 import { departureAvailability } from "../departureAvailability";
+import { departureDeals } from "../departureDeals";
 import { parseDepartureDateText } from "../travelDates";
 import { findTripMatches } from "../travelFastPathsSearch";
 import { soundAlikeTrips } from "./fuzzyTripSearch";
@@ -231,6 +232,18 @@ function itineraryOf(trip: TravelTrip, poster: PosterPhotoView | null, descripti
  */
 export type DetailOptions = { full?: boolean };
 
+function dateDealsOf(trip: TravelTrip) {
+  const deals = departureDeals(trip).slice(0, 30);
+  return deals.length ? {
+    date_deals: deals.map((deal) => ({
+      date: deal.date,
+      regular: { adult: deal.regular_adult_price, child: deal.regular_child_price },
+      sale: { adult: deal.sale_adult_price, child: deal.sale_child_price },
+      featured: deal.featured,
+    })),
+  } : {};
+}
+
 /** Everything the model may need to edit one trip exactly. */
 export function tripDetailView(trip: TravelTrip, now: Date, poster: PosterPhotoView | null, options: DetailOptions = {}) {
   const slug = storedWebsiteTripSlug(trip);
@@ -258,6 +271,8 @@ export function tripDetailView(trip: TravelTrip, now: Date, poster: PosterPhotoV
     duration: trip.duration_text,
     base_fares: { adult: trip.adult_price, child: trip.child_price, infant: trip.infant_price, currency: trip.currency },
     departures: tripDepartures(trip, now),
+    // Dates that have a sale or «Онцлох» on the website: the regular fare, the sale fare, the flag (set_date_sale).
+    ...dateDealsOf(trip),
     departure_texts: trip.departure_dates.slice(0, 30),
     price_rows: priceRowsOf(trip, now),
     age_rules: ageRulesFromExtra(trip.extra),

@@ -3,6 +3,7 @@ import { customerDate } from "./customerDate";
 import { labelWithoutAge, passengerLabelCondition } from "./passengerCondition";
 import type { TravelTrip } from "./travelTypes";
 import { INFANT_FARE_ASK } from "./infantFareAsk";
+import { dealDiscountRows } from "./departureDeals";
 
 export type PassengerKind = "adult" | "child" | "infant";
 export type PassengerSelection = {
@@ -426,6 +427,8 @@ function computeTripOffers(trip: TravelTrip, now: Date): CanonicalTripOffer[] {
     ...rows(extra.departure_date_groups).map((raw) => ({ source: "legacy" as const, raw })),
     ...rows(extra.price_groups).map((raw) => ({ source: "price_group" as const, raw })),
     ...[...rows(extra.discounts), ...rows(extra.discount_groups)].map((raw) => ({ source: "discount" as const, raw })),
+    // A sale staff put on one website date (departureDeals.ts): an unconditional discount on that date only.
+    ...dealDiscountRows(trip).map((raw) => ({ source: "discount" as const, raw })),
   ];
   const baseDates = catalogDates(trip, now);
   return records.map(({ source, raw }, index) => {

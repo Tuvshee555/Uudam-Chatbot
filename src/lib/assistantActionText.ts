@@ -1,11 +1,12 @@
 /**
  * What one proposed change does, in plain Mongolian, for the proposal card: a title (the trip)
  * and before → after lines ("12/2: насанд хүрэгч 2,590,000₮ → 2,690,000₮", "3-р өдрийн зураг
- * солигдоно" with both thumbnails, "Сайт, ботоос нууна"). Built from the same planners apply
+ * солигдоно" with both thumbnails, "Сайт, ботоос нууна", "12/9 хямдрал: 2,590,000₮ → 2,390,000₮ (−8%)"). Built from the same planners apply
  * uses, so the card says exactly what saving will write. Pure and browser-safe (no database).
  */
 import { DATE_STATE_WORDS, WEBSITE_STATUS_WORDS, fareChangeOf, isDepartureDateState, planTripEdit } from "./tripActionPlan";
 import { FARE_WORDS, formatMnt } from "./tripFareChange";
+import { dateSaleLines } from "./dateSale";
 import { shortDay } from "./tripDatePrice";
 import type { AITripAction, TravelTrip } from "./travelTypes";
 
@@ -91,6 +92,8 @@ export function describeChange(action: AITripAction, trip?: TravelTrip | null, n
     const was = row ? WEBSITE_STATUS_WORDS[text(row.status).toUpperCase()] || text(row.status) : "";
     return { title, lines: [`${shortDay(date)}: ${was ? `${was} → ` : ""}${state}`] };
   }
+  // A date's sale / «Онцлох»: from the action's own recorded fares, the same before and after the save.
+  if (verb === "set_date_sale") return { title, lines: dateSaleLines(action, trip, now) };
   if (verb === "fare_change_all") {
     const change = fareChangeOf(action.change);
     const parts: string[] = [];

@@ -3,6 +3,7 @@ import {
   type CanonicalTripOffer, type NormalizedPassengerFare, type OfferAvailability, type OfferFare, type ResolvedTripOffer, type TripOfferResult,
   type TripOfferSelection,
 } from "./tripOffers";
+import { withoutDeals } from "./departureDeals";
 import type { TravelTrip } from "./travelTypes";
 
 export type WebsiteDeparture = {
@@ -220,7 +221,9 @@ function selectionsForDate(offers: CanonicalTripOffer[], date: string): TripOffe
 }
 
 /** Existing website columns are a lossy display projection; metadata retains every scoped fare. */
-export function websiteTripPayload(trip: TravelTrip, schedule: WebsiteDepartureDate[], now = new Date()) {
+export function websiteTripPayload(source: TravelTrip, schedule: WebsiteDepartureDate[], now = new Date()) {
+  // Regular fares only: a date's sale lives in its own website column (departureDeals.ts).
+  const trip = withoutDeals(source);
   const datedTrip = { ...trip, departure_dates: schedule.map(departure => departure.start.slice(0, 10)) };
   const sources = normalizeTripOffers(datedTrip, now);
   const sourceRows = sourceRowsById(trip, sources);

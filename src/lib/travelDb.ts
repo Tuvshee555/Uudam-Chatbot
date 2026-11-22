@@ -1762,6 +1762,10 @@ export function isCompleteCleanAction(action: AITripAction): boolean {
   const hasTarget = Boolean(action.trip_id || action.match?.route_name || action.match?.operator_name);
   if (verb === "patch") return hasTarget && Object.keys(fields).length > 0;
   if (verb === "set_date_state") return hasTarget && isIsoDate(action.date) && (isDateSeatState(action.state) || action.state === "paused");
+  if (verb === "set_date_sale") {
+    const sale = action.sale && typeof action.sale === "object" ? action.sale : {};
+    return hasTarget && isIsoDate(action.date) && (typeof sale.adult === "number" || typeof sale.child === "number" || action.clear_sale === true || typeof action.featured === "boolean");
+  }
   if (verb === "delete") return hasTarget;
   if (verb !== "upsert") return false;
 

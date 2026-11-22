@@ -119,17 +119,35 @@ export type AITripAction = {
    * set_date_price / set_visibility / patch_itinerary_day / set_age_bands / replace_photo /
    * append_notes change exactly one part of one trip (see src/lib/tripActionPlan.ts). fare_change_all is
    * a rule over many trips; it is expanded into one patch per trip before it is proposed
-   * (expandFareChangeAll), never applied as it is.
+   * (expandFareChangeAll), never applied as it is. set_date_sale puts a sale fare and/or «Онцлох»
+   * on ONE departure day, on the website's row like set_date_state (src/lib/dateSale.ts).
    */
-  action: "upsert" | "patch" | "cancel" | "set_date_state" | "delete" | TripEditVerb | "fare_change_all";
+  action: "upsert" | "patch" | "cancel" | "set_date_state" | "set_date_sale" | "delete" | TripEditVerb | "fare_change_all";
   trip_id?: string;
   match?: {
     operator_name?: string;
     route_name?: string;
   };
   fields?: TripMutationFields;
-  /** set_date_state / set_date_price: the departure day, YYYY-MM-DD. */
+  /** set_date_state / set_date_price / set_date_sale: the departure day, YYYY-MM-DD. */
   date?: string;
+  /**
+   * set_date_sale: the sale fares of that day (MNT, the price customers pay; the regular fare stays and
+   * the website shows it struck through), or clear_sale to remove the day's sale; featured = «Онцлох».
+   */
+  sale?: { adult?: number; child?: number };
+  clear_sale?: boolean;
+  featured?: boolean;
+  /** set_date_sale: the old price the admin wrote ("2,590,000-аас"), only to note when it is not the day's regular fare. */
+  from_adult?: number;
+  from_child?: number;
+  /**
+   * set_date_sale: the day's regular fares and its sale/«Онцлох» when the proposal was built. Apply
+   * refuses once a date button changed the sale since; the card's percent is worked out from these.
+   */
+  regular_adult?: number | null;
+  regular_child?: number | null;
+  observed_deal?: { sale_adult: number | null; sale_child: number | null; featured: boolean };
   /** set_date_state: what that day becomes. */
   state?: DepartureDateState;
   /**
@@ -304,6 +322,9 @@ export type TravelLead = {
   staff_replied_at?: string | null;
   /** The consultant who took the lead (free text, set in the Leads tab). */
   assigned_to?: string;
+  /** Staff's own note on the lead (Leads tab), and when it was last written. */
+  staff_note?: string;
+  staff_note_at?: string;
   /** The bot is stopped for this customer, and why ("manual", "operator_reply", "booked_customer", …). */
   bot_paused?: boolean;
   bot_pause_reason?: string;

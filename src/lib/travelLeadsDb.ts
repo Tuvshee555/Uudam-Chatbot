@@ -34,6 +34,8 @@ function mapLeadRow(row: Record<string, unknown>): TravelLead {
     last_activity_at: row.last_activity_at ? String(row.last_activity_at) : null,
     ...(row.staff_replied_at ? { staff_replied_at: new Date(String(row.staff_replied_at)).toISOString() } : {}),
     assigned_to: String(row.assigned_to || ""),
+    staff_note: String(row.staff_note || ""),
+    ...(row.staff_note_at ? { staff_note_at: new Date(String(row.staff_note_at)).toISOString() } : {}),
     bot_paused: Boolean(row.bot_paused),
     bot_pause_reason: row.bot_paused ? String(row.bot_pause_reason || "manual") : "",
     ...(row.bot_paused && row.bot_paused_at ? { bot_paused_at: new Date(String(row.bot_paused_at)).toISOString() } : {}),
@@ -49,6 +51,19 @@ export async function assignLead(id: number, assignee: string): Promise<boolean>
     `UPDATE travel_leads SET assigned_to=$2, assigned_at=CASE WHEN $2='' THEN NULL ELSE NOW() END,
         status='seen', seen_at=COALESCE(seen_at, NOW()) WHERE id=$1`,
     [id, name],
+  );
+  return (result?.rowCount ?? 0) > 0;
+}
+
+/** Staff's own note on a lead ("" clears it). It never changes the lead's status or who has it. */
+export const LEAD_NOTE_MAX = 4000;
+export async function setLeadNote(id: number, note: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const text = note.slice(0, LEAD_NOTE_MAX);
+  const result = await queryNeon(
+    `UPDATE travel_leads SET staff_note=$2, staff_note_at=CASE WHEN $2='' THEN NULL ELSE NOW() END WHERE id=$1`,
+    [id, text],
   );
   return (result?.rowCount ?? 0) > 0;
 }
@@ -160,7 +175,8 @@ export async function createLead(input: {
 
 /** Text staff can find a lead by: the message, phone, sender id, assignee or the stored context. */
 const LEAD_SEARCH_SQL = `($1::text IS NULL OR l.customer_message ILIKE $1 OR l.contact_phone ILIKE $1
-  OR l.sender_id ILIKE $1 OR COALESCE(l.assigned_to, '') ILIKE $1 OR COALESCE(l.context, '') ILIKE $1)`;
+  OR l.sender_id ILIKE $1 OR COALESCE(l.assigned_to, '') ILIKE $1 OR COALESCE(l.context, '') ILIKE $1
+  OR COALESCE(l.staff_note, '') ILIKE $1)`;
 
 function leadSearchPattern(search?: string): string | null {
   const text = search?.trim();

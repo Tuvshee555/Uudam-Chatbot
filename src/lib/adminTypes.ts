@@ -267,6 +267,10 @@ export type AIAction = {
   /** set_date_state: the departure day (YYYY-MM-DD) and what it becomes. */
   date?: string;
   state?: "open" | "low" | "full";
+  /** set_date_sale: that day's sale fares, their removal, «Онцлох» (src/lib/dateSale.ts). */
+  sale?: { adult?: number; child?: number };
+  clear_sale?: boolean;
+  featured?: boolean;
   /** What this change would break on the saved trip (src/lib/tripDamage.ts); shown in red, saved only once ticked. */
   damage?: Array<{ kind: string; text: string }>;
   acknowledged_damage?: string[];
@@ -491,6 +495,9 @@ export type TravelLead = {
   staff_replied_at?: string | null;
   /** The consultant who took the lead. */
   assigned_to?: string;
+  /** Staff's own note on the lead, and when it was last written. */
+  staff_note?: string;
+  staff_note_at?: string;
   /** The bot is stopped for this customer, and why ("manual", "operator_reply", "booked_customer", …). */
   bot_paused?: boolean;
   bot_pause_reason?: string;

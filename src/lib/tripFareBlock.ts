@@ -28,6 +28,7 @@ import { ageRulesFromExtra } from "./ageRules";
 import { INFANT_FARE_ASK } from "./infantFareAsk";
 import { tripSupportsDate } from "./tripFacts";
 import { lowSeatDates } from "./departureAvailability";
+import { dealDateNote } from "./departureDeals";
 import { normalizeTripOffers, renderTripOfferReply, resolveTripOffer, resolveTripOfferFareCard, resolveUndatedFareCard, type CanonicalTripOffer, type NormalizedPassengerFare, type OfferFare, type PassengerKind, type ResolvedTripOffer, type TripOfferResult, type TripOfferSelection } from "./tripOffers";
 
 const ORDER: PassengerKind[] = ["adult", "child", "infant"];
@@ -274,10 +275,13 @@ export function onSaleDepartureText(trip: TravelTrip, now = new Date(), limit = 
   return dateList(open.slice(0, limit), trip, now) + (open.length > limit ? " …" : "");
 }
 
-/** "10/13, 10/15 (цөөн суудал), 10/20": only a date staff flagged carries the note. */
+/** "10/13, 10/15 (цөөн суудал), 10/20 (хямдрал −9%)": only a date staff flagged carries the note. */
 function dateList(dates: string[], trip: TravelTrip, now: Date): string {
   const low = lowSeatDates(trip, todayInUb(now));
-  return dates.map((date) => shortDate(date, now) + (low.has(date) ? " (цөөн суудал)" : "")).join(", ");
+  return dates.map((date) => {
+    const notes = [low.has(date) ? "цөөн суудал" : "", dealDateNote(trip, date)].filter(Boolean);
+    return shortDate(date, now) + (notes.length ? ` (${notes.join(", ")})` : "");
+  }).join(", ");
 }
 
 /** Bookable dates flagged "few seats left", nearest first. */

@@ -44,11 +44,11 @@ const ACTION_ITEM = {
   properties: {
     action: {
       type: "string",
-      enum: ["set_date_state", "set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "fare_change_all", "change_dates", "append_notes", "patch", "cancel", "delete"],
+      enum: ["set_date_state", "set_date_price", "set_date_sale", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "fare_change_all", "change_dates", "append_notes", "patch", "cancel", "delete"],
     },
     trip_id: { type: "string", description: "The exact trip_id from get_trip / search_trips / the resolved link. Required except fare_change_all with all_active and append_notes with trip_ids." },
     summary: { type: "string", description: "One short Mongolian line for the review card, e.g. «12/2: Дүүрсэн», «Сайтаас нуух»." },
-    date: { type: "string", description: "set_date_state / set_date_price: the departure day, YYYY-MM-DD, one of the trip's departures." },
+    date: { type: "string", description: "set_date_state / set_date_price / set_date_sale: the departure day, YYYY-MM-DD, one of the trip's departures." },
     state: { type: "string", enum: ["open", "low", "full", "paused"], description: "set_date_state: open = нээлттэй, low = цөөн суудал, full = дүүрсэн, paused = түр хаасан." },
     fares: {
       type: "object",
@@ -56,6 +56,16 @@ const ACTION_ITEM = {
       properties: { adult: AMOUNT, child: AMOUNT, infant: AMOUNT, single: AMOUNT },
       additionalProperties: false,
     },
+    sale: {
+      type: "object",
+      description: "set_date_sale: the SALE fares of that ONE date (MNT, what customers pay during the sale). The regular fare stays and the website shows it struck through with the percent. adult = том хүн, child = хүүхэд; leave out a fare that gets no sale.",
+      properties: { adult: { type: "number" }, child: { type: "number" } },
+      additionalProperties: false,
+    },
+    from_adult: { type: "number", description: "set_date_sale: the old (regular) adult price the admin wrote («2,590,000-аас … хүртэл»), only when he wrote one." },
+    from_child: { type: "number", description: "set_date_sale: the old child price the admin wrote, only when he wrote one." },
+    clear_sale: { type: "boolean", description: "set_date_sale: true removes that date's sale, back to the regular fare («хямдралыг болиул / арилга / цуцал»)." },
+    featured: { type: "boolean", description: "set_date_sale: true = «Онцлох» on that date («онцлох болго», «ontsloh»), false = take «Онцлох» off it." },
     band: { type: "string", description: "set_date_price: which passenger tier (label or age band) when the date's row has several child tiers." },
     hotel: { type: "string", description: "set_date_price: the hotel of the price row when one date has several hotel rows; patch_itinerary_day: that day's hotel." },
     package_id: { type: "string", description: "set_date_price: the package of the price row, when rows differ by package." },

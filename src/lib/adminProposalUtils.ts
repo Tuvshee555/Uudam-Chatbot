@@ -12,6 +12,7 @@ import type {
   TripStatus,
 } from "./adminTypes";
 import { describeChange } from "./assistantActionText";
+import { dateSaleLines } from "./dateSale";
 import { planTripEdit } from "./tripActionPlan";
 import { isTripListProjection } from "./tripListProjection";
 import type { AITripAction, TravelTrip as TripRecord } from "./travelTypes";
@@ -284,6 +285,7 @@ function actionVerb(action: AIAction): string {
     case "cancel": return "Цуцлах";
     case "delete": return "Архивлах";
     case "set_date_state": return "Огнооны төлөв";
+    case "set_date_sale": return "Огнооны хямдрал";
     case "set_date_price": return "Огнооны үнэ";
     case "set_visibility": return row.visible === true ? "Сайтад харуулах" : "Сайтаас нуух";
     case "patch_itinerary_day": return "Хөтөлбөрийн өдөр";
@@ -330,6 +332,7 @@ export function describeAction(action: AIAction): {
   if (verbRaw === "set_date_state" && action.date) {
     changes.push(`${formatDateMn(action.date)}: ${DATE_STATE_LABELS[String(action.state)] || String(action.state || "")}`);
   }
+  if (verbRaw === "set_date_sale" && action.date) changes.push(...dateSaleLines(action as unknown as AITripAction));
   for (const [key, value] of Object.entries(fields)) {
     if (value == null || value === "") continue;
     // Skip values that add zero information — every skipped word here is one
@@ -1006,7 +1009,7 @@ function notesPreviewOf(action: AIAction): ActionView["preview"] {
 /** True for the actions whose card lines come from actionView (the rest keep the field diff). */
 export function hasPlannedLines(action: AIAction): boolean {
   const verb = String(action.action || "").toLowerCase();
-  return PLANNED_VERBS.has(verb) || verb === "set_date_state" || verb === "fare_change_all";
+  return PLANNED_VERBS.has(verb) || verb === "set_date_state" || verb === "set_date_sale" || verb === "fare_change_all";
 }
 
 /** "«Name» — 12/2: Том хүн 2,590,000₮ → 2,690,000₮; Бусад 3 огнооны үнэ хэвээр" → its lines, without the name. */
@@ -1058,6 +1061,10 @@ export function actionView(action: AIAction, trip: TravelTripLike | null | undef
   }
   if (verb === "fare_change_all") {
     return { ...split(describeChange(action as unknown as AITripAction, null, now).lines) };
+  }
+  // A date's sale: its lines come from the action's own recorded fares (dateSale.ts), live or not.
+  if (verb === "set_date_sale") {
+    return split(describeChange(action as unknown as AITripAction, (trip ?? null) as unknown as TripRecord | null, now).lines);
   }
   const thumbsFallback = verb === "replace_photo" ? photoThumbsOf(action, trip) : undefined;
   const preview = verb === "append_notes" ? notesPreviewOf(action) : undefined;

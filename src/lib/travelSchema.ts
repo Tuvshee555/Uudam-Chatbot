@@ -211,6 +211,11 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_leads ADD COLUMN IF NOT EXISTS brand TEXT NOT NULL DEFAULT '';
       `);
+      // Staff's own note on a lead (Leads tab), kept until they change it (2026-11-22).
+      await client.query(`
+        ALTER TABLE travel_leads ADD COLUMN IF NOT EXISTS staff_note TEXT NOT NULL DEFAULT '';
+        ALTER TABLE travel_leads ADD COLUMN IF NOT EXISTS staff_note_at TIMESTAMPTZ NULL;
+      `);
       // Who took a lead (Leads tab). The notify_* columns are kept only so existing rows and
       // the idempotent ALTER stay valid; nothing writes or reads them any more.
       await client.query(`

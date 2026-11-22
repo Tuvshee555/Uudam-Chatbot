@@ -10,7 +10,7 @@ import {
 import type { LeadCrmStatus } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 import { summarizeLeadAttention } from "../../../lib/leadAttention";
-import { assignLead, countLeads } from "../../../lib/travelLeadsDb";
+import { assignLead, countLeads, LEAD_NOTE_MAX, setLeadNote } from "../../../lib/travelLeadsDb";
 
 const VALID_CRM_STATUSES: LeadCrmStatus[] = ["new_lead", "contacted", "booked", "no_answer"];
 /** One page of the Leads tab, and the set the attention summary is computed over. */
@@ -63,10 +63,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === "PATCH") {
-      const { id, lead_status, assigned_to } = req.body || {};
+      const { id, lead_status, assigned_to, staff_note } = req.body || {};
       const leadId = Number(id);
       if (!Number.isInteger(leadId) || leadId <= 0) {
         return res.status(400).json({ error: "valid id is required" });
+      }
+
+      // Staff's own note on the lead ("" clears it), saved as written.
+      if (typeof staff_note === "string") {
+        if (staff_note.length > LEAD_NOTE_MAX) return res.status(400).json({ error: "note_too_long" });
+        const updated = await setLeadNote(leadId, staff_note);
+        if (!updated) return res.status(404).json({ error: "lead_not_found" });
+        return res.status(200).json({ ok: true });
       }
 
       // A consultant takes the lead (free-text name; "" clears it).

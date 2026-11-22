@@ -9,6 +9,7 @@
  *   replace_photo    an exact photo swap / removal (tripPhotoEdit.ts)
  *   append_notes     one named section added to the description (tripNotesAppend.ts)
  *   fare_change_all  a fare rule over many trips, expanded into one patch per trip
+ *   (set_date_sale   one day's sale fare / «Онцлох» on the website — planned in dateSale.ts)
  *
  * Validation (travelAIValidation) plans every action to refuse what cannot be done, with the
  * reason in Mongolian; apply (travelAIApply) plans it again on the trip as it is at save time

@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Badge, Button, Card, EmptyState, IconButton, Icons, Input, Select, Skeleton, Spinner, Textarea, cx } from "@/components/ui";
 import { StatCard, TabHeader } from "./AdminShared";
 import type { LeadCrmStatus, LeadStats, TravelLead } from "@/lib/adminTypes";
@@ -142,6 +142,7 @@ export function LeadsTab({
   onMarkSeen,
   onUpdateStatus,
   onAssign,
+  onSaveNote,
   onSetBotPaused,
   broadcastMessage,
   broadcastSending,
@@ -166,6 +167,8 @@ export function LeadsTab({
   onMarkSeen: (lead: TravelLead) => void;
   onUpdateStatus: (lead: TravelLead, status: LeadCrmStatus) => void;
   onAssign: (lead: TravelLead, assignee: string) => void;
+  /** Staff's own note on a lead; resolves true once saved. */
+  onSaveNote: (lead: TravelLead, note: string) => Promise<boolean>;
   onSetBotPaused: (lead: TravelLead, paused: boolean) => void;
   broadcastMessage: string;
   broadcastSending: boolean;
@@ -308,6 +311,7 @@ export function LeadsTab({
               onMarkSeen={() => onMarkSeen(lead)}
               onUpdateStatus={(status) => onUpdateStatus(lead, status)}
               onAssign={(assignee) => onAssign(lead, assignee)}
+              onSaveNote={(note) => onSaveNote(lead, note)}
               onSetBotPaused={(paused) => onSetBotPaused(lead, paused)}
             />
           ))}
@@ -389,6 +393,7 @@ function LeadCard({
   onMarkSeen,
   onUpdateStatus,
   onAssign,
+  onSaveNote,
   onSetBotPaused,
 }: {
   lead: TravelLead;
@@ -396,6 +401,7 @@ function LeadCard({
   onMarkSeen: () => void;
   onUpdateStatus: (status: LeadCrmStatus) => void;
   onAssign: (assignee: string) => void;
+  onSaveNote: (note: string) => Promise<boolean>;
   onSetBotPaused: (paused: boolean) => void;
 }) {
   // The bot's own marker after a booking request does not stop it; a person's pause does.
@@ -466,6 +472,8 @@ function LeadCard({
         </details>
       )}
 
+      <LeadNote saved={lead.staff_note ?? ""} savedAt={lead.staff_note_at} onSave={onSaveNote} />
+
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
         <span className="text-xs leading-relaxed text-ink-muted">
           {formatTime(lead.created_at)}
@@ -506,6 +514,43 @@ function LeadCard({
         </div>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Staff's own note on the lead: anything they want to remember about this customer. Saved when the
+ * box loses focus (or Ctrl/⌘+Enter) and kept until they change it.
+ */
+function LeadNote({ saved, savedAt, onSave }: { saved: string; savedAt?: string; onSave: (note: string) => Promise<boolean> }) {
+  const [text, setText] = useState(saved);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  useEffect(() => { setText(saved); }, [saved]);
+  async function save() {
+    if (text === saved || state === "saving") return;
+    setState("saving");
+    setState((await onSave(text)) ? "saved" : "error");
+  }
+  return (
+    <div className="mt-2.5">
+      <textarea
+        value={text}
+        onChange={(event) => { setText(event.target.value); if (state !== "saving") setState("idle"); }}
+        onBlur={() => void save()}
+        onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(); } }}
+        placeholder="Тэмдэглэл бичих… (зөвхөн ажилтнууд харна)"
+        maxLength={4000}
+        rows={/\n/.test(text) || text.length > 80 ? 3 : 1}
+        aria-label="Энэ хүсэлтийн тэмдэглэл"
+        className="block w-full resize-y rounded-lg border border-dashed border-line-strong bg-surface px-3.5 py-2 text-sm leading-relaxed text-ink transition-colors placeholder:text-ink-muted focus:border-solid focus:border-brand"
+      />
+      <p className="mt-1 min-h-4 text-[11px] text-ink-muted">
+        {state === "saving" ? "Хадгалж байна…"
+          : state === "saved" ? "Хадгалсан ✓"
+            : state === "error" ? <span className="text-danger">Хадгалж чадсангүй — дахин оролдоно уу.</span>
+              : text !== saved ? "Хадгалаагүй өөрчлөлт — гадна дарвал хадгална."
+                : saved && savedAt ? `Тэмдэглэл · ${formatTime(savedAt)}` : ""}
+      </p>
+    </div>
   );
 }
 

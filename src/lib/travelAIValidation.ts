@@ -38,6 +38,7 @@ import { validateTripDataChange } from "./tripDataValidation";
 import type { TripFactInput } from "./tripDataValidation";
 import { sharedDistinctive } from "./tripNameTokens";
 import { isDamageKind, markTripDamage } from "./tripDamage";
+import { dateSaleActionFields, dateSaleRequestOf, planDateSale, sanitizeDateSaleAction } from "./dateSale";
 import {
   dateStateProblem,
   dateStatusOf,
@@ -276,7 +277,7 @@ export function validateAIChangeProposal(
     }
 
     if (
-      verb !== "upsert" && verb !== "patch" && verb !== "cancel" && verb !== "set_date_state" && verb !== "delete" &&
+      verb !== "upsert" && verb !== "patch" && verb !== "cancel" && verb !== "set_date_state" && verb !== "set_date_sale" && verb !== "delete" &&
       !isTripEditVerb(verb)
     ) {
       blockingConflicts.push(`${label}: unsupported action "${verb || "unknown"}".`);
@@ -284,7 +285,7 @@ export function validateAIChangeProposal(
     }
 
     if (
-      (verb === "patch" || verb === "cancel" || verb === "set_date_state" || verb === "delete" || isTripEditVerb(verb)) &&
+      (verb === "patch" || verb === "cancel" || verb === "set_date_state" || verb === "set_date_sale" || verb === "delete" || isTripEditVerb(verb)) &&
       tripId &&
       !existingTrips.some((trip) => trip.id === tripId)
     ) {
@@ -296,7 +297,7 @@ export function validateAIChangeProposal(
     // a program day, the age bands, a photo): the trip must be known (by id or an unambiguous
     // name) and the change is planned here on the trip as it is, so whatever apply would refuse
     // is refused now with the reason.
-    if (verb === "set_date_state" || isTripEditVerb(verb)) {
+    if (verb === "set_date_state" || verb === "set_date_sale" || isTripEditVerb(verb)) {
       if (!tripId && !match.route_name && !match.operator_name) {
         blockingConflicts.push(`${label}: аль аяллыг өөрчлөхийг заагаагүй байна.`);
         continue;
@@ -310,6 +311,25 @@ export function validateAIChangeProposal(
         continue;
       }
       const trip = (tripId ? existingTrips.find((entry) => entry.id === tripId) : matchingTrips[0]) as TravelTrip;
+      // A date's sale / «Онцлох» (dateSale.ts): planned again on the trip as it is, so a day gone from the
+      // website or a sale no longer below the regular fare is refused now with the reason. A part that is
+      // already so stays (apply finds it so and writes nothing).
+      if (verb === "set_date_sale") {
+        const action = sanitizeDateSaleAction({ ...(rawAction as unknown as Record<string, unknown>), trip_id: trip.id });
+        delete action.match;
+        action.date = normalizeDateText(String(rawAction.date || ""));
+        const planned = planDateSale(trip, dateSaleRequestOf(action), now);
+        if (!planned.ok) {
+          blockingConflicts.push(planned.reason.includes(trip.route_name) ? planned.reason : `«${trip.route_name}»: ${planned.reason}`);
+          continue;
+        }
+        // What the day showed and its regular fares, for an action built without them (apply's guard, the card's percent).
+        const seen = dateSaleActionFields(planned.plan);
+        if (!("regular_adult" in action) && !("regular_child" in action)) Object.assign(action, { regular_adult: seen.regular_adult, regular_child: seen.regular_child });
+        if (!action.observed_deal) action.observed_deal = seen.observed_deal;
+        sanitizedActions.push(action);
+        continue;
+      }
       const action = sanitizeTripEditAction({ ...rawAction, action: verb as AITripAction["action"], trip_id: trip.id });
       delete action.match;
       if (verb === "set_date_state") {

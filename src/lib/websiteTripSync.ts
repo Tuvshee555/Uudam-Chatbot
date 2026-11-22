@@ -27,6 +27,7 @@ import { inBrandAdminMode, storedPosterPdfUrl } from "./brandAdminMode";
 import { safeFetch, SafeFetchError } from "./safeFetch";
 import { isHostedPhotoUrl } from "./tripPhotoEdit";
 import type { DepartureDateState } from "./travelTypes";
+import { DEALS_KEY, dealFromRow, type DepartureDeal } from "./departureDeals";
 
 let pool: Pool | undefined;
 // A secondary brand's admin syncs the website like the primary's admin (brandAdminMode.ts): its own
@@ -57,7 +58,12 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
       // No sourceMetadata here: it is ~15 KB per trip and the join repeats it on
       // every departure row (35 MB for 343 departures, 90 s). The trip rows
       // fetched below carry it once.
-      bookingPool().query<{ sourceTripId: string; startDate: string; status: string; seatsLeft: number | null }>(`SELECT t."sourceTripId", d."startDate"::text AS "startDate", d.status, d."seatsLeft"
+      // The date's own fare and its sale/«Онцлох» (departureDeals.ts) come along: a few numbers per row.
+      bookingPool().query<{ sourceTripId: string; startDate: string; status: string; seatsLeft: number | null;
+        price: number | null; childPrice: number | null; tripPrice: number | null; tripChildPrice: number | null;
+        salePrice: number | null; saleChildPrice: number | null; isFeatured: boolean | null }>(`SELECT t."sourceTripId", d."startDate"::text AS "startDate", d.status, d."seatsLeft",
+          d.price, d."childPrice", t.price AS "tripPrice", t."childPrice" AS "tripChildPrice",
+          d."salePrice", d."saleChildPrice", d."isFeatured"
         FROM "Trip" t JOIN "Departure" d ON d."tripId"=t.id
         WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
       // The bot sends the live website page instead of the PDF; the slug is
@@ -104,6 +110,19 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
         status: row.status, seatsLeft: row.seatsLeft,
       }, canonicalOffersByTrip.get(sourceTripId))),
     ]));
+    // Sales and «Онцлох» of the dates still ahead and still open (a cancelled or departed row has none).
+    const todayKey = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const dealsByTrip = new Map<string, DepartureDeal[]>();
+    for (const [sourceTripId, rows] of rowsByTrip) {
+      const deals = rows.flatMap((row) => {
+        if (["CANCELLED", "DEPARTED"].includes(String(row.status || "").toUpperCase())) return [];
+        const date = websiteDepartureDateKey(row.startDate);
+        if (!date || date < todayKey) return [];
+        const deal = dealFromRow({ ...row, date });
+        return deal ? [deal] : [];
+      }).sort((a, b) => a.date.localeCompare(b.date));
+      if (deals.length) dealsByTrip.set(sourceTripId, deals);
+    }
     const slugByTrip = new Map<string, { slug: string; isPublished: boolean; details: Record<string, unknown> }>();
     for (const row of slugResult.rows) {
       if (typeof row.slug === "string" && row.slug.trim()) {
@@ -116,8 +135,10 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
         ...trip.extra,
         ...(byTrip.has(trip.id) ? { website_departure_availability: byTrip.get(trip.id) } : {}),
         ...(slugRow ? { website_slug: slugRow.slug, website_published: slugRow.isPublished, website_details: slugRow.details } : {}),
+        ...(dealsByTrip.has(trip.id) ? { [DEALS_KEY]: dealsByTrip.get(trip.id) } : {}),
       };
-      return (byTrip.has(trip.id) || slugRow) ? { ...trip, extra } : trip;
+      if (!dealsByTrip.has(trip.id)) delete (extra as Record<string, unknown>)[DEALS_KEY];
+      return (byTrip.has(trip.id) || slugRow || dealsByTrip.has(trip.id)) ? { ...trip, extra } : trip;
     });
   } catch {
     console.error("Could not read website departure availability");
@@ -683,6 +704,141 @@ export async function changeDepartureState(sourceTripId: string, date: string, s
     after_status: String(row.after_status), after_seats_left: row.after_seats_left ?? null,
   }));
   return { slug: result.rows[0]?.slug ? String(result.rows[0].slug) : null, rows };
+}
+
+/** One date's sale fares and «Онцлох», as a departure row holds them (null = none). */
+export type DepartureDealValues = { salePrice: number | null; saleChildPrice: number | null; isFeatured: boolean };
+/** A website departure row's sale/«Онцлох» before and after a change, and its regular fares. */
+export type DepartureDealRow = { id: string; date: string; before: DepartureDealValues; after: DepartureDealValues; regularAdult: number | null; regularChild: number | null };
+export type DepartureDealChange = { slug: string | null; rows: DepartureDealRow[] };
+
+function dealValues(row: { sale_price: number | null; sale_child_price: number | null; is_featured: boolean | null }): DepartureDealValues {
+  return { salePrice: row.sale_price ?? null, saleChildPrice: row.sale_child_price ?? null, isFeatured: row.is_featured === true };
+}
+
+/**
+ * Sets ONE departure date's sale fares and/or «Онцлох» straight on the website's departure row
+ * (departureDeals.ts). A field left undefined keeps its value; null clears it. Returns every row it
+ * changed with the values before and after, read in the same statement, so the assistant can undo it.
+ */
+export async function changeDepartureDeal(
+  sourceTripId: string,
+  date: string,
+  patch: { salePrice?: number | null; saleChildPrice?: number | null; isFeatured?: boolean },
+): Promise<DepartureDealChange> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { slug: null, rows: [] };
+  const fare = (value: number | null | undefined) => (value === undefined ? undefined : value === null ? null : Math.round(value));
+  const salePrice = fare(patch.salePrice);
+  const saleChildPrice = fare(patch.saleChildPrice);
+  const result = await bookingPool().query<{
+    id: string; date: string; slug: string | null; regular_adult: number | null; regular_child: number | null;
+    sale_price: number | null; sale_child_price: number | null; is_featured: boolean | null;
+    after_sale_price: number | null; after_sale_child_price: number | null; after_is_featured: boolean | null;
+  }>(
+    `WITH target AS (
+       SELECT d.id, to_char((d."startDate" + interval '8 hours')::date, 'YYYY-MM-DD') AS date, t.slug,
+              COALESCE(d.price, t.price) AS regular_adult, COALESCE(d."childPrice", t."childPrice") AS regular_child,
+              d."salePrice" AS sale_price, d."saleChildPrice" AS sale_child_price, d."isFeatured" AS is_featured
+         FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id
+        WHERE t."sourceTripId"=$1
+          AND (d."startDate" + interval '8 hours')::date = $2::date
+          AND d.status NOT IN ('CANCELLED','DEPARTED')
+        FOR UPDATE OF d
+     ), changed AS (
+       UPDATE "Departure" d SET
+         "salePrice"=CASE WHEN $3::boolean THEN $4::double precision ELSE d."salePrice" END,
+         "saleChildPrice"=CASE WHEN $5::boolean THEN $6::double precision ELSE d."saleChildPrice" END,
+         "isFeatured"=CASE WHEN $7::boolean THEN $8::boolean ELSE d."isFeatured" END
+         FROM target WHERE d.id=target.id
+       RETURNING d.id, d."salePrice" AS after_sale_price, d."saleChildPrice" AS after_sale_child_price, d."isFeatured" AS after_is_featured
+     )
+     SELECT target.*, changed.after_sale_price, changed.after_sale_child_price, changed.after_is_featured
+       FROM target JOIN changed ON changed.id=target.id`,
+    [sourceTripId, date,
+      salePrice !== undefined, salePrice ?? null,
+      saleChildPrice !== undefined, saleChildPrice ?? null,
+      patch.isFeatured !== undefined, patch.isFeatured ?? false],
+  );
+  const rows = result.rows.map((row) => ({
+    id: String(row.id),
+    date: String(row.date),
+    before: dealValues(row),
+    after: dealValues({ sale_price: row.after_sale_price, sale_child_price: row.after_sale_child_price, is_featured: row.after_is_featured }),
+    regularAdult: row.regular_adult ?? null,
+    regularChild: row.regular_child ?? null,
+  }));
+  return { slug: result.rows[0]?.slug ? String(result.rows[0].slug) : null, rows };
+}
+
+/** Every upcoming live departure date of a trip with its regular fares and sale/«Онцлох» (the admin's date rows). */
+export async function readTripDepartureDeals(sourceTripId: string): Promise<Array<Omit<DepartureDealRow, "after" | "id">>> {
+  const result = await bookingPool().query<{ date: string; regular_adult: number | null; regular_child: number | null; sale_price: number | null; sale_child_price: number | null; is_featured: boolean | null }>(
+    `SELECT DISTINCT ON ((d."startDate" + interval '8 hours')::date)
+            to_char((d."startDate" + interval '8 hours')::date, 'YYYY-MM-DD') AS date,
+            COALESCE(d.price, t.price) AS regular_adult, COALESCE(d."childPrice", t."childPrice") AS regular_child,
+            d."salePrice" AS sale_price, d."saleChildPrice" AS sale_child_price, d."isFeatured" AS is_featured
+       FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id
+      WHERE t."sourceTripId"=$1 AND d.status NOT IN ('CANCELLED','DEPARTED')
+        AND (d."startDate" + interval '8 hours')::date >= (now() + interval '8 hours')::date
+      ORDER BY (d."startDate" + interval '8 hours')::date, d.id`,
+    [sourceTripId],
+  );
+  return result.rows.map((row) => ({ date: String(row.date), before: dealValues(row), regularAdult: row.regular_adult ?? null, regularChild: row.regular_child ?? null }));
+}
+
+/** One live departure date's regular fares and current sale/«Онцлох», or null when the website has no such date. */
+export async function readDepartureDeal(sourceTripId: string, date: string): Promise<Omit<DepartureDealRow, "after"> | null> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const result = await bookingPool().query<{ id: string; date: string; regular_adult: number | null; regular_child: number | null; sale_price: number | null; sale_child_price: number | null; is_featured: boolean | null }>(
+    `SELECT d.id, to_char((d."startDate" + interval '8 hours')::date, 'YYYY-MM-DD') AS date,
+            COALESCE(d.price, t.price) AS regular_adult, COALESCE(d."childPrice", t."childPrice") AS regular_child,
+            d."salePrice" AS sale_price, d."saleChildPrice" AS sale_child_price, d."isFeatured" AS is_featured
+       FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id
+      WHERE t."sourceTripId"=$1 AND (d."startDate" + interval '8 hours')::date = $2::date
+        AND d.status NOT IN ('CANCELLED','DEPARTED')
+      ORDER BY d."startDate", d.id LIMIT 1`,
+    [sourceTripId, date],
+  );
+  const row = result.rows[0];
+  return row ? { id: String(row.id), date: String(row.date), before: dealValues(row), regularAdult: row.regular_adult ?? null, regularChild: row.regular_child ?? null } : null;
+}
+
+/**
+ * Puts the sale/«Онцлох» of departure rows back to what an assistant change found, but only while
+ * every row still holds what that change wrote: a date edited since is left alone and reported.
+ */
+export async function restoreDepartureDeals(rows: DepartureDealRow[]): Promise<{ restored: number; changedSince: string[] }> {
+  if (!rows.length) return { restored: 0, changedSince: [] };
+  const client = await bookingPool().connect();
+  const same = (a: DepartureDealValues, b: DepartureDealValues) =>
+    a.salePrice === b.salePrice && a.saleChildPrice === b.saleChildPrice && a.isFeatured === b.isFeatured;
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{ id: string; sale_price: number | null; sale_child_price: number | null; is_featured: boolean | null }>(
+      `SELECT id, "salePrice" AS sale_price, "saleChildPrice" AS sale_child_price, "isFeatured" AS is_featured FROM "Departure" WHERE id=ANY($1::text[]) FOR UPDATE`,
+      [rows.map((row) => row.id)]);
+    const now = new Map(current.rows.map((row) => [String(row.id), dealValues(row)]));
+    if (rows.every((row) => now.has(row.id) && same(now.get(row.id)!, row.before))) {
+      await client.query("ROLLBACK");
+      return { restored: 0, changedSince: [] };
+    }
+    const changedSince = rows.filter((row) => !now.has(row.id) || !same(now.get(row.id)!, row.after)).map((row) => row.id);
+    if (changedSince.length) {
+      await client.query("ROLLBACK");
+      return { restored: 0, changedSince };
+    }
+    for (const row of rows) {
+      await client.query(`UPDATE "Departure" SET "salePrice"=$2,"saleChildPrice"=$3,"isFeatured"=$4 WHERE id=$1`,
+        [row.id, row.before.salePrice, row.before.saleChildPrice, row.before.isFeatured]);
+    }
+    await client.query("COMMIT");
+    return { restored: rows.length, changedSince: [] };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**

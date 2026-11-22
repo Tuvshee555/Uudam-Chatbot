@@ -16,6 +16,8 @@
  * cancel or a status change records every website departure row of the trip: undoing it
  * re-activates the trip, which reopens every closed date in the website projection, so each date
  * is then put back to what it was before the change (unless someone changed it in between).
+ * A date's sale / «Онцлох» (set_date_sale) is written on the website's row the same way as a day's
+ * state, and undone from the rows recorded at apply only while they still hold what it wrote.
  */
 import { logError, logWarn } from "./observability";
 import { queryNeon } from "./neonDb";
@@ -32,7 +34,10 @@ import { pricingDays } from "./adminDatePricing";
 import { normalizeExtra } from "./tripExtraSchema";
 import { shortDay } from "./tripDatePrice";
 import type { PosterWrite } from "./connectedTripStore";
-import type { DepartureRowState, DepartureStateChange, DepartureStateRow } from "./websiteTripSync";
+import type { DepartureDealChange, DepartureDealRow, DepartureRowState, DepartureStateChange, DepartureStateRow } from "./websiteTripSync";
+import { saleBelow } from "./departureDeals";
+import { dateSaleLines, dateSaleProblem, dateSaleWrite, type DateSaleObserved } from "./dateSale";
+import { formatMnt } from "./tripFareChange";
 import { savedTripLinks, type SavedTripInput, type SavedTripLink } from "./savedTripLinks";
 import { newWebsiteTripSlug } from "./websiteTripSlug";
 import { unacknowledgedDamage } from "./tripDamage";
@@ -60,6 +65,11 @@ export type AIApplyDeps = {
   setDepartureSeatState: (tripId: string, date: string, state: DateSeatState) => Promise<boolean>;
   /** Every website departure row of the trip, raw; throws when the website is not connected. */
   readDepartureRows: (tripId: string) => Promise<{ slug: string | null; rows: DepartureRowState[] }>;
+  /** One live departure date's regular fares and current sale/«Онцлох», or null when the website has no such date. */
+  readDepartureDeal: (tripId: string, date: string) => Promise<Omit<DepartureDealRow, "after"> | null>;
+  /** Sets one date's sale fares and/or «Онцлох» on the website's rows (undefined keeps, null clears). */
+  changeDepartureDeal: (tripId: string, date: string, patch: { salePrice?: number | null; saleChildPrice?: number | null; isFeatured?: boolean }) => Promise<DepartureDealChange>;
+  restoreDepartureDeals: (rows: DepartureDealRow[]) => Promise<{ restored: number; changedSince: string[] }>;
   /** True while the trip's latest save has not reached the website (its projection is queued). */
   websiteSyncPending: (tripId: string) => Promise<boolean>;
   notifyWebsite: (slugs: string[]) => Promise<void>;
@@ -78,6 +88,9 @@ const defaultDeps: AIApplyDeps = {
   restoreDepartureRows: async (rows) => (await import("./websiteTripSync")).restoreDepartureRows(rows),
   setDepartureSeatState: async (tripId, date, state) => (await import("./websiteTripSync")).setDepartureSeatState(tripId, date, state),
   readDepartureRows: async (tripId) => (await import("./websiteTripSync")).readDepartureRows(tripId),
+  readDepartureDeal: async (tripId, date) => (await import("./websiteTripSync")).readDepartureDeal(tripId, date),
+  changeDepartureDeal: async (tripId, date, patch) => (await import("./websiteTripSync")).changeDepartureDeal(tripId, date, patch),
+  restoreDepartureDeals: async (rows) => (await import("./websiteTripSync")).restoreDepartureDeals(rows),
   websiteSyncPending: async (tripId) => (await import("./websiteTripSync")).websiteSyncPending(tripId),
   notifyWebsite: async (slugs) => (await import("./websiteTripSync")).notifyWebsiteTripsChanged(slugs),
   readWebsiteSlugs: async (tripIds) => (await import("./websiteTripSync")).websiteSlugsFor(tripIds),
@@ -145,6 +158,8 @@ export type AIActionSnapshot = {
    * delete / cancel / a status patch: every website row of the trip before and after the write.
    */
   departure_rows?: DepartureStateRow[];
+  /** set_date_sale: every website row the change wrote, with its sale/«Онцлох» before and after. */
+  departure_deal_rows?: DepartureDealRow[];
   website_slug?: string | null;
   restore?: FieldRestore;
   /** The trip version the action left; rollback is refused once the trip moved on from it. */
@@ -180,7 +195,7 @@ function changedSinceRollbackMessage(trip: TravelTrip | null): string {
 }
 
 /** Keys the read path lays over a trip (from the website) or that are commands, never stored values. */
-const NOT_RESTORED_EXTRA = new Set(["website_departure_availability", "website_slug", "website_published", "website_details", "website_details_patch"]);
+const NOT_RESTORED_EXTRA = new Set(["website_departure_availability", "website_departure_deals", "website_slug", "website_published", "website_details", "website_details_patch"]);
 
 function restoreFor(before: TravelTrip, written: TripMutationFields): FieldRestore {
   const columns: Row = {};
@@ -357,6 +372,85 @@ async function applyDateState(action: AITripAction, targetId: string): Promise<A
   };
 }
 
+/** A live departure row's sale/«Онцлох» as the website shows it (a sale only counts below the regular fare). */
+function liveDealOf(live: Omit<DepartureDealRow, "after">): DateSaleObserved {
+  return {
+    sale_adult: saleBelow(live.regularAdult, live.before.salePrice),
+    sale_child: saleBelow(live.regularChild, live.before.saleChildPrice),
+    featured: live.before.isFeatured === true,
+  };
+}
+
+const sameDeal = (a: DateSaleObserved, b: DateSaleObserved) => a.sale_adult === b.sale_adult && a.sale_child === b.sale_child && a.featured === b.featured;
+
+/**
+ * A sale and/or «Онцлох» on one date (dateSale.ts), written straight on the website's departure row.
+ * Read first: the day must still show what the proposal saw (a date button changes it without moving
+ * the trip's version), and each sale fare must stay below the day's regular fare on the website.
+ */
+async function applyDateSale(action: AITripAction, targetId: string): Promise<ActionResult> {
+  const date = text(action.date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, message: "Огноо буруу байна." };
+  const write = dateSaleWrite(action);
+  if (!Object.keys(write).length) return { ok: false, message: `${shortDay(date)}: хямдралд өөрчлөх зүйл алга.` };
+  const before = await deps.getTripById(targetId);
+  if (!before) return { ok: false, message: "Target trip not found." };
+  if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
+  const problem = dateSaleProblem(before, date, deps.now());
+  if (problem) return { ok: false, message: problem };
+  const failed = (error: unknown): ActionResult => {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, message: /not configured/i.test(message)
+      ? "Вэбсайтын өгөгдлийн сан холбогдоогүй тул огнооны хямдралыг өөрчилж чадсангүй."
+      : `Огнооны хямдралыг өөрчилж чадсангүй: ${message}` };
+  };
+  let live: Omit<DepartureDealRow, "after"> | null;
+  try {
+    live = await deps.readDepartureDeal(targetId, date);
+  } catch (error) {
+    return failed(error);
+  }
+  const day = shortDay(date);
+  if (!live) return { ok: false, message: `"${before.route_name}" аялалд ${day}-ны гаралт вэбсайтад олдсонгүй.` };
+  const regular = { adult: live.regularAdult, child: live.regularChild };
+  for (const [kind, amount, words] of [["adult", write.salePrice, "том хүний"], ["child", write.saleChildPrice, "хүүхдийн"]] as const) {
+    if (typeof amount !== "number") continue;
+    const base = regular[kind];
+    if (base === null || amount >= base) {
+      return { ok: false, message: `«${before.route_name}» аяллын ${day}-ны ${words} хямдралын үнэ ${formatMnt(amount)} нь сайтын үндсэн үнэ ${formatMnt(base)}-өөс бага биш тул хадгалсангүй.` };
+    }
+  }
+  const now = liveDealOf(live);
+  const target: DateSaleObserved = {
+    sale_adult: write.salePrice !== undefined ? write.salePrice : now.sale_adult,
+    sale_child: write.saleChildPrice !== undefined ? write.saleChildPrice : now.sale_child,
+    featured: write.isFeatured !== undefined ? write.isFeatured : now.featured,
+  };
+  // The day already shows exactly this (a date button did the same meanwhile): nothing to write, nothing to undo.
+  if (sameDeal(now, target)) return { ok: true, message: `"${before.route_name}" — ${day}: аль хэдийн ийм хямдрал, «Онцлох»-той байна` };
+  const observed = action.observed_deal;
+  if (observed && !sameDeal(now, { sale_adult: observed.sale_adult ?? null, sale_child: observed.sale_child ?? null, featured: observed.featured === true })) {
+    return { ok: false, message: `«${before.route_name}» аяллын ${day}-ны хямдрал, «Онцлох» энэ саналыг гаргаснаас хойш өөрчлөгдсөн байна. Зааврыг дахин бичвэл одоогийн байдлаар нь шинэ санал гаргана.` };
+  }
+  let change: DepartureDealChange;
+  try {
+    change = await deps.changeDepartureDeal(targetId, date, write);
+  } catch (error) {
+    return failed(error);
+  }
+  if (!change.rows.length) return { ok: false, message: `"${before.route_name}" аялалд ${day}-ны гаралт вэбсайтад олдсонгүй.` };
+  const slug = change.slug || text(before.extra?.website_slug) || null;
+  // The trip page is cached for a day; its date list would show the old fares until then.
+  if (slug) await deps.notifyWebsite([slug]).catch(() => undefined);
+  // Said with the website's own regular fares and what the day held just before the write.
+  const lines = dateSaleLines({ ...action, regular_adult: regular.adult, regular_child: regular.child, observed_deal: now });
+  return {
+    ok: true,
+    message: `"${before.route_name}" — ${lines.join("; ")}`,
+    snapshot: { action, trip_id: targetId, before: null, after: null, departure_deal_rows: change.rows, website_slug: slug },
+  };
+}
+
 async function applyTripEdit(action: AITripAction, targetId: string): Promise<ActionResult> {
   const before = await deps.getTripById(targetId);
   if (!before) return { ok: false, message: "Target trip not found." };
@@ -442,6 +536,7 @@ export async function applyAIAction(input: AITripAction): Promise<ActionResult> 
   if (!targetId) return { ok: false, message: "Target trip not found." };
 
   if (verb === "set_date_state") return applyDateState(action, targetId);
+  if (verb === "set_date_sale") return applyDateSale(action, targetId);
   if (isTripEditVerb(verb)) return applyTripEdit(action, targetId);
 
   if (verb === "delete" || verb === "cancel" || verb === "patch") {
@@ -766,6 +861,14 @@ export async function applyAIProposalDirect(
   };
 }
 
+const amountOrNull = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
+
+/** A departure row's sale/«Онцлох» as rollback_json kept it. */
+function dealValuesOf(value: unknown): DepartureDealRow["before"] {
+  const row = record(value);
+  return { salePrice: amountOrNull(row.salePrice), saleChildPrice: amountOrNull(row.saleChildPrice), isFeatured: row.isFeatured === true };
+}
+
 function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -779,6 +882,12 @@ function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
           id: text(row.id), status: text(row.status), seatsLeft: typeof row.seatsLeft === "number" ? row.seatsLeft : null,
           after_status: text(row.after_status), after_seats_left: typeof row.after_seats_left === "number" ? row.after_seats_left : null,
           ...(/^\d{4}-\d{2}-\d{2}$/.test(text(row.date)) ? { date: text(row.date) } : {}),
+        }))
+        : undefined;
+      const deals = Array.isArray(entry.departure_deal_rows)
+        ? entry.departure_deal_rows.map(record).filter((row) => text(row.id)).map((row) => ({
+          id: text(row.id), date: text(row.date), before: dealValuesOf(row.before), after: dealValuesOf(row.after),
+          regularAdult: amountOrNull(row.regularAdult), regularChild: amountOrNull(row.regularChild),
         }))
         : undefined;
       const restore = entry.restore && typeof entry.restore === "object"
@@ -801,6 +910,7 @@ function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
           : null,
         date_state_before: isDateSeatState(entry.date_state_before) ? entry.date_state_before : null,
         ...(rows ? { departure_rows: rows } : {}),
+        ...(deals ? { departure_deal_rows: deals } : {}),
         ...(typeof entry.website_slug === "string" ? { website_slug: entry.website_slug } : {}),
         ...(restore ? { restore } : {}),
         ...(typeof entry.version_after === "string" ? { version_after: entry.version_after } : {}),
@@ -846,6 +956,23 @@ async function rollbackDateState(snapshot: AIActionSnapshot): Promise<{ ok: bool
   return restored
     ? { ok: true, message: `Restored ${snapshot.trip_id} ${date} → ${DATE_STATE_WORDS[previous]}` }
     : { ok: false, message: `Failed to restore ${snapshot.trip_id} ${date}` };
+}
+
+/**
+ * A date's sale / «Онцлох» put back from its own website rows, only while every row still holds what
+ * the change wrote: a date edited since (a date button, the other admin) is left alone and said.
+ */
+async function rollbackDateSale(snapshot: AIActionSnapshot): Promise<{ ok: boolean; message: string }> {
+  const date = text(snapshot.action.date);
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(date) ? shortDay(date) : date;
+  const rows = snapshot.departure_deal_rows || [];
+  if (!rows.length) return { ok: false, message: `${day}-ны өмнөх хямдрал бүртгэгдээгүй тул автоматаар буцааж чадсангүй — аяллын огнооны мөрнөөс гараар тохируулна уу.` };
+  const outcome = await deps.restoreDepartureDeals(rows);
+  if (outcome.changedSince.length) {
+    return { ok: false, message: `${day}-ны хямдрал, «Онцлох»-ыг энэ өөрчлөлтөөс хойш өөр хүн (эсвэл сайт) өөрчилсөн тул буцаасангүй — сүүлийн засварыг дарахгүйн тулд.` };
+  }
+  if (outcome.restored && snapshot.website_slug) await deps.notifyWebsite([snapshot.website_slug]).catch(() => undefined);
+  return { ok: true, message: `Restored ${snapshot.trip_id} ${date} хямдрал, «Онцлох»` };
 }
 
 /** True when the trip already holds every value a rollback would put back (a rollback run twice). */
@@ -978,9 +1105,12 @@ export async function rollbackSnapshots(snapshots: AIActionSnapshot[]): Promise<
     try {
       // A day's availability is put back from its own website rows; it never falls through to
       // the trip branch (a snapshot with no "before" there would archive a live trip).
-      const outcome = String(snapshot.action?.action || "") === "set_date_state"
+      const verb = String(snapshot.action?.action || "");
+      const outcome = verb === "set_date_state"
         ? await rollbackDateState(snapshot)
-        : await rollbackTripSnapshot(snapshot, produced);
+        : verb === "set_date_sale"
+          ? await rollbackDateSale(snapshot)
+          : await rollbackTripSnapshot(snapshot, produced);
       results.push(outcome.message);
       if (!outcome.ok) failed = true;
     } catch (error) {

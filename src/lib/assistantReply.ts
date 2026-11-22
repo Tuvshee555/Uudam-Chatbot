@@ -37,6 +37,7 @@ import { ensureTravelSchema, findTripMatches, listTrips } from "./travelDb";
 import { generateAIProposal, generateAIProposalFromContentBatched, persistProposal, reviseAIRequest } from "./travelAI";
 import { validateAIChangeProposal } from "./travelAIValidation";
 import { markTripDamage } from "./tripDamage";
+import { asksDateSale } from "./dateSale";
 import type { AIChangeProposal, AITripAction, TravelTrip } from "./travelTypes";
 
 export type AssistantReply = (
@@ -144,6 +145,11 @@ async function brainFallback(instruction: string, trips: Trips, options: Assista
     const trip = ids.length === 1 && links.every((link) => link.trip_id) ? trips.find((entry) => entry.id === ids[0]) : undefined;
     if (!trip) return { kind: "note", text: `${options.why}\n\nХолбоосоос аль аялал болохыг олж чадсангүй, тиймээс юу ч өөрчлөхгүй.` };
     text = withTripTag(text, trip);
+  }
+  // A date's sale or «Онцлох» keeps the regular fare: the simple mode would read "2,390,000 болгож
+  // хямдрал үүсгэ" as a new regular price, so it does not take it at all.
+  if (asksDateSale(text)) {
+    return { kind: "note", text: `${options.why}\n\nОгнооны хямдрал, «Онцлох»-ыг энгийн горимд тавихгүй (үндсэн үнийг андуурч солихгүйн тулд). Аяллын засварын огнооны мөрнөөс тавих, эсвэл AI ажиллах үед дахин бичнэ үү.` };
   }
   const outcome = think({ text, trips, now: options.now, context: options.context });
   logInfo("assistant.brain", { outcome: outcome.kind, intent: outcome.intent.kind, fallback: true });

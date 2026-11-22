@@ -790,6 +790,22 @@ export default function AdminPage() {
       await loadLeadsState({ showLoading: true });
     }
   }
+  /** Staff's own note on a lead, saved as written; true when it was saved. */
+  async function saveLeadNote(lead: TravelLead, note: string): Promise<boolean> {
+    try {
+      const res = await fetchWithAdmin("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: lead.id, staff_note: note }),
+      });
+      if (!res.ok) throw new Error("failed");
+      setLeads((prev) => prev.map((item) => item.id === lead.id ? { ...item, staff_note: note, staff_note_at: new Date().toISOString() } : item));
+      return true;
+    } catch {
+      toast.error("Тэмдэглэл хадгалж чадсангүй.");
+      return false;
+    }
+  }
   /** Saves only what this person changed since the form was loaded (changedSettingsFields). */
   async function saveSettings() {
     if (!settingsForm) return;
@@ -1094,6 +1110,7 @@ export default function AdminPage() {
               onMarkSeen={(lead) => void markLeadSeen(lead)}
               onUpdateStatus={(lead, status) => void updateLeadCrmStatus(lead, status)}
               onAssign={(lead, assignee) => void assignLead(lead, assignee)}
+              onSaveNote={(lead, note) => saveLeadNote(lead, note)}
               onSetBotPaused={(lead, paused) => void setLeadBotPaused(lead, paused)}
               broadcastMessage={broadcastMessage}
               broadcastSending={broadcastSending}

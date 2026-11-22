@@ -90,6 +90,13 @@ export function tripFareMap(trip: Pick<TravelTrip, "adult_price" | "child_price"
   for (const key of ["child_rules", "passenger_prices", "child_price_rules"]) {
     for (const band of records(extra[key])) if (!isInfantBand(band)) add(band.price);
   }
+  // A date's regular and sale fares (departureDeals.ts): both are this brand's, the percent follows.
+  for (const deal of records(extra.website_departure_deals)) {
+    addAdult(deal.regular_adult_price);
+    addAdult(deal.sale_adult_price);
+    add(deal.regular_child_price);
+    add(deal.sale_child_price);
+  }
   // A room row priced like a per-person fare (≥ half the cheapest adult fare) is a fare; a smaller one
   // is a supplement and stays.
   const cheapestAdult = adultFares.length ? Math.min(...adultFares) : 0;

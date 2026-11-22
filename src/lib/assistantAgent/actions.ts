@@ -12,13 +12,14 @@
  *    sync would undo it), with the reason in plain Mongolian;
  *  - a photo is only ever one on our Cloudinary (host_image result or a hosted attachment);
  *  - every action is planned by the same code that validates and applies it (tripActionPlan:
- *    dateStateProblem, planDatePrice, planTripEdit, expandFareChangeAll), so the card never
+ *    dateStateProblem, planDatePrice, planTripEdit, expandFareChangeAll; dateSale.planDateSale), so the card never
  *    promises what save would refuse (B8), and its summary line is the card's own text;
  *  - every action carries trip_id, the trip version (expected_updated_at) and a short
  *    Mongolian summary; a change that is already so is not proposed.
  */
 import { fareWarnings } from "../assistantBrain";
 import { describeChange } from "../assistantActionText";
+import { dateSaleActionFields, planDateSale } from "../dateSale";
 import { dateStateProblem, dateStatusOf, expandFareChangeAll, fareChangeOf, partnerEditProblem, planTripEdit, sanitizeTripEditAction, tripDepartureDays } from "../tripActionPlan";
 import { PARTNER_EDIT_REASON, partnerSourceUrl } from "../tripDatePrice";
 import { isHostedPhotoUrl } from "../tripPhotoEdit";
@@ -108,6 +109,21 @@ function buildDateState(raw: Row, trip: TravelTrip, ctx: ProposalContext): Built
   // The date's status as the admin saw it: apply refuses if a seat button changed it since.
   const action = { ...base("set_date_state", trip, ctx), date, state, observed_status: dateStatusOf(trip, date) };
   return { action: { ...action, summary: cardLine(action, trip, ctx, `${shortDate(date)}: ${state}`) } };
+}
+
+/**
+ * A sale and/or «Онцлох» on one date (dateSale.ts): written on the website's departure row like a day's
+ * state, the regular fare kept. The date must be one of the trip's departures on the website; a sale
+ * not below the date's regular fare is refused (explained, not retried: the amount is his).
+ */
+function buildDateSale(raw: Row, trip: TravelTrip, ctx: ProposalContext): Built {
+  const date = text(raw.date);
+  const planned = planDateSale(trip, { date, sale: raw.sale, clear_sale: raw.clear_sale, featured: raw.featured, from_adult: raw.from_adult, from_child: raw.from_child }, ctx.now);
+  if (!planned.ok) return { refuse: planned.reason, final: planned.final };
+  if (planned.plan.already) return { already: planned.plan.already, notes: planned.plan.notes };
+  // The date's regular fares and its sale/«Онцлох» as the admin saw them: apply refuses if a date button changed them since.
+  const action: StoredAction = { ...base("set_date_sale", trip, ctx), ...(dateSaleActionFields(planned.plan) as Row) };
+  return { action: { ...action, summary: cardLine(action, trip, ctx, `${shortDate(date)}: хямдрал`) }, notes: planned.plan.notes };
 }
 
 /** The model's fares ({fares:{adult:{delta}}} or top-level adult) as the stored set_date_price action. */
@@ -415,6 +431,7 @@ export function buildAgentProposal(rawActions: unknown, replyText: string, ctx: 
     }
     let built: Built;
     if (verb === "set_date_state") built = buildDateState(raw, trip, ctx);
+    else if (verb === "set_date_sale") built = buildDateSale(raw, trip, ctx);
     else if (PLANNED_VERBS.has(verb)) built = buildPlanned(verb, raw, trip, ctx);
     else if (verb === "change_dates") built = buildChangeDates(raw, trip, ctx);
     else if (verb === "patch") built = buildPatch(raw, trip, ctx);
@@ -453,9 +470,10 @@ export function buildAgentProposal(rawActions: unknown, replyText: string, ctx: 
     const last = dates.length ? ` (сүүлийн огноо: ${dates.slice(-3).join(", ")})` : "";
     refusals.push(`«${trip.route_name}»: гарах өдөр нь бүгд өнгөрсөн${last} тул идэвхжүүлбэл систем шууд дахин архивлана. Эхлээд шинэ огноо нэмээрэй, ж: «${trip.route_name} 12/5, 12/12-нд гарна» — тэгвэл өөрөө идэвхжиж сайтад гарна.`);
   }
-  // A day's state is written on the website and leaves the trip's version as it was; saved first,
-  // it never makes a later edit of the same trip look "changed since the proposal".
-  actions.sort((a, b) => Number(b.action === "set_date_state") - Number(a.action === "set_date_state"));
+  // A day's state or sale is written on the website and leaves the trip's version as it was; saved
+  // first, it never makes a later edit of the same trip look "changed since the proposal".
+  const websiteDay = (action: StoredAction) => Number(action.action === "set_date_state" || action.action === "set_date_sale");
+  actions.sort((a, b) => websiteDay(b) - websiteDay(a));
   if (!actions.length) {
     const lines = [...refusals, ...already];
     return { note: lines.length ? `Өөрчлөх зүйл алга. ${lines.join(" ")}` : (text(replyText) || "Өөрчлөх зүйл олдсонгүй."), fixable: fixable && refusals.length > 0 };

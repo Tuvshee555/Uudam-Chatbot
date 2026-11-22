@@ -15,6 +15,7 @@
 import { logInfo } from "../observability";
 import { amountsInText, type AskDialogQuestion, type AssistantAskPayload } from "../assistantBrain";
 import { buildAgentProposal } from "./actions";
+import { DATE_SALE_WORDS } from "../dateSale";
 import { defaultAgentDeps } from "./deps";
 import { withoutUrls } from "./links";
 import { AgentModelError, type AgentModelFailure } from "./openaiTools";
@@ -104,6 +105,8 @@ const ADMIN_VERBS: Record<string, { words: RegExp | ((admin: string) => boolean)
     what: "сайтад харуулах, нуух",
   },
   fare_change_all: { words: asksPrice, what: "үнэ өөрчлөх" },
+  // A sale or «Онцлох» on a date changes what customers are quoted: only when his words ask for one.
+  set_date_sale: { words: DATE_SALE_WORDS, what: "огноонд хямдрал, «Онцлох» тавих" },
 };
 
 // After a web page was read, every edit also needs the admin's words for its kind: a page
@@ -113,6 +116,7 @@ const AFTER_WEB_WORDS: Record<string, RegExp | ((admin: string) => boolean)> = {
   patch_itinerary_day: /өдөр|хөтөлбөр|odor|udur|hutulbur|khutulbur|program|(?<!\p{L})day(?!\p{L})/iu,
   set_date_price: asksPrice,
   set_date_state: /дүүр|цөөн|нээ|хаа|зогсоо|суудал|duur|tsoon|nee|haa|full|open|low|pause|seat/iu,
+  set_date_sale: DATE_SALE_WORDS,
   change_dates: /гаралт|огноо|өдөр|garalt|ognoo|date|departure/iu,
   set_age_bands: /нас|сар|(?<!\p{L})(?:nas|age)(?!\p{L})/iu,
   patch: /нэр|буудал|хоол|суудал|хугацаа|шөнө|хоног|тэмдэглэл|тайлбар|зогсоо|идэвхж|сэргээ|төлөв|(?<!\p{L})(?:ner|buudal|hool|suudal|name|hotel|food|meal|seats?|notes?|status|pause|resume)(?!\p{L})/iu,
@@ -500,7 +504,7 @@ async function finish(calls: ToolCall[], state: TurnState, repairsLeft: number, 
     // On 2026-11-22 a first proposal was refused for another part and its rewrite dropped «нярай … үнэгүй».
     if (!state.documents.length && !state.fareNudged && canNudge && setsPrice(withoutOptionTags(state.instruction)) && !changesFare(proposes.flatMap((entry) => (Array.isArray(entry.args.actions) ? entry.args.actions.map(recordOf) : [])))) {
       state.fareNudged = true;
-      return { retry: JSON.stringify({ ok: false, not_done: "His message also sets a price (an amount, or «үнэгүй» = set 0), but no action changes a fare. Nothing was proposed.", hint: "Call propose_changes again with EVERY part of his message: the fare (fare_change_all or set_date_price) AND the other changes. If the price really must stay, say why in reply_text." }), nudge: true };
+      return { retry: JSON.stringify({ ok: false, not_done: "His message also sets a price (an amount, or «үнэгүй» = set 0), but no action changes a fare. Nothing was proposed.", hint: "Call propose_changes again with EVERY part of his message: the fare (fare_change_all or set_date_price; a sale on one date is set_date_sale) AND the other changes. If the price really must stay, say why in reply_text." }), nudge: true };
     }
     // What the files and his decisions call for but the proposal lacks: sent back once or twice, then said on the card.
     const gaps = state.intake ? proposalGaps({ intake: state.intake, decisions: state.decisions, actions: guarded.actions, context: intakeContext(state), compared: new Set(state.compared.keys()), now: state.now }) : [];
@@ -559,9 +563,10 @@ function setsPrice(admin: string): boolean {
   return /үнэгүй|(?:^|[^a-z])uneg[uү]i/iu.test(admin) || (PRICE_WORDS.test(admin) && amountsInText(admin).length > 0);
 }
 
-/** Some action changes a fare: a trip-wide or one-date price, or a price field. */
+/** Some action changes a fare: a trip-wide or one-date price, a date's sale, or a price field. */
 function changesFare(actions: Args[]): boolean {
   return actions.some((action) => ["fare_change_all", "set_date_price"].includes(str(action.action))
+    || (str(action.action) === "set_date_sale" && (Object.keys(recordOf(action.sale)).length > 0 || action.clear_sale === true))
     || Object.keys(recordOf(action.fields)).some((key) => /_price$/.test(key)));
 }
 
