@@ -149,7 +149,7 @@ one recommended, «Өөр» to type his own answer — and then do all of it.
   same house photos first.
 
 Checked on a replay of the real 2026-11-21 package against the catalogue as it was before
-(`tmp/replay-intake.ts`, git-ignored; config in `uudam-eval/assistant-walk/replay-1121.json`): the
+(`scripts/assistant-intake-replay.ts`; config with the real files outside git in `uudam-eval/assistant-walk/replay-1121.json`): the
 dialog asked the same four questions Claude asked, and with the owner's real answers the proposal
 matched what was saved by hand (the archived check-up trip restored with the coming dates and
 fares, the live one's four hotels and one sentence, the 54-item list on both, the new trip's file to
