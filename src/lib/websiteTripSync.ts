@@ -23,22 +23,31 @@ import { newWebsiteTripSlug } from "./websiteTripSlug";
 import { logWarn } from "./observability";
 import { installBrandWriteGuard } from "./brandWriteGuard";
 import { isSecondaryBrand } from "./brand";
+import { inBrandAdminMode, storedPosterPdfUrl } from "./brandAdminMode";
 import { safeFetch, SafeFetchError } from "./safeFetch";
 import { isHostedPhotoUrl } from "./tripPhotoEdit";
 import type { DepartureDateState } from "./travelTypes";
 
 let pool: Pool | undefined;
+// A secondary brand's admin syncs the website like the primary's admin (brandAdminMode.ts): its own
+// unguarded connections, chosen per call in the caller's context.
+let adminPool: Pool | undefined;
 function bookingPool() {
   if (!process.env.BOOKING_DATABASE_URL) throw new Error("BOOKING_DATABASE_URL is not configured");
-  if (!pool) {
-    const url = new URL(process.env.BOOKING_DATABASE_URL);
-    if (url.searchParams.has("sslmode")) url.searchParams.set("sslmode", "verify-full");
-    pool = new Pool({ connectionString: url.toString(), max: 3, connectionTimeoutMillis: 10000,
-      statement_timeout: 20000, idleTimeoutMillis: 10000, allowExitOnIdle: true });
-    pool.on("error", () => console.error("Booking database connection interrupted"));
-    installBrandWriteGuard(pool);
+  const admin = isSecondaryBrand() && inBrandAdminMode();
+  const existing = admin ? adminPool : pool;
+  if (existing) return existing;
+  const url = new URL(process.env.BOOKING_DATABASE_URL);
+  if (url.searchParams.has("sslmode")) url.searchParams.set("sslmode", "verify-full");
+  const created = new Pool({ connectionString: url.toString(), max: 3, connectionTimeoutMillis: 10000,
+    statement_timeout: 20000, idleTimeoutMillis: 10000, allowExitOnIdle: true });
+  created.on("error", () => console.error("Booking database connection interrupted"));
+  if (admin) adminPool = created;
+  else {
+    installBrandWriteGuard(created);
+    pool = created;
   }
-  return pool;
+  return created;
 }
 
 export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Promise<TravelTrip[]> {
@@ -367,7 +376,8 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const hadSourcePhotos = strings(previousSnapshot.photos).length > 0;
   const image = photos[0] || (hadSourcePhotos ? "" : prior?.image || "");
   // The rendered poster first; a brochure staff uploaded when there is no poster PDF.
-  const pdf = websiteBrochurePdfUrl(source.extra);
+  // Stored for both brands' sites: always the primary bot's PDF (the secondary site shows its own).
+  const pdf = storedPosterPdfUrl(websiteBrochurePdfUrl(source.extra));
   if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF (the trip has no usable uploaded brochure_pdf_url)");
   const marketingBadge = websiteMarketingBadge(source);
   const held = heldWebsiteFields(prior?.sourceMetadata);
@@ -717,7 +727,7 @@ export async function restoreDepartureRows(rows: DepartureStateRow[]): Promise<{
 
 export async function flushWebsiteSync(tripId?: string, limit = 5) {
   // Only the primary brand writes the website (brand.ts); a secondary leaves its queue alone.
-  if (isSecondaryBrand()) return { processed: 0 };
+  if (isSecondaryBrand() && !inBrandAdminMode()) return { processed: 0 };
   // A deployment without the optional website connection keeps its durable
   // events pending until configured; it must not turn them all into errors.
   if (!process.env.BOOKING_DATABASE_URL) return { processed: 0 };

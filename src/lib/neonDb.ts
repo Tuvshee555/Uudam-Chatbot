@@ -1,10 +1,16 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import { installBrandWriteGuard } from "./brandWriteGuard";
+import { isSecondaryBrand } from "./brand";
+import { inBrandAdminMode } from "./brandAdminMode";
 import { getEnv } from "./env";
 import { logError, logInfo, recordCounter } from "./observability";
 
 const env = getEnv();
 let pool: Pool | null = null;
+// A secondary brand's admin requests use their own connections without the write guard: its admin
+// edits the shared catalogue like the primary's admin (brandAdminMode.ts). Chosen per call, in the
+// caller's context, so the guard never depends on which request a pooled connection last served.
+let adminPool: Pool | null = null;
 
 function normalizeConnectionString(connectionString: string): string {
   try {
@@ -24,7 +30,7 @@ function normalizeConnectionString(connectionString: string): string {
   }
 }
 
-function createPool(connectionString: string): Pool {
+function createPool(connectionString: string, guarded = true): Pool {
   const p = new Pool({
     connectionString: normalizeConnectionString(connectionString),
     max: 6,
@@ -38,7 +44,7 @@ function createPool(connectionString: string): Pool {
     options: "-c client_encoding=UTF8",
   });
   // A secondary brand's deployment reads the shared catalogue but writes only its own customers' rows.
-  installBrandWriteGuard(p);
+  if (guarded) installBrandWriteGuard(p);
   return p;
 }
 
@@ -66,6 +72,15 @@ function getPool() {
       logError("neon.preview_database_refused", { hint: "Preview needs its own database branch and PREVIEW_DATABASE_ISOLATED=1." });
     }
     return null;
+  }
+  if (isSecondaryBrand() && inBrandAdminMode()) {
+    if (!adminPool) {
+      adminPool = createPool(env.neonDatabaseUrl, false);
+      adminPool.on("error", (error) => {
+        logError("neon.pool.error", { message: error instanceof Error ? error.message : String(error), pool: "brand_admin" });
+      });
+    }
+    return adminPool;
   }
   if (!pool) {
     pool = createPool(env.neonDatabaseUrl);
@@ -118,8 +133,8 @@ export async function withNeonClient<T>(
 }
 
 export async function closeNeonPool(): Promise<void> {
-  if (!pool) return;
-  const currentPool = pool;
+  const pools = [pool, adminPool].filter((value): value is Pool => value != null);
   pool = null;
-  await currentPool.end();
+  adminPool = null;
+  await Promise.all(pools.map((value) => value.end()));
 }

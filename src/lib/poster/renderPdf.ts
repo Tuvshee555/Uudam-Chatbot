@@ -170,8 +170,11 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
     // the page open across the write leaves that memory in place for the next
     // poster to trip over.
     await page.close();
-    await queryNeon(`INSERT INTO poster_pdf_cache(poster_id,hash,pdf) VALUES ($1,$2,$3)
-      ON CONFLICT(poster_id) DO UPDATE SET hash=EXCLUDED.hash,pdf=EXCLUDED.pdf,updated_at=NOW()`, [poster.id,hash,pdf]);
+    // The cache holds the primary's PDF per poster; a secondary brand renders its own every time.
+    if (brand.isPrimary) {
+      await queryNeon(`INSERT INTO poster_pdf_cache(poster_id,hash,pdf) VALUES ($1,$2,$3)
+        ON CONFLICT(poster_id) DO UPDATE SET hash=EXCLUDED.hash,pdf=EXCLUDED.pdf,updated_at=NOW()`, [poster.id,hash,pdf]);
+    }
     return pdf;
   } finally { await browser.close(); }
 }

@@ -12,6 +12,7 @@ import {
 import { getClientKey, rateLimitAsync } from "./rateLimit";
 import { recordCounter } from "./observability";
 import { getBrand, isSecondaryBrand } from "./brand";
+import { enterBrandAdminMode } from "./brandAdminMode";
 
 /**
  * Who may use the admin API. Exactly two ways in:
@@ -66,8 +67,11 @@ export type AdminAccessOptions = {
 };
 
 export function hasAdminAccess(req: NextApiRequest, options: AdminAccessOptions = {}): boolean {
-  if (hasAdminSession(req)) return true;
-  return options.allowApiToken !== false && hasReadOnlyApiToken(req);
+  const allowed = hasAdminSession(req) || (options.allowApiToken !== false && hasReadOnlyApiToken(req));
+  // A secondary brand's admin sees and saves the shared data exactly as the primary's (brandAdminMode.ts).
+  // Entered synchronously, before the caller's first await, so the whole request carries it.
+  if (allowed) enterBrandAdminMode();
+  return allowed;
 }
 
 /** Charges one failed attempt to the caller's auth budget; false once the budget is spent. */
@@ -99,16 +103,15 @@ export async function chargeFailedAdminAuth(
 const GET_WITH_SIDE_EFFECTS = new Set(["api.admin.website-sync", "api.subscribe_feed"]);
 
 /**
- * The admin writes a secondary brand's deployment makes (brand.ts): its own customers' leads,
- * conversations, documents and pauses. Trips, settings, posters, the catalogue and partner data are
- * shared with the primary brand and edited only in its admin (the database refuses them anyway:
- * brandWriteGuard.ts); answering 403 first keeps the admin from showing a save that changed nothing.
+ * A secondary brand's admin (brand.ts) edits the shared trips, settings and posters exactly like the
+ * primary's admin (brandAdminMode.ts). Only the primary's own operations stay in the primary's admin:
+ * its corporate catalogue, the customer-document migration and the Google Drive sync.
  */
-const SECONDARY_BRAND_WRITE_ROUTES = new Set(["api.admin.leads", "api.admin.conversation", "api.admin.customer-documents", "api.pause"]);
+const PRIMARY_ONLY_ADMIN_ROUTES = /^api\.admin\.(?:catalogue|document_migration|drive_sync)\b/;
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 export function secondaryBrandRefusesAdminWrite(route: string, method: string | undefined): boolean {
-  return isSecondaryBrand() && !READ_METHODS.has((method || "GET").toUpperCase()) && !SECONDARY_BRAND_WRITE_ROUTES.has(route);
+  return isSecondaryBrand() && !READ_METHODS.has((method || "GET").toUpperCase()) && PRIMARY_ONLY_ADMIN_ROUTES.test(route);
 }
 
 export async function requireAdminAccess(
@@ -120,7 +123,7 @@ export async function requireAdminAccess(
   const allowApiToken = options.allowApiToken !== false && !GET_WITH_SIDE_EFFECTS.has(route);
   if (hasAdminAccess(req, { ...options, allowApiToken })) {
     if (secondaryBrandRefusesAdminWrite(route, req.method)) {
-      res.status(403).json({ error: `${getBrand().nameMn}: аялал, тохиргоо хоёр брэндэд нэг. Үүнийг Уудам Трэвэлийн админаас засна уу.` });
+      res.status(403).json({ error: `${getBrand().nameMn}: энэ үйлдэл зөвхөн Уудам Трэвэлийн админд байна.` });
       return false;
     }
     return true;

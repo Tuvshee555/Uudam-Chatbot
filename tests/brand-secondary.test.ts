@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import test, { afterEach } from "node:test";
-import { brandText, getBrand, resolveBrand } from "../src/lib/brand";
+import test, { afterEach, before } from "node:test";
+import { brandPhones, brandText, getBrand, registerPrimaryPhones, resolveBrand } from "../src/lib/brand";
+import { enterBrandAdminMode, inBrandAdminMode, runInBrandAdminMode, storedPosterPdfUrl } from "../src/lib/brandAdminMode";
+import { applyBrandToSettings } from "../src/lib/brandSettings";
+import { applyTestEnv } from "./helpers/env";
 import {
   applyBrandFares,
   applyBrandFaresToPoster,
@@ -10,14 +13,27 @@ import {
   tripFareMap,
 } from "../src/lib/brandFares";
 import { classifyBrandWrite, __guardClientForTests } from "../src/lib/brandWriteGuard";
-import type { TravelTrip } from "../src/lib/travelTypes";
+import type { TravelBotSettings, TravelTrip } from "../src/lib/travelTypes";
+
+let secondaryBrandRefusesAdminWrite: typeof import("../src/lib/adminAccess").secondaryBrandRefusesAdminWrite;
+before(async () => {
+  applyTestEnv();
+  ({ secondaryBrandRefusesAdminWrite } = await import("../src/lib/adminAccess"));
+});
 
 const ORIGINAL_BRAND = process.env.BRAND;
 afterEach(() => {
   if (ORIGINAL_BRAND === undefined) delete process.env.BRAND; else process.env.BRAND = ORIGINAL_BRAND;
   delete process.env.BRAND_WEBSITE_URL;
   delete process.env.BRAND_DISCOUNT_MNT;
+  delete process.env.BRAND_CONTACT_PHONES;
+  delete process.env.SITE_URL;
 });
+
+/** Runs fn as its own "request": its own async context, like two requests on one server. */
+function asRequest<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => setImmediate(() => fn().then(resolve, reject)));
+}
 
 // Invented catalogue data only (repo rule): no real trip, place, price or date.
 function inventedTrip(overrides: Partial<TravelTrip> = {}): TravelTrip {
@@ -223,4 +239,80 @@ test("a guarded client never sends a blocked write and answers it like a write t
   const allowed = await (client.query as (t: string) => Promise<{ rowCount: number }>)("SELECT 1");
   assert.equal(allowed.rowCount, 1);
   assert.deepEqual(sent, ["SELECT 1"]);
+});
+
+// Invented phone numbers only.
+test("a brand with its own number: every primary number becomes it and a list collapses to one", () => {
+  registerPrimaryPhones("1234 5678 / 2345 6789 / 3456-7890");
+  assert.equal(brandPhones("📞 1234 5678 / 2345 6789 / 3456 7890", "8765 4321"), "📞 8765 4321");
+  assert.equal(
+    brandPhones("☎️ 1234-5678\n📱 2345-6789\n📱 3456-7890\n\nЭсвэл дугаараа үлдээгээрэй", "8765 4321"),
+    "☎️ 8765-4321\n\nЭсвэл дугаараа үлдээгээрэй",
+  );
+  assert.equal(brandPhones("Утас: 12345678, 9 хүн", "87654321"), "Утас: 87654321, 9 хүн");
+  assert.equal(brandPhones("Үнэ 1,234,567₮, 21234 5678", "8765 4321"), "Үнэ 1,234,567₮, 21234 5678", "longer numbers and amounts are not phones");
+});
+
+test("brand text: the brand's own number, and program PDFs from its own bot", () => {
+  process.env.BRAND = "magnai";
+  process.env.BRAND_CONTACT_PHONES = "8765 4321";
+  process.env.SITE_URL = "https://magnai-bot.example";
+  registerPrimaryPhones("1234 5678");
+  assert.equal(brandText("Уудам Трэвэл 📞 1234 5678"), "Магнай Травел 📞 8765 4321");
+  assert.equal(brandText("PDF: https://uudam-chatbot.vercel.app/api/poster-pdf?id=p-1"), "PDF: https://magnai-bot.example/api/poster-pdf?id=p-1");
+  assert.equal(brandText("https://uudam-chatbot.vercel.app/admin"), "https://uudam-chatbot.vercel.app/admin", "only program-PDF links move");
+});
+
+test("admin mode lives only in the admin request that entered it, and never for the primary", async () => {
+  process.env.BRAND = "magnai";
+  assert.equal(inBrandAdminMode(), false);
+  assert.equal(runInBrandAdminMode(() => inBrandAdminMode()), true);
+  // Entered synchronously inside an awaited helper, as requireAdminAccess → hasAdminAccess does.
+  async function requireLike() { enterBrandAdminMode(); return true; }
+  async function adminRequest() { await requireLike(); await new Promise((r) => setTimeout(r, 5)); return inBrandAdminMode(); }
+  async function customerRequest() { await new Promise((r) => setTimeout(r, 5)); return inBrandAdminMode(); }
+  const [admin, customer] = await Promise.all([asRequest(adminRequest), asRequest(customerRequest)]);
+  assert.equal(admin, true);
+  assert.equal(customer, false, "a customer's request running at the same time is not in admin mode");
+  assert.equal(inBrandAdminMode(), false, "the surrounding context is untouched");
+  delete process.env.BRAND;
+  assert.equal(await asRequest(adminRequest), false, "the primary has no admin mode");
+});
+
+test("a link stored from the brand's admin always points at the primary bot", () => {
+  process.env.BRAND = "magnai";
+  assert.equal(storedPosterPdfUrl("https://magnai-chatbot.vercel.app/api/poster-pdf?id=p-1"), "https://uudam-chatbot.vercel.app/api/poster-pdf?id=p-1");
+  assert.equal(storedPosterPdfUrl("https://res.cloudinary.com/x/raw/upload/a.pdf"), "https://res.cloudinary.com/x/raw/upload/a.pdf");
+  delete process.env.BRAND;
+  assert.equal(storedPosterPdfUrl("https://magnai-chatbot.vercel.app/api/poster-pdf?id=p-1"), "https://magnai-chatbot.vercel.app/api/poster-pdf?id=p-1");
+});
+
+test("settings: the brand's customers read its words and number, its admin the shared row unchanged", () => {
+  process.env.BRAND = "magnai";
+  process.env.BRAND_CONTACT_PHONES = "8765 4321";
+  const shared = {
+    business_name: "Uudam Travel", system_prompt: "You are the assistant for Uudam Travel.",
+    quick_info_reply: "Уудам Трэвэл-д тавтай морил!\n📞 2222 3333 / 4444 5555", quick_info_keywords: [],
+    comment_trigger_patterns: [], comment_public_reply: "", comment_dm_reply: "", special_offers: [], discount_policies: [],
+    verified_credentials: [], faq: [], handoff_enabled: true, handoff_keywords: [], handoff_reply: "", handoff_pause_minutes: 60,
+    chat_buttons: [], extra: { contact_phones: "2222 3333 / 4444 5555", office_address: "Төв оффис" }, updated_at: "",
+  } as unknown as TravelBotSettings;
+  const customer = applyBrandToSettings(shared);
+  assert.equal(customer.quick_info_reply, "Магнай Травел-д тавтай морил!\n📞 8765 4321");
+  assert.equal(customer.extra.contact_phones, "8765 4321");
+  assert.equal(customer.extra.office_address, "Төв оффис");
+  assert.equal(customer.system_prompt, "You are the assistant for Magnai Travel.");
+  assert.deepEqual(runInBrandAdminMode(() => applyBrandToSettings(shared)), shared);
+});
+
+test("the brand's admin edits everything except the primary's own operations", () => {
+  process.env.BRAND = "magnai";
+  assert.equal(secondaryBrandRefusesAdminWrite("api.admin.trips", "POST"), false);
+  assert.equal(secondaryBrandRefusesAdminWrite("api.admin.settings", "PUT"), false);
+  assert.equal(secondaryBrandRefusesAdminWrite("api.admin.poster.trip", "POST"), false);
+  assert.equal(secondaryBrandRefusesAdminWrite("api.admin.catalogue.generate", "POST"), true);
+  assert.equal(secondaryBrandRefusesAdminWrite("api.admin.catalogue.generate", "GET"), false);
+  assert.equal(secondaryBrandRefusesAdminWrite("api.admin.document_migration", "POST"), true);
+  delete process.env.BRAND;
+  assert.equal(secondaryBrandRefusesAdminWrite("api.admin.catalogue.generate", "POST"), false);
 });

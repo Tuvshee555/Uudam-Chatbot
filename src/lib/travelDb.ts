@@ -7,6 +7,7 @@ import { queryNeon } from "./neonDb";
 import { brandText, getBrand, ownedBrandSql } from "./brand";
 import { applyBrandFares } from "./brandFares";
 import { applyBrandToSettings } from "./brandSettings";
+import { inBrandAdminMode } from "./brandAdminMode";
 import { connectedTripMutation, type PosterWrite } from "./connectedTripStore";
 import { flushWebsiteSync, withWebsiteDepartureAvailability } from "./websiteTripSync";
 import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
@@ -515,7 +516,7 @@ function mapBotSettingsRow(row: Record<string, unknown> | undefined): TravelBotS
 
 export async function getTravelBotSettings(): Promise<TravelBotSettings> {
   if (botSettingsCache && botSettingsCache.expiresAt > Date.now()) {
-    return botSettingsCache.value;
+    return applyBrandToSettings(botSettingsCache.value);
   }
 
   const ready = await ensureTravelSchema();
@@ -548,10 +549,11 @@ export async function getTravelBotSettings(): Promise<TravelBotSettings> {
     `,
   );
 
-  // A secondary brand reads the shared settings in its own words (brandSettings.ts).
-  const value = applyBrandToSettings(mapBotSettingsRow(result?.rows?.[0]));
+  // The cache keeps the shared settings raw; a secondary brand's customers read them in its own words
+  // (brandSettings.ts), its admin raw (brandAdminMode.ts).
+  const value = mapBotSettingsRow(result?.rows?.[0]);
   botSettingsCache = { value, expiresAt: Date.now() + 5_000 };
-  return value;
+  return applyBrandToSettings(value);
 }
 
 export async function updateTravelBotSettings(
@@ -684,7 +686,8 @@ export async function updateTravelBotSettings(
  */
 function brandTrips(trips: TravelTrip[]): TravelTrip[] {
   const brand = getBrand();
-  if (brand.isPrimary) return trips;
+  // The brand's admin edits the shared catalogue: it sees the real fares (brandAdminMode.ts).
+  if (brand.isPrimary || inBrandAdminMode()) return trips;
   return trips.map((trip) => applyBrandFares(trip, brand.fareDiscountMnt, brandText));
 }
 

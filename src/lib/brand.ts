@@ -5,11 +5,13 @@
  * - "uudam" (default, the primary): Uudam Travel. It owns the catalogue, the bot settings and every
  *   row written before brands existed.
  * - "magnai": «Магнай Травел», a second Facebook page answered by its own Vercel deployment
- *   (BRAND=magnai). Same trips, same answers, same contacts; its name, its website and its
- *   adult/child fares (BRAND_DISCOUNT_MNT lower, brandFares.ts) differ.
+ *   (BRAND=magnai). Same trips, same answers; its name, its website, its phone number
+ *   (BRAND_CONTACT_PHONES) and its adult/child fares (BRAND_DISCOUNT_MNT lower, brandFares.ts) differ.
  *
- * A secondary brand never writes the shared catalogue or settings (brandWriteGuard.ts) and only sweeps
- * and lists the customers it owns: travel_senders.brand / travel_leads.brand = `storageKey`.
+ * A secondary brand's customers see the shared data in its words (brandText, brandFares). Its admin
+ * sees and saves the shared data exactly as the primary's admin does (brandAdminMode.ts); outside
+ * admin requests it never writes the shared catalogue or settings (brandWriteGuard.ts), and it only
+ * sweeps and lists the customers it owns: travel_senders.brand / travel_leads.brand = `storageKey`.
  * The primary's storageKey is "" so every legacy row (and every row it writes) stays its own.
  */
 
@@ -44,10 +46,16 @@ export type Brand = {
   /** Optional contact overrides; null = the shared settings' contacts (same company, same staff). */
   contactPhones: string | null;
   officeAddress: string | null;
+  /** This brand's bot deployment (its program-PDF links), no trailing slash. */
+  botUrl: string;
+  /** The primary brand's bot: links stored in the shared catalogue always point there. */
+  primaryBotUrl: string;
 };
 
 const UUDAM_SITE = "https://uudamtravel.mn";
+const UUDAM_BOT = "https://uudam-chatbot.vercel.app";
 const MAGNAI_SITE_DEFAULT = "https://magnai-travel.vercel.app";
+const MAGNAI_BOT_DEFAULT = "https://magnai-chatbot.vercel.app";
 const MAGNAI_DEFAULT_DISCOUNT = 50_000;
 
 function siteUrl(raw: string | undefined, fallback: string): string {
@@ -96,6 +104,8 @@ export function resolveBrand(env: NodeJS.ProcessEnv = process.env): Brand {
       sweepLockId: 2,
       contactPhones: optionalText(env.BRAND_CONTACT_PHONES),
       officeAddress: optionalText(env.BRAND_OFFICE_ADDRESS),
+      botUrl: siteUrl(env.SITE_URL, MAGNAI_BOT_DEFAULT),
+      primaryBotUrl: siteUrl(env.BRAND_PRIMARY_BOT_URL, UUDAM_BOT),
     };
   }
   return {
@@ -116,6 +126,8 @@ export function resolveBrand(env: NodeJS.ProcessEnv = process.env): Brand {
     sweepLockId: 1,
     contactPhones: null,
     officeAddress: null,
+    botUrl: UUDAM_BOT,
+    primaryBotUrl: UUDAM_BOT,
   };
 }
 
@@ -124,7 +136,10 @@ let cache: { signature: string; brand: Brand } | null = null;
 /** The brand of this process (env BRAND). Recomputed only when the brand env values change. */
 export function getBrand(): Brand {
   const env = process.env;
-  const signature = [env.BRAND, env.BRAND_WEBSITE_URL, env.BRAND_DISCOUNT_MNT, env.BRAND_CONTACT_PHONES, env.BRAND_OFFICE_ADDRESS].join("\u0001");
+  const signature = [
+    env.BRAND, env.BRAND_WEBSITE_URL, env.BRAND_DISCOUNT_MNT, env.BRAND_CONTACT_PHONES,
+    env.BRAND_OFFICE_ADDRESS, env.SITE_URL, env.BRAND_PRIMARY_BOT_URL,
+  ].join("\u0001");
   if (!cache || cache.signature !== signature) cache = { signature, brand: resolveBrand(env) };
   return cache.brand;
 }
@@ -153,26 +168,33 @@ export function knownWebsiteHosts(): string[] {
   return Array.from(hosts);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** `hosts` as one regex alternation, dots escaped. */
 export function websiteHostPattern(): string {
-  return knownWebsiteHosts().map((host) => host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return knownWebsiteHosts().map(escapeRegExp).join("|");
 }
 
 const URL_SPLIT = /(https?:\/\/[^\s<>"'`«»]+)/giu;
 
 /**
- * A customer-facing text in this brand's words: the primary's names become this brand's, and links to
- * the primary's website point at this brand's site (same paths: both sites run the same code).
- * Text inside other URLs is never touched (Cloudinary folders are named after the primary).
- * Identity for the primary brand.
+ * A customer-facing text in this brand's words: the primary's names become this brand's, links to
+ * the primary's website point at this brand's site (same paths: both sites run the same code), the
+ * primary bot's program PDFs at this brand's bot, and the primary's phone numbers become this brand's
+ * own when it has one. Text inside other URLs is never touched (Cloudinary folders are named after
+ * the primary). Identity for the primary brand.
  */
 export function brandText(text: string): string {
   const brand = getBrand();
   if (brand.isPrimary || !text) return text;
-  return text.split(URL_SPLIT).map((part, index) => {
+  const primaryBotPdf = new RegExp(`^${escapeRegExp(brand.primaryBotUrl)}(?=/api/poster-pdf)`, "iu");
+  const branded = text.split(URL_SPLIT).map((part, index) => {
     if (index % 2 === 1) {
-      // A URL: only the primary website's host is swapped.
-      return part.replace(/^(https?:\/\/)(?:www\.)?uudamtravel\.mn(?=[/?#]|$)/iu, `$1${brand.websiteHost}`);
+      return part
+        .replace(/^(https?:\/\/)(?:www\.)?uudamtravel\.mn(?=[/?#]|$)/iu, `$1${brand.websiteHost}`)
+        .replace(primaryBotPdf, brand.botUrl);
     }
     return part
       .replace(/(?:www\.)?uudamtravel\.mn/giu, brand.websiteHost)
@@ -186,4 +208,41 @@ export function brandText(text: string): string {
       .replace(/УУДАМ|ҮҮДЭМ/gu, brand.nameMn.split(" ")[0].toUpperCase())
       .replace(/Уудам|Үүдэм/gu, brand.nameMn.split(" ")[0]);
   }).join("");
+  return brand.contactPhones ? brandPhones(branded, brand.contactPhones) : branded;
+}
+
+/**
+ * The primary brand's phone numbers as customers see them: these (its welcome text and posters print
+ * them) plus every number in the shared settings' list, added at runtime (brandSettings.ts).
+ */
+const primaryPhones = new Set<string>(["77136633", "89136633", "91172769", "99248000"]);
+
+/** Adds the numbers found in a shared text (any "#### ####" / "####-####" / "########" style). */
+export function registerPrimaryPhones(text: string): void {
+  for (const match of text.matchAll(/(?<!\d)\d{4}[\s-]?\d{4}(?!\d)/g)) primaryPhones.add(match[0].replace(/\D/g, ""));
+}
+
+/**
+ * Every primary number in a text becomes `ownPhones` (an 8-digit number), in the same style
+ * ("7713 6633" → "9026 6633", "7713-6633" → "9026-6633"); a list of them collapses to one number and a
+ * line that only repeats it is dropped.
+ */
+export function brandPhones(text: string, ownPhones: string): string {
+  const own = ownPhones.replace(/\D/g, "");
+  if (own.length !== 8 || !text) return text;
+  let out = text;
+  for (const phone of primaryPhones) {
+    if (phone === own) continue;
+    const pattern = new RegExp(`(?<!\\d)${phone.slice(0, 4)}([\\s-]?)${phone.slice(4)}(?!\\d)`, "g");
+    out = out.replace(pattern, (_match, separator: string) => `${own.slice(0, 4)}${separator}${own.slice(4)}`);
+  }
+  const ownPattern = `${own.slice(0, 4)}[\\s-]?${own.slice(4)}`;
+  out = out.replace(new RegExp(`(${ownPattern})(?:\\s*[/,|]\\s*${ownPattern})+`, "g"), "$1");
+  let shown = false;
+  return out.split("\n").filter((line) => {
+    if (line.replace(/[^\p{L}\p{N}]+/gu, "") !== own) return true;
+    if (shown) return false;
+    shown = true;
+    return true;
+  }).join("\n");
 }

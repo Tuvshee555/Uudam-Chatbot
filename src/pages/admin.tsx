@@ -51,6 +51,8 @@ export default function AdminPage() {
   const authRef = useRef(authState);
   const [loginError, setLoginError] = useState("");
   const [googleSignIn, setGoogleSignIn] = useState(false);
+  // A secondary brand's admin (Magnai) says once that its trips and settings are the shared ones.
+  const [brandNotice, setBrandNotice] = useState<string | null>(null);
   const [dbInfo, setDbInfo] = useState<{
     configured: boolean;
     schemaReady: boolean;
@@ -411,8 +413,9 @@ export default function AdminPage() {
       storage?.removeItem(SECRET_KEY);
       storage?.removeItem(SECRET_TS_KEY);
       const res = await fetch("/api/admin/session", { cache: "no-store" }).catch(() => null);
-      const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean; google_sign_in?: boolean } | null : null;
+      const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean; google_sign_in?: boolean; brand_notice?: string | null } | null : null;
       if (cancelled) return;
+      setBrandNotice(typeof json?.brand_notice === "string" && json.brand_notice ? json.brand_notice : null);
       // A refused Google sign-in comes back as ?login_error=<code>; show it once, drop it from the URL.
       const url = new URL(window.location.href);
       const googleError = url.searchParams.get("login_error");
@@ -927,6 +930,9 @@ export default function AdminPage() {
         <main id="admin-content" tabIndex={-1} className={cx("min-w-0 flex-1", fullBleed ? "flex min-h-0 flex-col overflow-hidden" : "scroll-area overflow-y-auto p-4 sm:p-6 lg:p-8")}>
           <div className={cx("w-full", fullBleed ? "flex min-h-0 flex-1 flex-col" : "mx-auto max-w-6xl")}>
           <div className={cx(fullBleed && "shrink-0 px-4 pt-4 empty:hidden sm:px-6")}>
+          {brandNotice && (
+            <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">{brandNotice}</div>
+          )}
           {botPaused && (
             <div className="mb-4 rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

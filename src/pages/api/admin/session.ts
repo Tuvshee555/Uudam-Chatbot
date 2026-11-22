@@ -1,6 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getEnv } from "../../../lib/env";
 import { adminSignInAvailable, readAdminSession } from "../../../lib/adminAccess";
+import { getBrand } from "../../../lib/brand";
+
+/**
+ * A secondary brand's admin (brand.ts) edits the same trips and settings as the primary's, and sees
+ * the real fares there (brandAdminMode.ts): the admin says so once, at the top. Null for the primary.
+ */
+function brandNotice(): string | null {
+  const brand = getBrand();
+  if (brand.isPrimary) return null;
+  const discount = brand.fareDiscountMnt > 0
+    ? ` Энд Уудамын жинхэнэ үнэ харагдана; ${brand.nameMn}-ийн үйлчлүүлэгчид том хүн, хүүхдийн үнийг ${brand.fareDiscountMnt.toLocaleString("en-US")}₮ хямд харна.`
+    : "";
+  return `${brand.nameMn}-ийн админ. Аялал, тохиргоо Уудам Трэвэлтэй нэг: энд засвал хоёуланд нь өөрчлөгдөнө.${discount}`;
+}
 import {
   adminSessionCookie,
   clearedAdminSessionCookie,
@@ -34,7 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const renewed = createAdminSessionToken(env.adminSessionSecret, session.email);
         if (renewed) {
           res.setHeader("Set-Cookie", adminSessionCookie(renewed.token, renewed.expiresAt));
-          return res.status(200).json({ ok: true, authorized: true, google_sign_in: googleSignIn, expires_at: renewed.expiresAt });
+          return res.status(200).json({ ok: true, authorized: true, google_sign_in: googleSignIn, expires_at: renewed.expiresAt, brand_notice: brandNotice() });
         }
       }
       return res.status(200).json({
@@ -42,6 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         authorized: session != null,
         google_sign_in: googleSignIn,
         expires_at: session?.expiresAt ?? null,
+        brand_notice: session ? brandNotice() : null,
       });
     }
 

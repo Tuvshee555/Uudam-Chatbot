@@ -3,6 +3,7 @@ import { queryNeon, withNeonClient } from "./neonDb";
 import { tripToPoster } from "./connectedTripMapping";
 import type { TravelTrip } from "./travelTypes";
 import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
+import { storedPosterPdfUrl } from "./brandAdminMode";
 import { followedPosterPriceTable } from "./poster/posterTableFollow";
 
 let ready: Promise<void> | undefined;
@@ -115,7 +116,8 @@ export async function connectedTripMutation<T extends QueryResultRow>(
       }
       if (result.rows[0]) {
         const trip = result.rows[0] as unknown as TravelTrip;
-        const pdfUrl = getPosterPdfPublicUrl(String(trip.extra.poster_trip_id));
+        // Stored in the shared catalogue: always the primary bot's PDF (brandAdminMode.ts).
+        const pdfUrl = storedPosterPdfUrl(getPosterPdfPublicUrl(String(trip.extra.poster_trip_id)));
         if (pdfUrl) {
           trip.extra = { ...trip.extra, brochure_pdf_url: pdfUrl, brochure_pdf_required: true,
             brochure_pdf_missing: false, source_file_attachment_id: "" };
