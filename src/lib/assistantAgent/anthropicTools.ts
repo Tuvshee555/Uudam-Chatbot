@@ -122,15 +122,17 @@ export function anthropicChatWith(client: Anthropic, options: { effort?: Effort 
       response = await client.beta.messages.create({
         model: input.model,
         max_tokens: Math.max(MIN_MAX_TOKENS, input.maxOutputTokens ?? 0),
-        ...(system ? { system } : {}),
+        // The rules and tools are the same on every call: cached for an hour, so a session of instructions
+        // buys them once (2026-11-22, cost); the rest of the turn is cached per round by the top-level breakpoint.
+        ...(system ? { system: [{ type: "text" as const, text: system, cache_control: { type: "ephemeral" as const, ttl: "1h" as const } }] } : {}),
         messages,
         tools: toAnthropicTools(input.tools),
         tool_choice: { type: "auto" },
         output_config: { effort: options.effort ?? anthropicEffort() },
         // The whole prefix up to the latest block is cached: every round re-sends the same documents.
         cache_control: { type: "ephemeral" },
-        betas: [FALLBACK_BETA],
-        fallbacks: "default",
+        // Server-side fallback exists for Sonnet / Opus / Fable, not for Haiku.
+        ...(/haiku/i.test(input.model) ? {} : { betas: [FALLBACK_BETA], fallbacks: "default" as const }),
       }, { timeout: input.timeoutMs, maxRetries: 1 });
     } catch (error) {
       const failure = anthropicFailure(error);

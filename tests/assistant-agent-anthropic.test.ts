@@ -77,7 +77,7 @@ test("one call: auto tool choice, medium effort, the cached prefix, the fallback
   assert.match(sent[0].url, /\/v1\/messages/);
   assert.equal(body.model, "claude-sonnet-5-5");
   assert.equal(body.max_tokens, 16_000, "room for thinking as well as the reply");
-  assert.equal(body.system, "RULES");
+  assert.deepEqual(body.system, [{ type: "text", text: "RULES", cache_control: { type: "ephemeral", ttl: "1h" } }], "the fixed rules are cached for an hour");
   assert.deepEqual(body.tool_choice, { type: "auto" }, "forced tool choice is a 400 on this model");
   assert.deepEqual(body.output_config, { effort: "medium" });
   assert.deepEqual(body.cache_control, { type: "ephemeral" });

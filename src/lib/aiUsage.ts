@@ -23,6 +23,8 @@ const PRICE_PER_MILLION_USD: Record<string, [number, number, number]> = {
   // Claude for the admin assistant (anthropicTools.ts); a cache write costs 1.25× input and is counted here at input price.
   "claude-sonnet-5-5": [2, 10, 0.1],
   "claude-opus-5-5": [4, 20, 0.2],
+  // Up to 100K-token prompts (each agent call stays under it); cached reads estimated at a tenth.
+  "claude-haiku-5-5": [0.1, 0.5, 0.01],
 };
 
 export function estimateCostUsd(model: string, usage: AiUsage): number | null {
