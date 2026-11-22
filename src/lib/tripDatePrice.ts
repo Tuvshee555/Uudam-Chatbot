@@ -120,6 +120,30 @@ export function datePriceWarnings(before: Record<string, number | null>, after: 
   return out;
 }
 
+/**
+ * The trip's single fare as one price row over its calendar departure dates, or null when there
+ * is nothing to start from (no tugrik adult fare, no calendar dates). Child and infant fares carry
+ * the trip's age bands (extra.age_rules), so the row reads as the trip did.
+ */
+export function basePriceRow(trip: TravelTrip): Row | null {
+  const dates = [...new Set((trip.departure_dates || []).map((value) => text(value)).filter((value) => ISO.test(value)))].sort();
+  const currency = (text(trip.currency) || "MNT").toUpperCase();
+  if (!dates.length || currency !== "MNT" || num(trip.adult_price) === null) return null;
+  const ages = record(trip.extra?.age_rules);
+  const childAge = text(ages.child);
+  const infantAge = text(ages.infant);
+  const tiers: Row[] = [];
+  if (num(trip.child_price) !== null) tiers.push({ label: ["Хүүхэд", childAge].filter(Boolean).join(" "), age_range: childAge, price: trip.child_price, currency, note: trip.child_price === 0 ? "Үнэгүй" : "" });
+  if (num(trip.infant_price) !== null) tiers.push({ label: ["Нярай", infantAge].filter(Boolean).join(" "), age_range: infantAge, price: trip.infant_price, currency, note: trip.infant_price === 0 ? "Үнэгүй" : "" });
+  return {
+    label: dates.join(", "), dates, display_dates: dates, date_keys: dates,
+    adult_price: trip.adult_price, adult_price_range: null,
+    child_price: num(trip.child_price), infant_price: num(trip.infant_price),
+    child_age: childAge, infant_age: infantAge,
+    passenger_prices: tiers, note: "", currency,
+  };
+}
+
 export function planDatePrice(trip: TravelTrip, input: DatePriceInput, posterData: unknown | null, now: Date = new Date()): Planned<DatePricePlan> {
   const fail = (reason: string): Planned<DatePricePlan> => ({ ok: false, reason });
   const date = text(input.date);
@@ -134,9 +158,18 @@ export function planDatePrice(trip: TravelTrip, input: DatePriceInput, posterDat
   }
   if (!Object.keys(amounts).length) return fail(`${day}: ямар үнийг хэдээр өөрчлөхийг заагаагүй байна.`);
 
-  const groups = records(trip.extra?.price_groups);
+  let groups = records(trip.extra?.price_groups);
   if (!groups.length) {
-    return fail(`«${trip.route_name}» аялалд огноогоор тусдаа үнэ алга — бүх огноо нэг үнэтэй. Аяллын үнийг бүх огноонд өөрчлөх үү, эсвэл «Аяллууд» хэсэгт ${day}-нд үнийн мөр нэмэх үү?`);
+    // One price for every date (owner, 2026-11-22: "11/30 … 12/23 – 3,290,000 / 2,790,000" on a trip
+    // priced 3,490,000 for all its dates was refused as "бүх огноо нэг үнэтэй"). The trip's own
+    // fare becomes one row over its departure dates, as the editor's «Үнийн мөр нэмэх» starts it;
+    // the named date is then split out of it below and every other date keeps that fare.
+    const seeded = basePriceRow(trip);
+    if (!seeded) {
+      return fail(`«${trip.route_name}» аялалд огноогоор тусдаа үнэ алга — бүх огноо нэг үнэтэй. Аяллын үнийг бүх огноонд өөрчлөх үү, эсвэл «Аяллууд» хэсэгт ${day}-нд үнийн мөр нэмэх үү?`);
+    }
+    if (!pricingDays(seeded, now).includes(date)) return fail(`«${trip.route_name}» аялал ${day}-нд гарахгүй (гарах өдрүүдэд алга). Эхлээд гарах өдрийг нэмнэ үү.`);
+    groups = [seeded];
   }
   const hotel = text(input.hotel);
   const packageId = text(input.package_id);

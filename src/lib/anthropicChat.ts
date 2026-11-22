@@ -76,11 +76,18 @@ export const claudeSmartModel = () => process.env.AI_CLAUDE_SMART_MODEL?.trim() 
 export const claudeFastModel = () => process.env.AI_CLAUDE_FAST_MODEL?.trim() || CLAUDE_FAST_DEFAULT;
 
 /** The Claude model for a call that asked for an OpenAI model. */
-export function claudeModelFor(requested: string | undefined): string {
+export function claudeModelFor(requested: string | undefined, source = ""): string {
   const model = String(requested || "").trim();
   if (/^claude-/i.test(model)) return model;
+  // Admin file and catalogue work is never a "simple" step, whatever model its caller names or
+  // leaves out: the card rewrite after an answer (travel.ops.ai_clarify, no model named) went to
+  // Haiku on 2026-11-22 and was cut off mid-JSON three times («not valid JSON yet»).
+  if (CAREFUL_SOURCES.test(source)) return claudeSmartModel();
   return FAST_OPENAI_MODELS.test(model) ? claudeFastModel() : claudeSmartModel();
 }
+
+/** Room for an answer when the caller sets none: OpenAI's own output limit was the cap there. */
+const UNCAPPED_MAX_TOKENS = 16_384;
 
 const isHaiku = (model: string) => /haiku/i.test(model);
 
@@ -92,7 +99,7 @@ function effortFrom(value: string | undefined, fallback: Effort): Effort {
 /** Thinking, effort and room for one call. */
 export function claudeCallShape(model: string, source: string, maxOutputTokens: number | undefined) {
   const careful = CAREFUL_SOURCES.test(source) && !isHaiku(model);
-  const requested = typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? Math.trunc(maxOutputTokens) : 4_096;
+  const requested = typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? Math.trunc(maxOutputTokens) : UNCAPPED_MAX_TOKENS;
   if (careful) {
     return {
       thinking: { type: "adaptive" as const },
@@ -165,7 +172,7 @@ function client(): Anthropic {
  * answer, a staff lead, never an apology.
  */
 export async function askClaudeChatParts(parts: OpenAIPart[], options: ClaudeCallOptions = {}): Promise<OpenAIResult | null> {
-  const model = claudeModelFor(options.model);
+  const model = claudeModelFor(options.model, options.source);
   const source = options.source || "unknown";
   const shape = claudeCallShape(model, source, options.maxOutputTokens);
   const system = [options.systemText?.trim(), options.jsonMode ? JSON_RULE : ""].filter(Boolean).join("\n\n");

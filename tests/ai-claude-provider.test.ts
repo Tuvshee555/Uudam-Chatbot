@@ -74,6 +74,9 @@ test("the switch and the models: the mini steps go to Haiku, everything else to 
     assert.equal(chat.claudeModelFor("gpt-4.1-mini"), "claude-sonnet-5-5", "which-trip understanding and customer images are not the place to save");
     assert.equal(chat.claudeModelFor("gpt-4o"), "claude-sonnet-5-5", "files and price photos");
     assert.equal(chat.claudeModelFor("claude-opus-5-5"), "claude-opus-5-5");
+    assert.equal(chat.claudeModelFor("gpt-4o-mini", "travel.ops.ai_clarify"), "claude-sonnet-5-5", "the card rewrite names no model (the gpt-4o-mini default); it was sent to Haiku and cut off mid-JSON (2026-11-22)");
+    assert.equal(chat.claudeModelFor("gpt-4o-mini", "travel.ops.file_parse"), "claude-sonnet-5-5", "admin file work is never a simple step");
+    assert.equal(chat.claudeModelFor("gpt-4o-mini", "api.webhook.catalog_listing"), "claude-haiku-5-5", "the chat memory note stays on Haiku");
   });
   await withClaude({ AI_CLAUDE_SMART_MODEL: "claude-opus-5-5", AI_CLAUDE_FAST_MODEL: "claude-sonnet-5-5" }, async () => {
     assert.equal(chat.claudeModelFor("gpt-4.1"), "claude-opus-5-5");
@@ -90,7 +93,8 @@ test("call shape: customer steps answer at once (thinking off), admin file work 
   assert.deepEqual(claudeCallShape("claude-sonnet-5-5", "travel.ops.file_parse", 16_000), { thinking: { type: "adaptive" }, effort: "medium", maxTokens: 32_000 });
   assert.deepEqual(claudeCallShape("claude-haiku-5-5", "trip_photos.rank", 200), { thinking: { type: "disabled" }, effort: "low", maxTokens: 200 });
   assert.equal(claudeCallShape("claude-haiku-5-5", "travel.ops.file_parse", undefined).thinking.type, "disabled", "Haiku never thinks here");
-  assert.equal(claudeCallShape("claude-sonnet-5-5", "api.webhook", undefined).maxTokens, 4_096);
+  assert.equal(claudeCallShape("claude-sonnet-5-5", "api.webhook", undefined).maxTokens, 16_384, "no cap named: OpenAI's own limit was the cap");
+  assert.equal(claudeCallShape("claude-sonnet-5-5", "travel.ops.ai_clarify", undefined).maxTokens, 32_384, "a whole card rewrite plus thinking");
 });
 
 test("a customer reply through the shared call: Sonnet, cached rules, no temperature, the text back and the usage recorded", async () => {

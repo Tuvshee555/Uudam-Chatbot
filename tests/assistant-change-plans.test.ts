@@ -86,8 +86,41 @@ test("nothing is guessed: ambiguous rows and tiers, missing fares, non-tugrik ro
   assert.match(refused(fixtureTrip(), { date: "2099-02-24", adult: { set: 2_790_000 } }), /аль хэдийн/);
   assert.match(refused(fixtureTrip(), { date: "2099-02-24", adult: { set: 1, delta: 2 } }), /дүн буруу/);
   assert.match(refused(fixtureTrip({}, { price_groups: [{ dates: ["2099-02-24"], adult_price: 3000, currency: "CNY" }] }), { date: "2099-02-24", adult: { set: 3100 } }), /зөвхөн төгрөгөөр/);
-  assert.match(refused(fixtureTrip({}, { price_groups: [] }), { date: "2099-02-24", adult: { delta: 1000 } }), /бүх огноо нэг үнэтэй/);
+  assert.match(refused(fixtureTrip({}, { price_groups: [] }), { date: "2099-03-01", adult: { set: 2_900_000 } }), /гарахгүй/, "a single-price trip: a date it does not run on is still refused");
   assert.match(refused(partner(), { date: "2099-02-24", adult: { delta: 100_000 } }), /хамтрагчийн сайтаас/);
+});
+
+test("one price for every date: the named dates get their own fare, every other date keeps the trip's fare (owner, 2026-11-22)", () => {
+  // The Datong-shaped case: one fare for all dates, two fare levels given by date.
+  let trip = fixtureTrip({}, { price_groups: [], age_rules: { adult: "", child: "2-11 нас", infant: "" } });
+  const dates = pricingDays({ dates: trip.departure_dates } as Row, NOW);
+  assert.ok(dates.length >= 2, "the fixture runs on several dates");
+  const [first, ...rest] = trip.departure_dates.filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)).sort();
+  const result = planDatePrice(trip, { date: first, adult: { set: 3_290_000 }, child: { set: 2_790_000 } }, null, NOW);
+  assert.equal(result.ok, true, result.ok ? "" : result.reason);
+  if (!result.ok) return;
+  const groups = groupsOf(result.plan.fields);
+  const own = onDate(groups, first)[0];
+  assert.equal(own.adult_price, 3_290_000);
+  assert.equal(own.child_price, 2_790_000);
+  assert.equal(own.child_age, "2-11 нас", "the trip's child band is kept");
+  for (const day of rest) {
+    const kept = onDate(groups, day)[0];
+    assert.equal(kept.adult_price, trip.adult_price, `${day} keeps the trip's fare`);
+    assert.equal(kept.child_price, trip.child_price);
+  }
+  // The next date is planned on the saved result (save applies actions one after another).
+  trip = { ...trip, extra: { ...trip.extra, ...result.plan.fields.extra } } as TravelTrip;
+  if (rest.length) {
+    const second = planDatePrice(trip, { date: rest[0], adult: { set: 3_290_000 } }, null, NOW);
+    assert.equal(second.ok, true, second.ok ? "" : second.reason);
+    if (second.ok) {
+      const after = groupsOf(second.plan.fields);
+      assert.equal(onDate(after, first)[0].adult_price, 3_290_000, "the first date's new fare survives");
+      assert.equal(onDate(after, rest[0])[0].adult_price, 3_290_000);
+      for (const day of rest.slice(1)) assert.equal(onDate(after, day)[0].adult_price, trip.adult_price);
+    }
+  }
 });
 
 test("a fare slip is flagged for the review (42,900 for 42,900,000)", () => {
