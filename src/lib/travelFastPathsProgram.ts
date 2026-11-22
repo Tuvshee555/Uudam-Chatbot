@@ -593,10 +593,10 @@ export function buildArchivedTripNotice(
   // Owner, 2026-11-22: the trip "has ended", and a group of ten or more can still go on it on a date they choose.
   // The handlers answer with the full ended-trip reply (endedTrip.ts: the open trips of the same direction last);
   // this short form is the catalogue listing's.
-  const status = reason === "no_departure_dates" ? NEVER_DATED_LINE : `Энэ ${ENDED_TRIP_MARKER}.`;
+  const status = reason === "no_departure_dates" ? NEVER_DATED_LINE : ENDED_TRIP_MARKER;
   return {
     trip: resolution.trip,
-    reply: `✈️ ${resolution.trip.route_name}\n${status}\n\n${ENDED_TRIP_GROUP_LINE}`,
+    reply: `${resolution.trip.route_name} — ${status}.\n${ENDED_TRIP_GROUP_LINE}`,
   };
 }
 

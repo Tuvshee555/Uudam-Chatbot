@@ -69,9 +69,7 @@ function customerNumbers(text: string): { days: Set<string>; amounts: Set<number
   return { days, amounts };
 }
 
-// A departures LIST heading ("Гарах өдрүүд:", "Гарах өдрүүд нь:"), not the ended-trip sentence "… товлосон гарах өдрүүд дууссан"
-// (endedTrip.ts, 2026-11-22), which names no trip of the catalogue and lists nothing.
-const TRIP_CONTENT = /Гарах өдрүүд(?: нь)?:|сонголт бий|Аяллууд:|Манай аяллууд|гарах аяллууд|Өөр \d+ (?:сонголт|аялал)|Тэр хугацаанд гарах аялал/i;
+const TRIP_CONTENT = /Гарах өдрүүд|сонголт бий|Аяллууд:|Манай аяллууд|гарах аяллууд|Өөр \d+ (?:сонголт|аялал)|Тэр хугацаанд гарах аялал/i;
 
 function tripContentIn(reply: string): string | null {
   for (const entry of CATALOGUE) if (mentions(reply, entry.id)) return `names trip ${entry.id}`;

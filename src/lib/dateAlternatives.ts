@@ -185,18 +185,16 @@ export function buildNearestDatesReply(pool: TravelTrip[], askText: string, now 
   // The customer's trip first, then the trips going the same way that leave in the asked time, and only then
   // trips elsewhere (owner, 2026-11-22: "answer about this trip, then at the very end offer other trips").
   const direction = pool.length === 1 ? (options.direction || []).filter((row) => row.inWindow && row.trip.id !== pool[0].id) : [];
+  // Short, the way a consultant writes it (owner, 2026-11-22: "the bot sends too much"): no closing link or question.
   if (direction.length) {
     return [
       `${pool[0].route_name} ${window.label} гарахгүй.`,
       NEAREST_DATES_MARKER,
       ...alternatives.map((row) => `• ${row.trip.route_name}: ${customerDate(row.date, now)}${close ? ` (${offsetWords(row.offsetDays)})` : ""}`),
       "",
+      `${window.label} ижил чиглэлд:`,
+      ...directionLines(direction.slice(0, 2), now),
       ENDED_TRIP_GROUP_LINE,
-      "",
-      `${window.label} ижил чиглэлд гарах аялал:`,
-      ...directionLines(direction, now),
-      ...(closingLines.length ? ["", ...closingLines] : []),
-      "Эдгээрээс аль нь танд тохирох вэ? 😊",
     ].join("\n");
   }
   const similar = options.others?.length ? similarTripsAround(pool, options.others, window, now) : [];

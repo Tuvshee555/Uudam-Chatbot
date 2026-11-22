@@ -15,10 +15,8 @@
  */
 import { holidayWindowOf } from "./askedWindow";
 import { storedWebsiteTripSlug, websiteTripLinksInText } from "./bookingWebsite";
-import { customerDate } from "./customerDate";
 import { askedWindowOf, type AskedWindow } from "./dateAlternatives";
-import { safeDurationText } from "./quotedPriceReply";
-import { adultFaresOf, dateIsOnSale, upcomingDepartures } from "./tripFareBlock";
+import { adultFaresOf, dateIsOnSale, shortDate, upcomingDepartures } from "./tripFareBlock";
 import { verifyTripReply } from "./tripReplyVerification";
 import { requestedDepartureScope } from "./travelDates";
 import { formatPassengerMoney } from "./travelFastPathsPricing";
@@ -151,7 +149,7 @@ export function websiteEndedProgramme(trip: TravelTrip): Record<string, unknown>
     adult_price: fare(trip.adult_price),
     child_price_min: child,
     child_price_max: child,
-    group_note: ENDED_TRIP_GROUP_LINE.replace(/^👥\s*/u, ""),
+    group_note: ENDED_TRIP_GROUP_LINE,
   };
 }
 
@@ -199,12 +197,15 @@ function adultFareOf(trip: TravelTrip, dates: string[], now: Date): string {
   return amounts.length === 1 ? formatPassengerMoney(amounts[0], trip.currency || "MNT") || "" : "";
 }
 
-/** "• <trip>: 2 сарын 18 (6 өдөр 5 шөнө — Том хүн: 3,590,000₮)", checked by the reply checker; plainer when it objects. */
+/**
+ * "• <trip> — 2/18, том хүн 3,590,000₮": the trip, its dates and its adult fare on one short line, the way staff write
+ * it; checked by the reply checker and plainer when it objects.
+ */
 export function directionLines(rows: DirectionAlternative[], now = new Date()): string[] {
   const line = (row: DirectionAlternative, detail: boolean) => {
-    const dates = row.dates.map((date) => customerDate(date, now)).join(", ");
-    const facts = detail ? [safeDurationText(row.trip.duration_text), adultFareOf(row.trip, row.dates, now) && `Том хүн: ${adultFareOf(row.trip, row.dates, now)}`].filter(Boolean).join(" — ") : "";
-    return `• ${row.trip.route_name}: ${dates}${facts ? ` (${facts})` : ""}`;
+    const dates = row.dates.map((date) => shortDate(date, now)).join(", ");
+    const fare = detail ? adultFareOf(row.trip, row.dates, now) : "";
+    return `• ${row.trip.route_name} — ${dates}${fare ? `, том хүн ${fare}` : ""}`;
   };
   return rows.map((row) => {
     const full = line(row, true);
@@ -222,30 +223,27 @@ export function askedTimeOf(askText: string | undefined, now = new Date()): Aske
   return askedWindowOf(requestedDepartureScope(askText, now), now);
 }
 
+/** At most this many open trips of the same direction follow an ended trip: the customer asked about one trip. */
+const SHOWN_ALTERNATIVES = 2;
+
 /**
- * What the customer is told about an ended trip: the trip and that its dates have ended (with the time they asked
- * about, when they asked one), the group line, and last the open trips of the same direction.
+ * What the customer is told about an ended trip, the way a consultant writes it: the trip and «аялал дууссан» (and
+ * the time they asked about), the group line, then at most two open trips of the same direction with their date
+ * and fare. Nothing else: owner, 2026-11-22, "the bot sends too much".
  */
 export function buildEndedTripReply(input: { trip: TravelTrip; catalogue: TravelTrip[]; askText?: string; now?: Date }): { reply: string; alternativeIds: string[] } {
   const { trip, catalogue } = input;
   const now = input.now || new Date();
   const window = askedTimeOf(input.askText, now);
-  const last = lastDeparture(trip);
   const neverDated = trip.extra?.archived_reason === "no_departure_dates";
-  const status = neverDated ? NEVER_DATED_LINE
-    : `Энэ ${ENDED_TRIP_MARKER}${last ? ` (сүүлийн гарах өдөр: ${pastDate(last)})` : ""}.`;
+  const status = `${trip.route_name} — ${neverDated ? NEVER_DATED_LINE : ENDED_TRIP_MARKER}${window ? `, ${window.label} гарахгүй` : ""}.`;
   const alternatives = sameDirectionTrips(trip, catalogue, window, now);
   const inWindow = alternatives.filter((row) => row.inWindow);
-  const shown = window && inWindow.length ? inWindow : alternatives;
-  const heading = !shown.length ? null
-    : window && inWindow.length ? `${window.label} ижил чиглэлд гарах аялал:`
-      : window ? `${window.label} ижил чиглэлд гарах аялал алга. Нээлттэй аяллууд:` : "Ижил чиглэлд нээлттэй аяллууд:";
-  const reply = [
-    `✈️ ${trip.route_name}`,
-    `${status}${window ? ` ${window.label} гарах өдөр товлогдоогүй.` : ""}`,
-    "",
-    ENDED_TRIP_GROUP_LINE,
-    ...(heading ? ["", heading, ...directionLines(shown, now), "", shown.length === 1 ? "Энэ аялал танд тохирох уу? 😊" : "Аль нь сонирхол татаж байна вэ? 😊"] : []),
-  ].join("\n");
-  return { reply, alternativeIds: shown.map((row) => row.trip.id) };
+  const shown = (window && inWindow.length ? inWindow : alternatives).slice(0, SHOWN_ALTERNATIVES);
+  const heading = window && inWindow.length ? `${window.label} ижил чиглэлд:` : "Ижил чиглэлд нээлттэй:";
+  const reply = [status, ENDED_TRIP_GROUP_LINE, ...(shown.length ? ["", heading, ...directionLines(shown, now)] : [])].join("\n");
+  // The next answer picks among EVERY trip of the direction, the shown ones first: "2-р сарын" under a reply that
+  // shows two December trips is the third one, which leaves in February (it drifted to other countries otherwise).
+  const ids = [...shown, ...alternatives].map((row) => row.trip.id);
+  return { reply, alternativeIds: [...new Set(ids)] };
 }

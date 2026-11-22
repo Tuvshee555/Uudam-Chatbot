@@ -30,7 +30,7 @@ const catalogue = () => [
 ];
 // The ended-trip notice (endedTrip.ts). Since 2026-11-22 it says the dates have ended (owner's wording) instead of
 // "одоогоор идэвхгүй"; both are matched so the negative checks below still catch either notice.
-const ENDED = /идэвхгүй|аяллын товлосон гарах өдрүүд дууссан|гарах өдөр одоогоор товлогдоогүй/u;
+const ENDED = /идэвхгүй|аялал дууссан|гарах өдөр одоогоор товлогдоогүй/u;
 
 const readings: Array<[string, ModelOverride]> = [
   ["the model reads the active trip", { tripId: "lom", certainty: "one", topics: ["price"] }],

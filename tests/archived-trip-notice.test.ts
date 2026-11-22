@@ -36,8 +36,8 @@ test("naming an expired trip by its full name gets told its dates have ended, no
   assert.ok(notice);
   assert.equal(notice!.trip.route_name, "Торвал Нордэнын аялал");
   // Owner, 2026-11-22: «дууссан», and a group of ten or more can still go on it (was «одоогоор идэвхгүй»).
-  assert.match(notice!.reply, /аяллын товлосон гарах өдрүүд дууссан/);
-  assert.match(notice!.reply, /10 ба түүнээс дээш хүнтэй/);
+  assert.match(notice!.reply, /^Торвал Нордэнын аялал — аялал дууссан\./);
+  assert.match(notice!.reply, /10\+ хүнтэй байгууллага, групп/);
   assert.match(notice!.reply, /Торвал Нордэнын аялал/);
 });
 

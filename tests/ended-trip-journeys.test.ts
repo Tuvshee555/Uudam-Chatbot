@@ -57,6 +57,8 @@ const readings: Array<[string, ModelOverride]> = [
   ["the model is unavailable", { unavailable: true }],
 ];
 const OTHER_DIRECTIONS = /ВЭЛМОР|САНДРИЯ/u;
+/** The reply's own lines: not blank, not the follow-up question or phone ask other features append (owner-requested). */
+const ownLines = (said: string) => said.split("\n").filter((line) => line.trim() && !/(?:таалагдаж|сонирхож|тохирох) байна вэ|утасны дугаараа/iu.test(line)).length;
 
 async function conversation(context: TestContext, ended: boolean) {
   const harness = await conversationGateHarness(context);
@@ -77,26 +79,30 @@ test("an ended trip's shared post and every follow-up are answered about that tr
     try {
       const post = await say(POST);
       assert.equal(post.sends.length, 1, `${label}: the shared post is answered, not silenced: ${post.said}`);
-      assert.ok(post.said.startsWith(`✈️ ${ENDED_NAME}\nЭнэ аяллын товлосон гарах өдрүүд дууссан (сүүлийн гарах өдөр: 2097 оны 11 сарын 19).`), `${label}: ${post.said}`);
-      assert.match(post.said, /10 ба түүнээс дээш хүнтэй байгууллага, компани, хамт олон бол энэ аяллаар өөрсдийн сонгосон өдөр явах боломжтой/u);
-      for (const open of ["УБ-Норвел хотын 12-р сарын", "УБ-Норвел хотын 1,2,3-р сарын", "ЛУНАРИЯ ХААЛГАНЫ ГАЗАР"]) assert.ok(post.said.includes(open), `${label}: ${open}: ${post.said}`);
-      assert.ok(post.said.indexOf("10 ба түүнээс") < post.said.indexOf("Ижил чиглэлд нээлттэй аяллууд:"), `${label}: the trip first, other trips last`);
+      assert.ok(post.said.startsWith(`${ENDED_NAME} — аялал дууссан.\n`), `${label}: ${post.said}`);
+      assert.match(post.said, /10\+ хүнтэй байгууллага, групп бол өөрсдийн сонгосон өдрөөр явж болно/u);
+      // Two open trips of the same direction, soonest first: the customer asked about one trip, not for a catalogue.
+      for (const open of ["ЛУНАРИЯ ХААЛГАНЫ ГАЗАР", "УБ-Норвел хотын 12-р сарын"]) assert.ok(post.said.includes(open), `${label}: ${open}: ${post.said}`);
+      assert.ok(!post.said.includes("УБ-Норвел хотын 1,2,3-р сарын"), `${label}: at most two: ${post.said}`);
+      assert.ok(post.said.indexOf("10+ хүнтэй") < post.said.indexOf("Ижил чиглэлд нээлттэй:"), `${label}: the trip first, other trips last`);
+      // As short as a consultant writes it (owner, 2026-11-22: "the bot sends too much").
+      assert.ok(ownLines(post.said) <= 6, `${label}: short: ${post.said}`);
       assert.doesNotMatch(post.said, OTHER_DIRECTIONS);
       assert.doesNotMatch(post.said, /суудал дууссан/u, `${label}: never another trip's "full"`);
       assert.ok(!post.leads.some((lead) => lead.kind === "booking"), `${label}: the post's company numbers are not the customer's phone`);
       assert.ok(post.leads.some((lead) => lead.kind === "handoff" && lead.context.includes(ENDED_NAME)), `${label}: staff hear about the ended trip`);
 
       const february = await say("Энэ аялал 2098оны 2сард байгаа юу? Цагаан сарын үеэр");
-      assert.ok(february.said.startsWith(`✈️ ${ENDED_NAME}\n`), `${label}: "this trip" is the ended trip: ${february.said}`);
-      assert.match(february.said, /2 сард гарах өдөр товлогдоогүй/u);
-      assert.match(february.said, /2 сард ижил чиглэлд гарах аялал:\n• УБ-Норвел хотын 1,2,3-р сарын аяллын хөтөлбөр: 2 сарын 18/u, february.said);
+      assert.ok(february.said.startsWith(`${ENDED_NAME} — аялал дууссан, 2 сард гарахгүй.\n`), `${label}: "this trip" is the ended trip: ${february.said}`);
+      assert.match(february.said, /2 сард ижил чиглэлд:\n• УБ-Норвел хотын 1,2,3-р сарын аяллын хөтөлбөр — 2\/18/u, february.said);
+      assert.ok(ownLines(february.said) <= 6, `${label}: short: ${february.said}`);
       assert.doesNotMatch(february.said, OTHER_DIRECTIONS, `${label}: no unrelated February list: ${february.said}`);
 
       const named = await say("Норвел калдара");
-      assert.ok(named.said.startsWith(`✈️ ${ENDED_NAME}\n`), `${label}: two words only the ended trip holds together name it: ${named.said}`);
+      assert.ok(named.said.startsWith(`${ENDED_NAME} — аялал дууссан`), `${label}: two words only the ended trip holds together name it: ${named.said}`);
 
       const again = await say("Норвел лунария хаалгын аялал");
-      assert.ok(again.said.startsWith(`✈️ ${ENDED_NAME}\n`), `${label}: ${again.said}`);
+      assert.ok(again.said.startsWith(`${ENDED_NAME} — аялал дууссан`), `${label}: ${again.said}`);
       assert.doesNotMatch(again.said, /11-р сарын аяллын хөтөлбөр — энэ аяллын/u, `${label}: not the full sibling's notice: ${again.said}`);
 
       const month = await say("2-р сарын");
@@ -131,7 +137,8 @@ test("an open trip's shared post gets its card, and a month it does not run gets
       const february = await say("Энэ аялал 2098оны 2сард байгаа юу? Цагаан сарын үеэр");
       assert.ok(february.said.startsWith(`${ENDED_NAME} 2 сард гарахгүй.`), `${label}: about this trip first: ${february.said}`);
       assert.match(february.said, /1 сарын 21/u);
-      assert.match(february.said, /2 сард ижил чиглэлд гарах аялал:\n• УБ-Норвел хотын 1,2,3-р сарын аяллын хөтөлбөр: 2 сарын 18/u, february.said);
+      assert.match(february.said, /2 сард ижил чиглэлд:\n• УБ-Норвел хотын 1,2,3-р сарын аяллын хөтөлбөр — 2\/18/u, february.said);
+      assert.ok(ownLines(february.said) <= 7, `${label}: short: ${february.said}`);
       assert.doesNotMatch(february.said, /Энэ чиглэлд 2 сард гарах аялал алга/u, `${label}: a trip of this direction does leave then`);
       assert.doesNotMatch(february.said, OTHER_DIRECTIONS, `${label}: ${february.said}`);
     } finally {
@@ -145,7 +152,7 @@ test("an ended trip keeps its website page as an ended programme; an open or sta
   const [ended] = catalogue(true);
   assert.deepEqual(websiteEndedProgramme(ended), {
     ended: true, departure_date: "2097 оны 11 сарын 19", adult_price: 3_111_000, child_price_min: 2_811_000, child_price_max: 2_811_000,
-    group_note: "10 ба түүнээс дээш хүнтэй байгууллага, компани, хамт олон бол энэ аяллаар өөрсдийн сонгосон өдөр явах боломжтой.",
+    group_note: "10+ хүнтэй байгууллага, групп бол өөрсдийн сонгосон өдрөөр явж болно.",
   });
   assert.equal(websiteEndedProgramme(catalogue(false)[0]), null, "a re-activated trip is an ordinary page again");
   assert.equal(websiteEndedProgramme({ ...ended, extra: { ...ended.extra, archived_reason: "owner_cancelled" } } as FixtureTrip), null, "staff archived it for a reason");
