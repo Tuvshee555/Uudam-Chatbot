@@ -36,6 +36,9 @@ export const AGENT_DEFAULT_MODEL = "gpt-4.1";
 const TOTAL_MS = 60_000;
 const PER_CALL_MS = 30_000;
 const MIN_CALL_MS = 3_000;
+// A model that thinks first (Claude): one-line instructions get more time; the route allows 180 s.
+const THINKING_TOTAL_MS = 100_000;
+const THINKING_PER_CALL_MS = 50_000;
 const MAX_ROUNDS = 6;
 // Taking stock of several files needs more looks: every trip found and opened, each program compared, then the proposal.
 const DOCUMENT_MAX_ROUNDS = 9;
@@ -601,8 +604,10 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
   const startedAt = deps.now();
   const now = input.today ?? new Date(startedAt);
   const withDocuments = Array.isArray(input.documents) && input.documents.some((document) => document && typeof document.text === "string" && document.text.trim());
-  let totalMs = input.totalMs ?? (withDocuments ? DOCUMENT_TOTAL_MS : TOTAL_MS);
-  const perCallMs = withDocuments ? DOCUMENT_PER_CALL_MS : PER_CALL_MS;
+  // Claude thinks before it answers: a one-line instruction took 8–39 s on 2026-11-22, so it gets more time per call.
+  const thinks = deps.stableTools === true;
+  let totalMs = input.totalMs ?? (withDocuments ? DOCUMENT_TOTAL_MS : thinks ? THINKING_TOTAL_MS : TOTAL_MS);
+  const perCallMs = withDocuments ? DOCUMENT_PER_CALL_MS : thinks ? THINKING_PER_CALL_MS : PER_CALL_MS;
   const maxTurnPromptTokens = withDocuments ? DOCUMENT_MAX_TURN_PROMPT_TOKENS : MAX_TURN_PROMPT_TOKENS;
   const roundCap = withDocuments ? DOCUMENT_MAX_ROUNDS : MAX_ROUNDS;
   const maxRounds = Math.max(1, Math.min(input.maxRounds ?? roundCap, roundCap));
