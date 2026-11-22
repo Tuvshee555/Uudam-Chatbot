@@ -613,7 +613,7 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
   const maxRounds = Math.max(1, Math.min(input.maxRounds ?? roundCap, roundCap));
   const model = input.model || deps.defaultModel || process.env.OPENAI_ASSISTANT_MODEL || AGENT_DEFAULT_MODEL;
   const tools: string[] = [];
-  const usage = { prompt: 0, completion: 0 };
+  const usage = { prompt: 0, completion: 0, cached: 0 };
   const done = (outcome: AgentOutcome, rounds: number, modelFailure?: string): AgentRun => {
     logInfo("assistant.agent.turn", { outcome: outcome.kind, reason: "reason" in outcome ? outcome.reason : undefined, rounds, tools, prompt_tokens: usage.prompt, completion_tokens: usage.completion, duration_ms: deps.now() - startedAt, model });
     return { outcome, tools, rounds, ...(modelFailure ? { modelFailure } : {}) };
@@ -640,7 +640,8 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
   for (let round = 1; round <= maxRounds; round += 1) {
     const remaining = totalMs - (deps.now() - startedAt);
     if (remaining < MIN_CALL_MS) return done({ kind: "note", text: AGENT_TIMEOUT_NOTE, reason: "timeout" }, round - 1, "timeout");
-    if (usage.prompt > maxTurnPromptTokens) return done({ kind: "note", text: "Энэ даалгавар хэт урт болов — юу ч өөрчлөгдөөгүй. Хэсэг хэсгээр нь илгээнэ үү.", reason: "model_failed" }, round - 1);
+    // A cached token costs a tenth of a new one: the cap weighs them so (a careful file turn re-reads the files every round).
+    if (usage.prompt - usage.cached * 0.9 > maxTurnPromptTokens) return done({ kind: "note", text: "Энэ даалгавар хэт урт болов — юу ч өөрчлөгдөөгүй. Хэсэг хэсгээр нь илгээнэ үү.", reason: "model_failed" }, round - 1);
     const last = round === maxRounds;
     // A chat whose tool list must not change (Claude) keeps every tool on the last round and is told in words.
     if (last && deps.stableTools && round > 1) messages.push({ role: "user", content: LAST_ROUND_NOTE });
@@ -655,6 +656,7 @@ export async function runAgent(input: AgentInput): Promise<AgentRun> {
       return done({ kind: "note", text: agentFailureNote(kind), reason: kind === "timeout" ? "timeout" : "model_failed" }, round, kind);
     }
     usage.prompt += result.usage?.prompt_tokens || 0;
+    usage.cached += result.usage?.cached_tokens || 0;
     usage.completion += result.usage?.completion_tokens || 0;
     const calls = result.message.tool_calls || [];
     if (!calls.length) {
