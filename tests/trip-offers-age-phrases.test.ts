@@ -29,3 +29,15 @@ test("ages written with the ablative ending are read; the fare card quotes the t
     assert.deepEqual(other.flatMap((fare) => fare.issues), [], ending);
   }
 });
+
+test("the age word itself declined («11 наснаас доош», «6 сараас дээш») is read; a new trip's every date was paused (2026-11-22)", async () => {
+  const { normalizeTripOffers, resolveTripOfferFareCard } = await import("../src/lib/tripOffers");
+  const ages = { adult: "12 наснаас дээш", child: "11 наснаас доош, оргүй хүүхэд", infant: "0-2 нас" };
+  const fares = normalizeTripOffers(trip(ages), NOW).flatMap((offer) => offer.fares);
+  assert.deepEqual(fares.flatMap((fare) => fare.issues), []);
+  const child = fares.find((fare) => fare.kind === "child");
+  assert.deepEqual(child?.ageBand, { unit: "month", min: 0, maxExclusive: 132 }, "under 11, as «11 доош» reads");
+  assert.equal(resolveTripOfferFareCard(trip(ages), { date: "2099-02-10" }, NOW).status, "ready");
+  const months = normalizeTripOffers(trip({ adult: "", child: "", infant: "6 сараас дээш" }), NOW).flatMap((offer) => offer.fares);
+  assert.deepEqual(months.flatMap((fare) => fare.issues), []);
+});

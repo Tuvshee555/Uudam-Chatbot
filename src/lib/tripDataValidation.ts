@@ -67,9 +67,11 @@ function ageBand(value: unknown): AgeBand | null {
   const birth = valueText.match(/^(\d{4})\s*-\s*(\d{4})\s*(?:он|born|birth years?)?$/);
   if (birth) return { min: Number(birth[1]), max: Number(birth[2]), basis: "birth_year" };
   const range = valueText.match(/^(\d{1,3}(?:\.\d+)?)\s*-\s*(\d{1,3}(?:\.\d+)?)\s*(нас|сар|years?|months?|age)?$/);
-  const plus = valueText.match(/^(\d{1,3})\s*\+\s*(нас|сар|years?|months?|age)?$/);
+  const plus = valueText.match(/^(\d{1,3})\s*\+\s*(нас|сар|years?|months?|age)?$/)
+    || valueText.match(/^(\d{1,3})\s*(нас|сар)?(?:н?аас)?\s*дээш$/);
+  // "11 наснаас доош": the age word carries the ending (a new trip, 2026-11-22).
   const under = valueText.match(/^(?:under|less than)\s*(\d{1,3})\s*(years?|months?)?$/)
-    || valueText.match(/^(\d{1,3})\s*(нас|сар)?\s*(?:хүртэл|доош)$/);
+    || valueText.match(/^(\d{1,3})\s*(нас|сар)?(?:н?аас)?\s*(?:хүртэл|доош)$/);
   const single = valueText.match(/^(\d{1,3})\s*(нас|сар|years?|months?|age)$/);
   const match = range || plus || under || single;
   if (!match) return null;

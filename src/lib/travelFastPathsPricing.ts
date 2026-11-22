@@ -383,7 +383,7 @@ export function ageBandCoversAge(
   const toMonths = (value: number) => (bandUnit === "month" ? value : value * 12);
 
   // Open-ended band: "11 нас доош" / "12 хүртэл".
-  const openEnded = /(\d{1,2})\s*(?:нас|сар)?\s*(?:доош|хүртэл|болон\s*доош)/.exec(text);
+  const openEnded = /(\d{1,2})\s*(?:(?:нас|сар)(?:н?аас)?)?\s*(?:доош|хүртэл|болон\s*доош)/.exec(text);
   const range = parseAgeRange(text);
   if (!range && openEnded) {
     return ageMonths <= toMonths(Number(openEnded[1]));
