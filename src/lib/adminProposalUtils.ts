@@ -988,7 +988,8 @@ export function buildProposalClarifications(
 export type ActionView = {
   lines: string[];
   warnings: string[];
-  thumbs?: { before?: string; after?: string };
+  /** `beforeUnknown`: the trip is not loaded in full yet, so the photo being replaced is not known (never "no photo"). */
+  thumbs?: { before?: string; after?: string; beforeUnknown?: boolean };
   /** append_notes: the lines the section adds to the description, to be read before saving. */
   preview?: { title: string; lines: string[] };
 };
@@ -1024,12 +1025,17 @@ function needsFullTrip(action: AIAction & { day?: unknown }, trip: TravelTripLik
 
 type TravelTripLike = { id: string; photo_urls?: string[]; extra?: Record<string, unknown> | null };
 
-function photoThumbsOf(action: AIAction & { new_url?: unknown; old_url?: unknown; position?: unknown; remove?: unknown }, trip?: TravelTripLike | null) {
+function photoThumbsOf(action: AIAction & { new_url?: unknown; old_url?: unknown; position?: unknown; remove?: unknown; day?: unknown }, trip?: TravelTripLike | null) {
   const after = action.remove === true ? undefined : typeof action.new_url === "string" ? action.new_url : undefined;
   const position = typeof action.position === "number" ? action.position : null;
+  const day = typeof action.day === "number" ? action.day : null;
+  const days = Array.isArray(trip?.extra?.itinerary_days) ? (trip!.extra!.itinerary_days as Array<{ photo?: unknown }>) : null;
+  const dayPhoto = day && days && typeof days[day - 1]?.photo === "string" ? String(days[day - 1].photo) : undefined;
   const before = typeof action.old_url === "string" ? action.old_url
-    : position && trip?.photo_urls ? trip.photo_urls[position - 1] : undefined;
-  return before || after ? { ...(before ? { before } : {}), ...(after ? { after } : {}) } : undefined;
+    : position && trip?.photo_urls ? trip.photo_urls[position - 1] : dayPhoto;
+  // A day's photo on a trip read only as a list row: not known yet (the card said "Зураггүй" for a second, 2026-11-22).
+  const beforeUnknown = !before && day !== null && (!trip || isTripListProjection(trip as never));
+  return before || after ? { ...(before ? { before } : {}), ...(after ? { after } : {}), ...(beforeUnknown ? { beforeUnknown: true } : {}) } : undefined;
 }
 
 /**

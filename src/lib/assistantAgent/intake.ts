@@ -110,6 +110,25 @@ const BORDER_LINE = /эрээн\p{L}*\s+эх[лэ]|замын[\s-]*үүд\p{L}*\
 const DAY_ROW = /^\s*(?:өдөр\s*\d+|\d+\s*[-.]?\s*(?:р|дахь|дэх|дугаар)?\s*өдөр|day\s*\d+)/iu;
 const PRICED_CELL = /^\d{2,5}(?:\s*(?:юань|¥|元))?$/u;
 
+const pricedRow = (line: string) => line.split(" | ").some((cell) => PRICED_CELL.test(cell.trim()));
+const sheetLine = (line: string) => /^#\s/.test(line);
+
+/**
+ * The group headings of a priced list as the file writes them: a row with no price that has priced
+ * rows under it ("超声科检查Хэт авиан шинжилгээ", "放射科CT（不含片） / 价格" → its first cell, a
+ * trailing "/ 价格" column title dropped). The sheet name and the title above the first group are not groups.
+ */
+export function listGroupHeadings(text: string): string[] {
+  const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !sheetLine(line));
+  const out: string[] = [];
+  lines.forEach((line, index) => {
+    if (pricedRow(line) || !lines[index + 1] || !pricedRow(lines[index + 1])) return;
+    const heading = line.split(" | ")[0].replace(/\s*\/\s*(?:价格|үнэ|price)\s*$/iu, "").trim();
+    if (heading) out.push(heading.slice(0, 120));
+  });
+  return out;
+}
+
 export function hasTugrugAmount(text: string): boolean {
   const source = String(text || "");
   if (/\d+(?:[.,]\d+)?\s*сая/iu.test(source)) return true;
@@ -496,7 +515,9 @@ export function proposalGaps(input: { intake: Intake; decisions: Decision[]; act
     if (file.kind === "extra_info") {
       const choice = decided(decisions, "extras", file.file)?.choice;
       if (choice === "skip") continue;
-      const rows = documentFacts(context.documents.find((document) => document.name === file.file)?.text || "").pricedRows;
+      const fileText = context.documents.find((document) => document.name === file.file)?.text || "";
+      const rows = documentFacts(fileText).pricedRows;
+      const groups = listGroupHeadings(fileText);
       for (const id of file.trip_ids) {
         const note = mine(id).find((action) => action.action === "append_notes");
         const name = context.byId.get(id)?.route_name || id;
@@ -504,12 +525,23 @@ export function proposalGaps(input: { intake: Intake; decisions: Decision[]; act
           gaps.push({ model: `"${file.file}" must be added to «${name}»: append_notes {trip_ids: [..., "${id}"], heading, text} with every item.`, admin: `«${file.file}» жагсаалт «${name}»-д нэмэгдээгүй.` });
           continue;
         }
-        const items = clean(note.text).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.endsWith(":") && !/^жич/iu.test(line));
+        const lines = clean(note.text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        const items = lines.filter((line) => !line.endsWith(":") && !/^жич/iu.test(line));
+        const headings = lines.filter((line) => line.endsWith(":") && !/\d\s*(?:юань|¥|₮)/iu.test(line)).length;
         const listed = choice === "list_names" ? items.length : items.filter((line) => /\d/.test(line)).length;
-        if (rows >= 5 && listed < Math.ceil(rows * 0.85)) {
+        const short = rows >= 5 && listed < Math.ceil(rows * 0.85);
+        // The file's own groups stay: on 2026-11-22 a reading kept all 54 items as one flat list (the site shows each group as a block).
+        const flat = groups.length >= 3 && headings < Math.ceil(groups.length * 0.7);
+        if (short || flat) {
           gaps.push({
-            model: `The section for «${name}» lists ${listed} items, but "${file.file}" has ${rows} priced rows: write EVERY row as its own line (${choice === "list_names" ? "the name only" : "\"name: 123 юань\""}), under its group heading. Write the section once with trip_ids for all the trips.`,
-            admin: `«${name}»: жагсаалтын ${rows} мөрөөс ${listed} нь л саналд орсон — бүгдийг нь оруулахыг дахин хүснэ үү.`,
+            model: [
+              short ? `The section for «${name}» lists ${listed} items, but "${file.file}" has ${rows} priced rows: write EVERY row as its own line (${choice === "list_names" ? "the name only" : "\"name: 123 юань\""}).` : "",
+              flat ? `The section for «${name}» has ${headings} group headings, but "${file.file}" sorts its items under ${groups.length}: ${groups.map((group) => `«${group}»`).join(", ")}. Put each group's heading in Mongolian on its own line ending with ":" right before its items (a heading the file mistranslates is worded from its Chinese).` : "",
+              "Write the section once with trip_ids for all the trips.",
+            ].filter(Boolean).join(" "),
+            admin: short
+              ? `«${name}»: жагсаалтын ${rows} мөрөөс ${listed} нь л саналд орсон — бүгдийг нь оруулахыг дахин хүснэ үү.`
+              : `«${name}»: жагсаалтын бүлгийн гарчгууд (${groups.length}) орхигдсон — бүлэг бүрийн гарчгийг нэмэхийг дахин хүснэ үү.`,
           });
           break;
         }

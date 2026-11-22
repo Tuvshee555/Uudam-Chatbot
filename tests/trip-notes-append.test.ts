@@ -83,3 +83,14 @@ test("append_notes is planned and cleaned like every exact edit, and the card ca
   const closed = actionView({ ...clean, summary: `«${CHECKUP.route_name}» — Тайлбарт «${HEADING}» хэсэг нэмнэ (1 мөр); бусад тайлбар хэвээр` } as unknown as AIAction, null, { live: false, now: NOW });
   assert.deepEqual(closed.preview, { title: HEADING, lines: ["Зүрхний ЭХО: 180 юань"] }, "a saved card keeps the lines too");
 });
+
+test("a day photo being replaced: the card shows it once the trip is loaded, and «loading» (never «no photo») before", async () => {
+  const { actionView } = await import("../src/lib/adminProposalUtils");
+  const CLOUD_DAY = "https://res.cloudinary.com/demo-cloud/image/upload/v1/day3-old.jpg";
+  const NEW_DAY = "https://res.cloudinary.com/demo-cloud/image/upload/v1/day3-new.jpg";
+  const full = trip({ id: "t-photo", route_name: "ФОТО ТУРШИЛТ", extra: { itinerary_days: [{ title: "Нэг" }, { title: "Хоёр" }, { title: "Гурав", photo: CLOUD_DAY }] } });
+  const listRow = trip({ id: "t-photo", route_name: "ФОТО ТУРШИЛТ", extra: { list_projection: true } });
+  const action = { action: "replace_photo", trip_id: "t-photo", day: 3, new_url: NEW_DAY, summary: "«ФОТО ТУРШИЛТ» — 3-р өдрийн зураг солигдоно" } as unknown as AIAction;
+  assert.deepEqual(actionView(action, listRow, { live: true, now: NOW }).thumbs, { after: NEW_DAY, beforeUnknown: true });
+  assert.deepEqual(actionView(action, full, { live: false, now: NOW }).thumbs, { before: CLOUD_DAY, after: NEW_DAY });
+});

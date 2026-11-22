@@ -16,7 +16,7 @@ import { attachmentRoute, dialogAnswer, instructionBody, isTextDocument, replyTo
 import type { AssistantAskMsg, AssistantChatMessage } from "../src/components/admin/assistantChatTypes";
 import type { AttachedFile } from "../src/lib/adminTypes";
 import { similarSavedTrips } from "../src/lib/assistantAgent/fileMatch";
-import { childBandOf, decisionsOf, documentFacts, freeInfantLine, handoffNote, proposalGaps, hasTugrugAmount, intakeNeeded, packIntake, stockFilesOf, stockProblems, titleMatches, tripsNamedIn, unpackIntake } from "../src/lib/assistantAgent/intake";
+import { childBandOf, decisionsOf, documentFacts, freeInfantLine, handoffNote, proposalGaps, hasTugrugAmount, intakeNeeded, listGroupHeadings, packIntake, stockFilesOf, stockProblems, titleMatches, tripsNamedIn, unpackIntake } from "../src/lib/assistantAgent/intake";
 import { buildPhotoLibrary, dayPlaces, pickLibraryPhotos, transitKey } from "../src/lib/tripPhotoLibrary";
 import { applyTestEnv } from "./helpers/env";
 import { agentDeps, CLOUD, NOW, scriptedChat, toolResults, trip, TRIPS, VERSION } from "./helpers/agentFixtures";
@@ -475,4 +475,52 @@ test("«нярай (… онд төрсөн) үнэгүй»: a proposal without 
   const bands = actions.find((action) => action.action === "set_age_bands")!;
   assert.equal(bands.infant, "2096–2098 онд төрсөн", "«0-23 сар» was the model's own: dropped");
   assert.ok(actions.some((action) => (action.fields as { infant_price?: unknown } | undefined)?.infant_price === 0), JSON.stringify(actions));
+});
+
+test("a priced list keeps the file's own groups: a flat list is sent back with the headings, and the file's typing slips are fixed", async () => {
+  const sheet = [
+    "# Sheet1",
+    "测试加项单",
+    "心脏检查 / Зүрхний шинжилгээ | 价格",
+    "心电图 / Зүрхний бичлэг | 40 | 说明",
+    "心脏彩超 / Зүрхний ЭХО | 180 | 说明",
+    "超声科检查Хэт авиан шинжилгээ",
+    "肝胆彩超 / Элэг цөсний ЭХО | 90 | 说明",
+    "甲状腺彩超 / Бамбайн ЭХО | 100 | 说明",
+    "放射科CT（不含片） / 价格",
+    "胸部CT / Цээжний CT | 260 | 说明",
+    "头颅CT / Толгойн CT | 260 | 说明",
+  ].join("\n");
+  assert.deepEqual(listGroupHeadings(sheet), ["心脏检查 / Зүрхний шинжилгээ", "超声科检查Хэт авиан шинжилгээ", "放射科CT（不含片）"], "the title above the first group is no group");
+
+  const checkup = trip({ id: "t-mira-check", route_name: "МИРА – ОЛВЕН ҮЗЛЭГТЭЙ АЯЛАЛ" });
+  const intake = { files: [{ file: "нэмэлт.xlsx", kind: "extra_info" as const, trip_ids: ["t-mira-check"] }], asked: [] };
+  const context = { documents: [{ name: "нэмэлт.xlsx", text: sheet }], byId: new Map([[checkup.id, checkup]]), adminWords: "нэмэлт мэдээлэл болгож нэм", answered: true };
+  const flat = "Зүрхний бичлэг: 40 юань\nЗүрхний ЭХО: 180 юань\nЭлэг цөсний ЭХО: 90 юань\nБамбайн ЭХО: 100 юань\nЦээжний CT: 260 юань\nТолгойн CT: 260 юань";
+  const gaps = proposalGaps({ intake, decisions: [], actions: [{ action: "append_notes", trip_id: "t-mira-check", text: flat }], context, compared: new Set(), now: NOW });
+  assert.equal(gaps.length, 1);
+  assert.match(gaps[0].model, /has 0 group headings, but "нэмэлт\.xlsx" sorts its items under 3: «心脏检查 \/ Зүрхний шинжилгээ», «超声科检查Хэт авиан шинжилгээ», «放射科CT（不含片）»/);
+  assert.equal(gaps[0].admin, "«МИРА – ОЛВЕН ҮЗЛЭГТЭЙ АЯЛАЛ»: жагсаалтын бүлгийн гарчгууд (3) орхигдсон — бүлэг бүрийн гарчгийг нэмэхийг дахин хүснэ үү.");
+  const grouped = `Зүрхний шинжилгээ:\nЗүрхний бичлэг: 40 юань\nЗүрхний ЭХО: 180 юань\n\nХэт авиан шинжилгээ:\nЭлэг цөсний ЭХО: 90 юань\nБамбайн ЭХО: 100 юань\n\nCT шинжилгээ:\nЦээжний CT: 260 юань\nТолгойн CT: 260 юань`;
+  assert.deepEqual(proposalGaps({ intake, decisions: [], actions: [{ action: "append_notes", trip_id: "t-mira-check", text: grouped }], context, compared: new Set(), now: NOW }), []);
+
+  const { notesSectionText } = await import("../src/lib/tripNotesAppend");
+  assert.equal(notesSectionText("Элэгний шинжилгээ 8төрөлт: 70 юань\nЗүрхний ферментүүд4 төрөлт: 44 юань\nBБамбай булчирхай 3 төрөлт: 150 юань\nНүүрс усны эсрэгтөрөгч 199 /СА199/: 120 юань\nС14 амьсгалын тест: 100 юань\nХүзүүний нугасны (C2–C7) завсар: 260 юань"),
+    "Элэгний шинжилгээ 8 төрөлт: 70 юань\nЗүрхний ферментүүд 4 төрөлт: 44 юань\nБамбай булчирхай 3 төрөлт: 150 юань\nНүүрс усны эсрэгтөрөгч 199 /СА199/: 120 юань\nС14 амьсгалын тест: 100 юань\nХүзүүний нугасны (C2–C7) завсар: 260 юань");
+});
+
+test("a long tab name is cut between words, and a price question always names its trip", async () => {
+  const { runAgent } = await import("../src/lib/assistantAgent/agent");
+  const schedule = { name: "норвел-үнэ.jpg", text: "Норвел – Лумиа хотын аялал\n№ | Гарах огноо | Зарлах үнэ\n1 | 12/05 | 1,250,000 төг\nЗарлах үнэ дээр + үзлэгийн 450 юань нэмэгдэнэ эсвэл үнэгүй үзлэг" };
+  const script = scriptedChat([
+    () => [{ name: "get_trip", args: { trip_id: "t-norvel" } }, { name: "search_trips", args: { query: "Норвел" } }],
+    () => [{ name: "take_stock", args: { files: [{ file: "норвел-үнэ.jpg", kind: "schedule", trip_ids: ["t-norvel"] }] } }],
+    () => [{ name: "ask_user", args: { questions: [{ topic: "price_remark", file: "норвел-үнэ.jpg", header: "Норвел лумиа хотын аяллын үнийн тайлбар", question: "Зарлах үнэ дээр + үзлэгийн 450 юань нэмэгдэнэ эсвэл үнэгүй үзлэг гэжээ. Яаж мэдээлэх вэ?", options: [{ label: "450 юань тусдаа", description: "" }] }] } }],
+  ]);
+  const result = await runAgent({ instruction: "энэ хуваарийг оруулаад өг", trips: INTAKE_TRIPS, documents: [schedule], intake: true, today: NOW, deps: agentDeps(script.chat) });
+  assert.equal(result.outcome.kind, "ask", JSON.stringify(result.outcome));
+  const question = (result.outcome as unknown as { ask: { questions: Array<{ header: string; text: string; options: Array<{ label: string }> }> } }).ask.questions[0];
+  assert.equal(question.header, "Норвел лумиа хотын аяллын");
+  assert.match(question.text, /^«НОРВЕЛ – ЛУМИА ХОТЫН АЯЛАЛ»: Зарлах үнэ дээр/);
+  assert.deepEqual(question.options.map((option) => option.label), ["450 юань тусдаа", "Одоохондоо хөндөхгүй"]);
 });

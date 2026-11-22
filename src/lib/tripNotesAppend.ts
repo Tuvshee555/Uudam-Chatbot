@@ -30,11 +30,23 @@ export function notesHeadingOf(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim().replace(/[:：]+$/, "").trim().slice(0, HEADING_MAX_CHARS) : "";
 }
 
-/** The section's lines: each trimmed, markdown bullets and emphasis dropped, at most one blank line in a row. */
+/**
+ * Typing slips a partner's list carries into a reading (2026-11-22): a number glued to its word
+ * ("8төрөлт", "ферментүүд4") and a stray Latin capital before a Cyrillic word ("BБамбай"). Codes
+ * written in capitals ("СА199", "HPV23", "C2–C7") are left as they are.
+ */
+function withoutTypingSlips(line: string): string {
+  return line
+    .replace(/(\d)(?=[а-яөүё])/gu, "$1 ")
+    .replace(/([а-яөүё])(?=\d)/gu, "$1 ")
+    .replace(/(^|[\s(/])[A-Z](?=[А-ЯӨҮЁ][а-яөүё])/gu, "$1");
+}
+
+/** The section's lines: each trimmed, markdown bullets and emphasis dropped, typing slips fixed, at most one blank line in a row. */
 export function notesSectionText(value: unknown): string {
   if (typeof value !== "string") return "";
   const lines = value.replace(/\r\n?/g, "\n").split("\n")
-    .map((line) => line.replace(/^\s*(?:[-•*·]\s+)/u, "").replace(/\*\*/g, "").replace(/[ \t]+/g, " ").trim());
+    .map((line) => withoutTypingSlips(line.replace(/^\s*(?:[-•*·]\s+)/u, "").replace(/\*\*/g, "").replace(/[ \t]+/g, " ").trim()));
   const out: string[] = [];
   for (const line of lines) {
     if (!line && (!out.length || !out[out.length - 1])) continue;

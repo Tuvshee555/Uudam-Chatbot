@@ -185,6 +185,15 @@ const RECOMMENDED_SUFFIX = /\s*\((?:recommended|санал болгож буй|�
 
 const recordOf = (value: unknown): Args => (value && typeof value === "object" && !Array.isArray(value) ? (value as Args) : {});
 
+/** A tab's name: at most 28 characters, cut between words («Жининь шинжилгээтэй аяллын ү» was cut mid-word). */
+function tabName(value: string): string {
+  const name = value.replace(/\s+/g, " ").trim();
+  if (name.length <= 28) return name;
+  const cut = name.slice(0, 29);
+  const space = cut.lastIndexOf(" ");
+  return (space >= 8 ? cut.slice(0, space) : name.slice(0, 28)).replace(/[\s,–-]+$/u, "");
+}
+
 /** A question the model sent without its topic: the decision its heading and text speak of. */
 function topicOf(entry: Args, header: string, text: string): AskTopic | "other" {
   const given = ASK_TOPICS.find((topic) => topic === str(entry.topic));
@@ -241,8 +250,11 @@ function builtQuestion(state: TurnState, input: { header: string; text: string; 
   const first = options.findIndex((option) => option.recommended);
   const ordered = (first > 0 ? [options[first], ...options.filter((_option, at) => at !== first)] : options)
     .map((option, at) => (at > 0 && option.recommended ? { label: option.label, ...(option.description ? { description: option.description } : {}), answer: option.answer } : option));
+  // A price question always says which trip it is about (one in the real tab said only "the price").
+  const named = input.trip && (input.topic === "price_remark" || input.topic === "selling_price") && !input.text.includes(input.trip.route_name);
+  const text = named ? `«${input.trip!.route_name}»: ${input.text}` : input.text;
   return {
-    question: { header: input.header, text: input.text, options: ordered, ...(fixed?.custom_label ? { custom_label: fixed.custom_label } : {}), ...(fixed?.custom_placeholder ? { custom_placeholder: fixed.custom_placeholder } : {}) },
+    question: { header: input.header, text, options: ordered, ...(fixed?.custom_label ? { custom_label: fixed.custom_label } : {}), ...(fixed?.custom_placeholder ? { custom_placeholder: fixed.custom_placeholder } : {}) },
     asked: { topic: input.topic, header: input.header, ...(input.file ? { file: input.file } : {}), ...(input.trip ? { trip_id: input.trip.id } : {}) },
     must: input.must,
   };
@@ -264,7 +276,7 @@ function dialogQuestions(args: Args, state: TurnState): { questions: AskDialogQu
   raw.forEach((entry, index) => {
     const text = str(entry.question).slice(0, 1_200);
     if (!text) return;
-    const header = str(entry.header).replace(/\s+/g, " ").slice(0, 28) || `Асуулт ${index + 1}`;
+    const header = tabName(str(entry.header)) || `Асуулт ${index + 1}`;
     const topic = topicOf(entry, header, text);
     let file = documentNamed(state, entry.file);
     // The open decision this question asks: the same topic and file, else the first of that topic.

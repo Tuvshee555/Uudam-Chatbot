@@ -177,7 +177,7 @@ function ActionLines({ view }: { view: ActionView }) {
       )}
       {thumbs && (thumbs.before || thumbs.after) && (
         <div className="flex items-center gap-2 pt-1" aria-label="Зургийн өөрчлөлт">
-          <PhotoThumb url={thumbs.before} caption={thumbs.before ? "Одоо" : "Зураггүй"} />
+          <PhotoThumb url={thumbs.before} caption={thumbs.before ? "Одоо" : thumbs.beforeUnknown ? "Ачаалж байна…" : "Зураггүй"} />
           <Icons.chevronRight size={16} className="shrink-0 text-ink-subtle" />
           <PhotoThumb url={thumbs.after} caption={thumbs.after ? "Шинэ" : "Хасагдана"} />
         </div>

@@ -157,6 +157,8 @@ the reader with its price, train days and free infant). The age band was the one
 
 In the real tab on 2026-11-22: a program of a live check-up trip with one hotel changed, sent with «аяллын хөтөлбөрийг энэ файлаар шинэчил», got the question ««…» бүртгэлд аль хэдийн идэвхтэй байна (сайтад нийтлэгдсэн) … 3, 4-р өдрийн буудал … өөрчлөгдөнө. Юу хийх вэ?»; the same file unchanged got "nothing to change" with the trip and its status named. The new trip of 2026-11-21 got a house photo on each of its six empty days and its infant fare set free (with the birth years as the band) through the tab. Two guards came from that run: a message that sets a price but whose proposal changes no fare is sent back once (the model had dropped «үнэгүй» when rewriting a refused proposal), and an age band keeps only the numbers the admin or his file wrote (it had added «0-23 сар»).
 
+Polish of 2026-11-22: a priced list must keep the file's own groups (`listGroupHeadings`: a row with no price above priced rows) — a flat list is sent back with the headings to write, so the site shows each group as a block; a list line's typing slips are fixed in code («8төрөлт» → «8 төрөлт», «BБамбай» → «Бамбай»; capital codes like «СА199» stay); a long tab name is cut between words; a price question always names its trip; and a card replacing a day's photo says «Ачаалж байна…» until the trip is loaded instead of «Зураггүй».
+
 ## Cost and time per instruction (gpt-4.1)
 
 | Kind | Rounds | Cost | Time |
