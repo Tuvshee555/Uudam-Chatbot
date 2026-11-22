@@ -399,7 +399,9 @@ export function getEnv(): ValidatedEnv {
   const source = process.env;
   const errors: string[] = [];
 
-  const openaiApiKey = readRequiredString("OPENAI_API_KEY", source, errors);
+  // Claude answering every AI call (AI_PROVIDER=anthropic + ANTHROPIC_API_KEY): the OpenAI key is only the backup.
+  const claudeAnswers = String(source.AI_PROVIDER || "").trim().toLowerCase() === "anthropic" && Boolean(source.ANTHROPIC_API_KEY?.trim());
+  const openaiApiKey = claudeAnswers ? readOptionalString("OPENAI_API_KEY", source) || "" : readRequiredString("OPENAI_API_KEY", source, errors);
   const verifyToken = readRequiredString("VERIFY_TOKEN", source, errors);
   // Legacy single-page vars are now OPTIONAL — they feed the multi-page roster
   // below as a fallback. parseFacebookPages enforces "at least one page".

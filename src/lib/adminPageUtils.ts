@@ -268,10 +268,10 @@ function apiErrorMessage(
   const wait = formatWaitMs(data?.retry_after_ms);
 
   if (code === "ai_credits_exhausted" || /credit balance exhausted|insufficient_quota|credit_balance_exhausted|billing_hard_limit/i.test(raw)) {
-    return "OpenAI-ийн кредит дууссан тул AI файл уншиж, санал бэлдэж чадахгүй байна. platform.openai.com → Billing хэсэгт кредит нэмсний дараа дахин оруулна уу.";
+    return "AI-ийн кредит дууссан тул файл уншиж, санал бэлдэж чадахгүй байна. Claude: platform.claude.com → Billing (OpenAI: platform.openai.com → Billing) хэсэгт кредит нэмсний дараа дахин оруулна уу.";
   }
   if (code === "ai_unauthorized" || /api key rejected|returned 401|returned 403/i.test(raw)) {
-    return "OpenAI түлхүүр хүчингүй байна (OPENAI_API_KEY). Тохиргоог шалгаад дахин оролдоно уу.";
+    return "AI түлхүүр хүчингүй байна (ANTHROPIC_API_KEY эсвэл OPENAI_API_KEY). Тохиргоог шалгаад дахин оролдоно уу.";
   }
   if (code === "file_unreadable") {
     return raw || fallback;

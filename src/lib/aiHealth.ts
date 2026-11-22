@@ -71,7 +71,7 @@ export async function reportAiOutage(kind: AiFailureKind): Promise<void> {
   }
 }
 
-type AiFailureSummary = { failures: number; minutes_since_last: number | null; credits: boolean; unauthorized: boolean; quota: boolean };
+type AiFailureSummary = { failures: number; minutes_since_last: number | null; credits: boolean; unauthorized: boolean; quota: boolean; claude: boolean };
 
 /** Problems an operator must act on, shown in the admin system check. */
 export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
@@ -82,15 +82,24 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
               (EXTRACT(EPOCH FROM NOW() - MAX(created_at)) / 60)::int AS minutes_since_last,
               COALESCE(BOOL_OR(fields::text LIKE '%credits_exhausted%'), FALSE) AS credits,
               COALESCE(BOOL_OR(fields::text LIKE '%"unauthorized"%'), FALSE) AS unauthorized,
-              COALESCE(BOOL_OR(fields->>'failure_kind' = 'quota'), FALSE) AS quota
+              COALESCE(BOOL_OR(fields->>'failure_kind' = 'quota'), FALSE) AS quota,
+              COALESCE(BOOL_OR(event = 'ai.claude_failed'), FALSE) AS claude
          FROM travel_error_logs
-        WHERE event = 'openai.fallback_failed' AND created_at > NOW() - INTERVAL '2 hours'
+        WHERE event IN ('openai.fallback_failed', 'ai.claude_failed') AND created_at > NOW() - INTERVAL '2 hours'
           -- Deployed code only: a local script's failures (no revision) must not raise the alarm.
           AND fields ? 'deploymentRevision'`,
     ))?.rows[0];
     const ongoing = failures && failures.minutes_since_last !== null && failures.minutes_since_last <= 30;
     if (ongoing && (failures.credits || failures.unauthorized || failures.failures >= 3)) {
-      const cause = failures.credits
+      const cause = failures.claude
+        ? (failures.credits
+          ? "Claude (Anthropic)-ийн кредит дууссан — platform.claude.com → Billing."
+          : failures.unauthorized
+            ? "Anthropic түлхүүр хүчингүй — ANTHROPIC_API_KEY-г шалгана уу."
+            : failures.quota
+              ? "Claude хүсэлтийн хязгаарт хүрсэн (rate limit) — platform.claude.com → Limits."
+              : "Claude хариу өгөхгүй байна — status.claude.com.")
+        : failures.credits
         ? "OpenAI-ийн кредит дууссан — platform.openai.com → Billing."
         : failures.unauthorized
           ? "OpenAI түлхүүр хүчингүй — OPENAI_API_KEY-г шалгана уу."

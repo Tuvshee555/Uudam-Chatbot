@@ -11,6 +11,7 @@ import {
   recordCounter,
 } from "./observability";
 import { fetchWithRetry, UpstreamHttpError } from "./resilience";
+import { askClaudeChatParts, claudeEnabled, openaiBackupAllowed } from "./anthropicChat";
 import type { OpenAIPart, OpenAIResult } from "./openaiProvider";
 
 const OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions";
@@ -58,8 +59,22 @@ export async function askOpenAIChatParts(
      * caller that turns null into an error can say the real cause instead of "request failed".
      */
     onFailure?: (failure: { kind: AiFailureKind; code?: string; message: string }) => void;
+    /** On Claude: the text where the changing part of the prompt starts; the head before it is cached. */
+    cacheBefore?: string;
+    /** Internal: Claude already failed this call; OpenAI is the backup (no second hand-off). */
+    openaiBackup?: boolean;
   },
 ): Promise<OpenAIResult | null> {
+  // AI_PROVIDER=anthropic: Claude answers (anthropicChat.ts); OpenAI only as the backup while its key exists.
+  if (claudeEnabled() && !options?.openaiBackup && !options?.alternateModelAttempted && !options?.withoutPromptCache) {
+    const viaClaude = await askClaudeChatParts(parts, {
+      ...options,
+      model: options?.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
+    });
+    if (viaClaude || !openaiBackupAllowed()) return viaClaude;
+    logWarn("ai.openai_backup", { source: options?.source || "unknown" });
+    return askOpenAIChatParts(parts, { ...options, openaiBackup: true });
+  }
   const key = env.openaiApiKey;
   if (!key) return null;
   if (

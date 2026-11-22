@@ -1,6 +1,7 @@
 import { fixMojibake } from "./encoding";
 import { askOpenAIChatParts } from "./openaiFallback";
 import type { AiFailureKind } from "./aiHealth";
+import { claudeEnabled } from "./anthropicChat";
 
 export type OpenAIUsage = {
   prompt_tokens: number;
@@ -68,18 +69,20 @@ export function aiCallFailureKind(error: unknown): AiFailureKind | undefined {
 }
 
 export function describeAiFailure(failure: AiCallFailure | null): string {
-  if (!failure) return "OpenAI request failed or OPENAI_API_KEY is not configured.";
+  // Which provider answered (AI_PROVIDER=anthropic: Claude): the operator tops up or fixes that one.
+  const [who, keyName] = claudeEnabled() ? ["Claude (Anthropic)", "ANTHROPIC_API_KEY"] : ["OpenAI", "OPENAI_API_KEY"];
+  if (!failure) return `${who} request failed or ${keyName} is not configured.`;
   switch (failure.kind) {
     case "credits_exhausted":
-      return "OpenAI credit balance exhausted (insufficient_quota): the provider refuses every request until billing is topped up.";
+      return `${who} credit balance exhausted (insufficient_quota): the provider refuses every request until billing is topped up.`;
     case "unauthorized":
-      return "OpenAI API key rejected (unauthorized): check OPENAI_API_KEY.";
+      return `${who} API key rejected (unauthorized): check ${keyName}.`;
     case "quota":
-      return `OpenAI rate limit (429): ${failure.message}`;
+      return `${who} rate limit (429): ${failure.message}`;
     case "provider":
-      return `OpenAI did not answer (timeout or network): ${failure.message}`;
+      return `${who} did not answer (timeout or network): ${failure.message}`;
     default:
-      return `OpenAI request failed: ${failure.message}`;
+      return `${who} request failed: ${failure.message}`;
   }
 }
 

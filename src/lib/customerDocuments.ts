@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "crypto";
+import { askClaudeChatParts, claudeEnabled } from "./anthropicChat";
 import { waitUntil } from "@vercel/functions";
 import { askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import { queryNeon } from "./neonDb";
@@ -685,6 +686,16 @@ async function extractFileDataWithOpenAIFile(
   file: DownloadedFile,
 ): Promise<Record<string, unknown> | null> {
   if (file.mimeType !== "application/pdf") return null;
+  // On Claude (AI_PROVIDER=anthropic) the PDF goes as a document block through the shared call.
+  if (claudeEnabled()) {
+    const result = await askClaudeChatParts(
+      [{ inlineData: { mimeType: "application/pdf", data: file.buffer.toString("base64") } },
+        { text: buildCustomerFileExtractionPrompt({ fileName: file.fileName, mimeType: file.mimeType }) }],
+      { source: "customer_documents.pdf_extract", model: process.env.OPENAI_VISION_MODEL || "gpt-4.1", jsonMode: true, maxOutputTokens: 2_200, timeoutMs: 45_000,
+        systemText: "You are a strict customer document classifier for a travel agency. Return JSON only. Never invent missing data." },
+    );
+    return result && result.text !== "REFER" ? parseJsonObject(result.text) : null;
+  }
   const key = process.env.OPENAI_API_KEY;
   if (!key) return null;
   const model = process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || "gpt-4.1";

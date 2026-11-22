@@ -15,6 +15,8 @@ export function understandingModel(trace?: { requestId?: string; correlationId?:
       timeoutMs: UNDERSTANDING_TIMEOUT_MS,
       model: understandingModelName(),
       source: "trip_understanding",
+      // On Claude the date and catalogue head (the same all day) is cached; the conversation follows it.
+      cacheBefore: "\nConversation so far:",
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
     });

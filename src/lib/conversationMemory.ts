@@ -1,4 +1,5 @@
 import { waitUntil } from "@vercel/functions";
+import { claudeEnabled } from "./anthropicChat";
 import { askOpenAI } from "./openaiProvider";
 import {
   dbGetCustomerMemory,
@@ -21,6 +22,11 @@ const MEMORY_MAX_OUTPUT_TOKENS = 8_192;
 // before the cursor covers them), so this call gets a tight budget instead of
 // the 45s/2-retry default that used to block the webhook.
 const MEMORY_TIMEOUT_MS = 10_000;
+// On Claude (AI_PROVIDER=anthropic) the note goes to Haiku, which rewrites the whole note in 6-9 s
+// (about twice what gpt-4o-mini wrote): 10 s timed out 15 of 46 merges in the live replay of
+// 2026-11-22. The merge runs after the reply (waitUntil), so 25 s keeps no customer waiting and
+// stays well inside the webhook's 60 s.
+const CLAUDE_MEMORY_TIMEOUT_MS = 25_000;
 
 /**
  * True when a proposed merged memory looks like the model dropped a large part
@@ -153,7 +159,7 @@ export async function updateCustomerMemoryAfterTurn(input: {
       source,
       temperature: 0,
       maxOutputTokens: MEMORY_MAX_OUTPUT_TOKENS,
-      timeoutMs: MEMORY_TIMEOUT_MS,
+      timeoutMs: claudeEnabled() ? CLAUDE_MEMORY_TIMEOUT_MS : MEMORY_TIMEOUT_MS,
       maxRetries: 0,
       preferOpenAI: true,
     });

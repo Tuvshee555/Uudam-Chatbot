@@ -112,7 +112,8 @@ test("live replay", { timeout: 900_000 }, async (context) => {
   const sends: Array<{ senderId: string; text: string; buttons: string[] }> = [];
   context.mock.method(globalThis, "fetch", async (input: unknown, init?: RequestInit) => {
     const url = String(input);
-    if (url.startsWith("https://api.openai.com/")) {
+    // Both providers count against the cap (AI_PROVIDER=anthropic sends the bot's calls to Claude).
+    if (url.startsWith("https://api.openai.com/") || url.startsWith("https://api.anthropic.com/")) {
       // Hard cap: a run that grows past its approved budget stops instead of draining the key.
       if (++modelCalls > callBudget) throw new Error(`live replay stopped: model call budget of ${callBudget} reached`);
       return realFetch(input as string, init);
