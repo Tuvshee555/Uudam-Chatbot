@@ -792,6 +792,8 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
     if (attempted) processed++;
   }
   await notifyWebsiteTripsChanged(changedSlugs);
+  // A trip changed: the corporate catalogue PDF is rebuilt now, not hours later on GitHub's schedule (catalogue/send.ts).
+  if (processed > 0) await (await import("./catalogue/send")).requestCatalogueRefreshSoon().catch(() => undefined);
   return { processed };
 }
 

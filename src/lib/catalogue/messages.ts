@@ -67,8 +67,12 @@ export function catalogueRepeatText(input: { url: string; linkOnly: boolean }): 
 /** Neither the file nor a link could be given after the caption: staff send it themselves. */
 export const CATALOGUE_STAFF_WILL_SEND_TEXT = "Каталогийн файл дамжихгүй байна. Манай ажилтан тантай холбогдож каталогийг илгээнэ.";
 
-/** The published file is out of date: no file, the live site, and a person follows up. */
-export function catalogueStaleText(siteUrl: string): string {
+/**
+ * The published file is out of date: no file now. Held (held.ts): the fresh file follows in minutes, said in one line.
+ * Otherwise the live site, and a person follows up.
+ */
+export function catalogueStaleText(siteUrl: string, options: { willSend?: boolean } = {}): string {
+  if (options.willSend) return "Каталогийг шинэчилж байна, хэдэн минутын дараа энд илгээнэ.";
   return `Каталогийг одоо шинэчилж байна. Одоогийн аяллуудыг манай вэбсайтаас үзнэ үү: ${siteUrl}\nМанай ажилтан тантай холбогдож сонголтуудыг илгээнэ.`;
 }
 

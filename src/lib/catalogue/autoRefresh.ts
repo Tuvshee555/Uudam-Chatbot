@@ -16,6 +16,8 @@ import { catalogueAgeDays, evaluateFreshness, checkLiveDrift, type FreshnessVerd
 export const REFRESH_AFTER_DAYS = 14;
 export const AUTO_REFRESH_ACTOR = "auto-refresh";
 const LOCK_MINUTES = 12;
+/** One render plus up to two more when trips changed while it rendered (~90 s each, inside the 300 s limit). */
+const MAX_PASSES = 3;
 /** Versions kept per edition (the published one always stays). */
 export const KEEP_VERSIONS = 4;
 
@@ -64,6 +66,8 @@ export type RefreshResult = {
   versionNo?: number;
   versionId?: string;
   detail?: string;
+  /** Held customer requests (held.ts) this refresh answered with the fresh file. */
+  heldSent?: number;
 };
 
 async function tryLock(): Promise<boolean> {
@@ -94,10 +98,16 @@ export async function refreshCatalogues(opts: { now?: Date; only?: "quick" | "co
 
   const results: RefreshResult[] = [];
   try {
-    const now = opts.now ?? deps.now();
-    const nowIso = now.toISOString();
     const config = await store.getCatalogueConfig();
-    for (const edition of opts.only ? [opts.only] : (["complete", "quick"] as const)) {
+    // Trips edited while a file renders make it stale the moment it is published: look again, at most twice more.
+    let editions: Array<"quick" | "complete"> = opts.only ? [opts.only] : ["complete", "quick"];
+    const started = Date.now();
+    // Another pass only while there is time for a render (~90 s) inside the 300 s function limit.
+    for (let pass = 0; pass < MAX_PASSES && editions.length && (pass === 0 || Date.now() - started < 150_000); pass++) {
+    const now = pass === 0 && opts.now ? opts.now : deps.now();
+    const nowIso = now.toISOString();
+    const publishedNow: Array<"quick" | "complete"> = [];
+    for (const edition of editions) {
       try {
         const published = await store.getPublished(edition);
         let freshness: FreshnessVerdict | null = null;
@@ -133,15 +143,25 @@ export async function refreshCatalogues(opts: { now?: Date; only?: "quick" | "co
         }
         const live = await store.publishVersion(draft.id, AUTO_REFRESH_ACTOR, { acknowledgeWarnings: false });
         results.push({ edition, status: "published", reasons: decision.reasons, versionNo: live.versionNo, versionId: live.id });
+        publishedNow.push(edition);
       } catch (error) {
         results.push({ edition, status: "failed", reasons: [], detail: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300) });
       }
+    }
+    editions = publishedNow;
     }
     // Every version stores its PDF and page previews in the database: keep the newest few per edition
     // (rollback targets) so storage does not grow with every refresh. A published version is never removed.
     await store.pruneOldVersions?.(KEEP_VERSIONS).catch(() => undefined);
   } finally {
     await unlock();
+  }
+  // Customers who asked while the file was out of date get the fresh one now (held.ts), not after asking again.
+  for (const result of results) {
+    if (result.status !== "published" && result.status !== "unchanged") continue;
+    const [{ deliverHeldCatalogues }, { sendHeldCatalogue }] = await Promise.all([import("./held"), import("./send")]);
+    const counts = await deliverHeldCatalogues(result.edition, sendHeldCatalogue).catch(() => null);
+    if (counts?.sent) result.heldSent = counts.sent;
   }
   return results;
 }

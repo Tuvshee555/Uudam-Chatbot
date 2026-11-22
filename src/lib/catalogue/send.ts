@@ -23,6 +23,7 @@ import { BOT_MESSAGE_METADATA } from "../messenger";
 import { hashIdentifier, logInfo, logWarn, recordCounter } from "../observability";
 import { isStaffTakeoverSendBlocked } from "../takeoverGuard";
 import { checkLiveDrift, evaluateFreshness, type FreshnessVerdict, type LiveDrift } from "./freshness";
+import { holdCatalogueRequest, type HeldRequest, type HeldVerdict } from "./held";
 import {
   CATALOGUE_BLOCK_REASON_TEXT, CATALOGUE_STAFF_WILL_SEND_TEXT, catalogueCaption, catalogueLeadContext, catalogueLinkFollowupText,
   catalogueLinkOnlyText, catalogueRepeatText, catalogueStaleText,
@@ -74,6 +75,8 @@ export type SendDeps = {
    * forget: the customer already has the safe text; the next customer gets the fresh PDF.
    */
   requestRefresh?: (edition: CatalogueEdition) => Promise<void>;
+  /** Hold the request so the fresh file follows when the refresh publishes it (held.ts). True = held for sure. */
+  holdRequest?: (input: { senderId: string; pageId: string; edition: string; platform: string; lastInboundAt: Date }) => Promise<boolean>;
   store: CatalogueSendStore;
   /** Is this conversation owned by a person, or is the bot paused? null = the bot may send. */
   gate: (senderId: string, pageId: string) => Promise<GateVerdict>;
@@ -106,24 +109,36 @@ export function catalogueFileUrl(token: string, env: Partial<NodeJS.ProcessEnv> 
   return base && token ? `${base}${CATALOGUE_PUBLIC_FILE_PATH}/${encodeURIComponent(token)}` : "";
 }
 
-const REFRESH_PING_GAP_MS = 10 * 60_000;
+// Short: a trip edit asks for a refresh at once (websiteTripSync.ts); the refresh renders only when the file changed.
+const REFRESH_PING_GAP_MS = 2 * 60_000;
 const lastRefreshPing = new Map<string, number>();
 
+/**
+ * A trip changed (websiteTripSync.ts flush): rebuild both catalogues now, so the file is already fresh when a
+ * customer asks (owner, 2026-11-22: "just be ready"). GitHub's 30-minute schedule really runs every 4-7 hours.
+ */
+export async function requestCatalogueRefreshSoon(): Promise<void> {
+  // Not throttled: every trip change must be looked at; the refresh renders only when the file changed and its lock
+  // keeps two renders from overlapping.
+  await pingRefresh(undefined, true);
+}
+
 /** Pings the deployment's own refresh endpoint (it answers at once and rebuilds in the background). */
-async function pingRefresh(edition: CatalogueEdition): Promise<void> {
+async function pingRefresh(edition?: CatalogueEdition, always = false): Promise<void> {
   const base = (process.env.SITE_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "")).replace(/\/$/, "");
   const secret = process.env.CRON_SECRET || "";
   if (!base || !secret || edition === "preview") return;
-  const last = lastRefreshPing.get(edition) ?? 0;
-  if (Date.now() - last < REFRESH_PING_GAP_MS) return;
-  lastRefreshPing.set(edition, Date.now());
+  const key = edition ?? "all";
+  const last = lastRefreshPing.get(key) ?? 0;
+  if (!always && Date.now() - last < REFRESH_PING_GAP_MS) return;
+  lastRefreshPing.set(key, Date.now());
   try {
-    await fetch(`${base}/api/cron/catalogue-refresh?async=1&edition=${edition}`, {
+    await fetch(`${base}/api/cron/catalogue-refresh?async=1${edition ? `&edition=${edition}` : ""}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${secret}` },
       signal: AbortSignal.timeout(5_000),
     });
-    logInfo("catalogue.refresh_requested", { edition });
+    logInfo("catalogue.refresh_requested", { edition: key });
   } catch (error) {
     logWarn("catalogue.refresh_request_failed", { edition, message: error instanceof Error ? error.message : String(error) });
   }
@@ -133,6 +148,7 @@ export function defaultSendDeps(): SendDeps {
   return {
     now: () => new Date(),
     requestRefresh: pingRefresh,
+    holdRequest: holdCatalogueRequest,
     store: {
       getPublished: async (edition) => (await import("./store")).getPublished(edition),
       getVersionMeta: async (id) => (await import("./store")).getVersionMeta(id),
@@ -361,8 +377,13 @@ export async function deliverCatalogue(input: DeliverCatalogueInput): Promise<Ca
         .catch(() => null);
       if (claim && !claim.claimed) return answerRepeat(claim, plan.version, false);
       let sent = false;
+      // Held: the fresh file follows by itself once the refresh publishes it, so the reply can say so (held.ts).
+      const held = input.platform !== "instagram" && !input.testSend && deps.holdRequest
+        ? await deps.holdRequest({ senderId: input.senderId, pageId: input.pageId, edition: input.edition, platform: input.platform || "facebook",
+          lastInboundAt: new Date(toMillis(input.lastInboundAt) ?? deps.now().getTime()) }).catch(() => false)
+        : false;
       try {
-        sent = await sendText({ reply: catalogueStaleText(deps.websiteUrl()), failTag: "catalogue_stale" });
+        sent = await sendText({ reply: catalogueStaleText(deps.websiteUrl(), { willSend: held }), failTag: "catalogue_stale" });
       } catch (error) {
         if (claim) await deps.store.finishSend(claim.sendId, { status: "failed", reason: "stale_text_delivery_failed" }).catch(() => false);
         throw error;
@@ -646,3 +667,24 @@ export async function sendCatalogueTest(input: CatalogueTestInput): Promise<Cata
 
 export { catalogueCaption } from "./messages";
 export { evaluateFreshness } from "./freshness";
+
+/**
+ * One held request (held.ts), after the refresh published a fresh file: the normal delivery, so every gate still
+ * applies. Kept while the file is still not fresh; dropped when nothing may be sent (window passed, a person took
+ * the chat over, no page token).
+ */
+export async function sendHeldCatalogue(request: HeldRequest): Promise<HeldVerdict> {
+  const { pageTokenForRecipient } = await import("../env");
+  const pageToken = pageTokenForRecipient(request.pageId, request.senderId);
+  if (!pageToken) return "drop";
+  const edition = request.edition as CatalogueEdition;
+  const input: DeliverCatalogueInput = {
+    senderId: request.senderId, pageId: request.pageId, pageToken, edition, explicitResend: false, lastInboundAt: request.lastInboundAt,
+    platform: request.platform === "instagram" ? "instagram" : "facebook", dedupeKey: `held:${edition}:${request.heldAt}`, customerText: "",
+  };
+  const plan = await planCatalogueDelivery(input, resolveSendDeps());
+  if (!plan.ready) return plan.status === "stale_fallback" || plan.status === "no_published_version" ? "keep" : "drop";
+  const outcome = await deliverCatalogue(input);
+  logInfo("catalogue.held_delivered", { edition, status: outcome.status, senderHash: hashIdentifier(request.senderId) });
+  return "sent";
+}
