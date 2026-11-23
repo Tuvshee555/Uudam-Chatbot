@@ -215,7 +215,9 @@ export async function askClaudeChatParts(parts: OpenAIPart[], options: ClaudeCal
 
   const text = response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("").trim();
   if (response.stop_reason === "refusal") logWarn("ai.claude_refusal", { source, model, category: response.stop_details?.category ?? null });
-  else if (!text) logWarn("ai.claude_empty_completion", { source, model, stop: response.stop_reason });
+  // A deliberately one-token ping (daily_health_check) often has no text on Claude: that is no failure, and it put a
+  // false warning in the admin system check every day (2026-11-23).
+  else if (!text && !options.truncationExpected) logWarn("ai.claude_empty_completion", { source, model, stop: response.stop_reason });
   else if (response.stop_reason === "max_tokens" && !options.truncationExpected) logWarn("ai.claude_incomplete_completion", { source, model, stop: response.stop_reason });
   const answer = response.stop_reason === "refusal" || !text ? "REFER" : options.jsonMode ? jsonObjectText(text) : text;
 
