@@ -1004,4 +1004,11 @@ export async function websiteSyncStatus() {
   if (!result) throw new Error("Website sync status unavailable");
   return result.rows;
 }
+/** Live trips whose website dates are closed for no readable price (websiteClosedDates.ts). */
+export async function websiteClosedForNoPriceIssues() {
+  if (!process.env.BOOKING_DATABASE_URL) return [];
+  const { CLOSED_FOR_NO_PRICE_SQL, closedForNoPriceIssues } = await import("./websiteClosedDates");
+  const result = await bookingPool().query<{ title: string; closed: number; upcoming: number }>(CLOSED_FOR_NO_PRICE_SQL);
+  return closedForNoPriceIssues(result.rows);
+}
 export async function closeBookingPool() { await pool?.end(); pool = undefined; }

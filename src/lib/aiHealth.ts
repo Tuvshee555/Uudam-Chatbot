@@ -123,6 +123,9 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
   if (process.env.VERCEL) {
     issues.push(...await (await import("./customerImageStorage")).customerImageStorageIssues().catch(() => []));
   }
+  // A live trip whose website dates closed because no price could be read (2026-11-22: all 20 dates
+  // of a new trip, unnoticed until a customer was told it was full).
+  issues.push(...await (await import("./websiteTripSync")).websiteClosedForNoPriceIssues().catch(() => []));
   // A purge whose file could not be deleted is retried daily; until then it is visible here.
   issues.push(...await (await import("./customerDocumentPurge")).storageDeletionIssues().catch(() => []));
   return issues;
