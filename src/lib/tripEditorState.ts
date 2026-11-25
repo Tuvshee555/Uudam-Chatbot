@@ -9,6 +9,7 @@ import type {
 } from "./adminTypes";
 import { emptyBookingTerms, toBookingTermsForm } from "./adminTypes";
 import { deriveChildRules, withDerivedSummaryFields } from "./priceGroups";
+import { pricingDates, type PricingGroup } from "./adminDatePricing";
 import { documentedFreeFare } from "./tripCompleteness";
 import { resolveAgeRules } from "./ageRules";
 import { websiteDetailsPatch } from "./websiteTripDetails";
@@ -132,7 +133,7 @@ export function tripToEditorState(trip: Partial<TravelTrip> & { extra?: Row }): 
     tripAliases: list<string>(extra.aliases),
     // As saved: completing the rows here made an unchanged trip look edited and saved it again.
     // The controls themselves tolerate a missing field (parseAgeRange); the review completes file rows.
-    tripPriceGroups: list<PriceGroup>(extra.price_groups),
+    tripPriceGroups: withoutStrayDatelessGroups(list<PriceGroup>(extra.price_groups)),
     tripDiscounts: list<DiscountGroup>(extra.discounts),
     tripExtraFees: list<ExtraFee>(extra.extra_fees),
     tripDepartureRule: typeof extra.departure_rule === "string" ? extra.departure_rule : "",
@@ -186,6 +187,15 @@ export function structuredDuration(text: string): { duration_days: number; durat
 }
 
 /**
+ * A departure whose last date staff removed stayed behind as a dateless price row («Огноогүй гаралт») beside the
+ * dated ones (2026-11-23). No trip mixes the two on purpose, so such a row is left out when others have dates.
+ */
+export function withoutStrayDatelessGroups(groups: PriceGroup[]): PriceGroup[] {
+  const dated = groups.filter((group) => pricingDates(group as PricingGroup).length > 0);
+  return dated.length ? dated : groups;
+}
+
+/**
  * The fields to save from the editor's state. `editingTrip` is the trip as it
  * was opened, or null for a trip not saved yet. `hadProfiles` says the opened
  * (unsaved) trip had a hotel list, so removing every hotel saves an empty one.
@@ -197,6 +207,7 @@ export function editorStateToFields(state: TripEditorState, editingTrip: TravelT
     .filter((profile) => profile.name);
   const hadProfiles = options.hadProfiles ?? Array.isArray(editingTrip?.extra?.hotel_profiles);
   const duration = structuredDuration(tripDraft.duration_text || "");
+  const priceGroups = withoutStrayDatelessGroups(state.tripPriceGroups);
   return {
     category: tripDraft.category || "Аялал",
     operator_name: tripDraft.operator_name || "UUDAM TRAVEL AGENCY",
@@ -221,9 +232,9 @@ export function editorStateToFields(state: TripEditorState, editingTrip: TravelT
       ...(profiles.length || hadProfiles ? { hotel_profiles: profiles } : {}),
       ...(duration ?? {}),
       aliases: state.tripAliases.filter(Boolean),
-      price_groups: state.tripPriceGroups.map(withDerivedSummaryFields),
+      price_groups: priceGroups.map(withDerivedSummaryFields),
       discounts: state.tripDiscounts,
-      child_rules: deriveChildRules(state.tripPriceGroups, {
+      child_rules: deriveChildRules(priceGroups, {
         child: tripDraft.child_price_free === "true",
         infant: tripDraft.infant_price_free === "true",
       }),

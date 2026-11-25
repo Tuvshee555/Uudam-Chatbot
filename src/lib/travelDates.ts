@@ -481,8 +481,33 @@ export function requestedDepartureScope(text: string, now = new Date()): Request
     const around = date.source === "explicit" ? aroundDateWindow(text, date.ymd, now) : null;
     return around ? { kind: "range", startYmd: around[0], endYmd: around[1] } : { kind: "dates", dates: [date.ymd] };
   }
+  const months = listedMonthsRange(text, now);
+  if (months) return { kind: "range", startYmd: months.startYmd, endYmd: months.endYmd };
   const month = resolveRequestedMonth(text, now);
   return month ? { kind: "month", year: month.year, month: month.month } : null;
+}
+
+const MONTH_LIST_SEPARATOR = /\s*(?:,|болон|ба|эсвэл)\s*/iu;
+const MONTH_LIST_RE = /(?<![\d./])((?:1[0-2]|0?[1-9])(?:\s*(?:,|болон|ба|эсвэл)\s*(?:1[0-2]|0?[1-9]))+)\s*(?:-?\s*(?:р|дугаар|dugaar|r))?\s*(?:сар|sar)/iu;
+
+/**
+ * "1,2,3-р сарын аялал" / "12, 1-р сард" — several months named at once: from the first to the last of them.
+ * Only the last was read ("3-р сар"), and a customer asking for January to March got the March dates alone
+ * (2026-11-23).
+ */
+export function listedMonthsRange(text: string, now: Date): RequestedRange | null {
+  const match = MONTH_LIST_RE.exec(text);
+  if (!match) return null;
+  const resolved = match[1].split(MONTH_LIST_SEPARATOR).map((value) => resolveRequestedMonth(`${Number(value)} сар`, now))
+    .filter((month): month is RequestedMonth => Boolean(month));
+  if (resolved.length < 2) return null;
+  const keys = resolved.map((month) => month.year * 12 + month.month - 1).sort((a, b) => a - b);
+  const first = keys[0], last = keys[keys.length - 1];
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const lastDay = new Date(Date.UTC(Math.floor(last / 12), (last % 12) + 1, 0)).getUTCDate();
+  const startYmd = `${Math.floor(first / 12)}-${pad((first % 12) + 1)}-01`;
+  const endYmd = `${Math.floor(last / 12)}-${pad((last % 12) + 1)}-${pad(lastDay)}`;
+  return { startYmd, endYmd, label: rangeLabel(startYmd, endYmd), phrase: `${resolved.map((month) => month.month).join(", ")} сард` };
 }
 
 const AROUND_DATE_RE = /\d(?:\s*-?\s*(?:ны|ний|нд|ын|ийн|н|д))?\s*(?:хавьцаа|хавьд|хавиар|хавь|орчим\p{L}*|орчмоор|үеэр|тойро?н?|around|orchim\p{L}*|havi(?:tsaa|tsa|d|ar)?)(?!\p{L})/iu;
@@ -1267,7 +1292,7 @@ export function buildDepartureDateAvailabilityReply(input: {
     return `${label} гарах аялал одоогоор байхгүй байна. Дараа нь гарах аяллууд:\n\n${options}`;
   };
 
-  const range = resolveRequestedRange(userText, now);
+  const range = resolveRequestedRange(userText, now) ?? listedMonthsRange(userText, now);
   if (range === "unsupported") return "REFER";
   const listedDays = sharedMonthDayList(userText, now);
   if (listedDays) {

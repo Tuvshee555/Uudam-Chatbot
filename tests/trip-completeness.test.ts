@@ -41,22 +41,25 @@ test("the commercially required fields block a save when empty", () => {
 
   assert.deepEqual(
     gaps.map((gap) => gap.key).sort(),
-    ["adult_price", "child_price", "departure_dates", "infant_price", "photo_urls"],
+    ["adult_price", "child_price", "departure_dates", "photo_urls"],
   );
-  assert.equal(formatGapLabels(gaps), "Том хүний үнэ, Хүүхдийн үнэ, Нярайн үнэ, Гарах өдөр, Зураг");
+  assert.equal(formatGapLabels(gaps), "Том хүний үнэ, Хүүхдийн үнэ, Гарах өдөр, Зураг");
 });
 
-test("the infant fare is its own required tier, not something child_price covers", () => {
-  const gaps = blockingGaps(findTripGaps(tripCompletenessInput({ ...complete, infant_price: null })));
-  assert.deepEqual(gaps.map((gap) => gap.key), ["infant_price"]);
+// Expectation changed 2026-11-23: a missing infant fare warns but no longer blocks a save (owner 2026-11-18: the bot
+// asks staff for an unknown infant fare). Blocking, it sat on 46 live trips and made every save a «Дутуугаар хадгалах».
+test("the infant fare is its own tier, not something child_price covers — flagged, never blocking", () => {
+  const gaps = findTripGaps(tripCompletenessInput({ ...complete, infant_price: null }));
+  assert.deepEqual(gaps.map((gap) => [gap.key, gap.severity]), [["infant_price", "warning"]]);
   assert.equal(gaps[0].label, "Нярайн үнэ");
+  assert.deepEqual(blockingGaps(gaps), []);
 });
 
 test("an infant fare the operator documented as free counts as filled, a bare 0 does not", () => {
   // A bare 0 is missing data — the existing rule that a stray 0 must never
   // advertise itself as free.
   assert.ok(
-    blockingGaps(findTripGaps(tripCompletenessInput({ ...complete, infant_price: 0 })))
+    findTripGaps(tripCompletenessInput({ ...complete, infant_price: 0 }))
       .some((gap) => gap.key === "infant_price"),
     "a bare 0 still reads as a missing fare",
   );
@@ -71,7 +74,7 @@ test("an infant fare the operator documented as free counts as filled, a bare 0 
     },
   });
   assert.deepEqual(
-    blockingGaps(findTripGaps(documentedFree)).map((gap) => gap.key),
+    findTripGaps(documentedFree).map((gap) => gap.key),
     [],
     "a documented free infant fare is not a gap",
   );

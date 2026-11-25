@@ -140,10 +140,11 @@ const RULES: Array<{
     ok: (t) => money(t.adult_price) },
   { key: "child_price", label: "Хүүхдийн үнэ", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => money(t.child_price) || t.child_fare_free === true },
-  // Infants have their own fare on every trip — customers ask, and 0/blank
-  // would read as "babies fly free", a promise the agency never made. A fare
-  // the operator DID write down as free is complete, not missing.
-  { key: "infant_price", label: "Нярайн үнэ", where: "Үнэ ба гаралт", severity: "blocking",
+  // Infants have their own fare — customers ask, and 0/blank must never read as "babies fly free". A fare the
+  // operator DID write down as free is complete. Most source files carry no infant fare at all; the bot then says to
+  // ask for it and hands the customer to staff (infantFareAsk.ts, owner 2026-11-18). As a blocking gap it sat on 46
+  // trips, so every save asked «Дутуугаар хадгалах» and staff learned to click past real gaps (2026-11-23): a warning.
+  { key: "infant_price", label: "Нярайн үнэ", where: "Үнэ ба гаралт", severity: "warning",
     ok: (t) => money(t.infant_price) || t.infant_fare_free === true },
   { key: "departure_dates", label: "Гарах өдөр", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => filledDates(t.departure_dates) },

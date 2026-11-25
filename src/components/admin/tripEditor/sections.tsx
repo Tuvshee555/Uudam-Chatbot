@@ -135,7 +135,7 @@ export function PricingSection(p: SectionProps) {
               <MoneyField ariaLabel="Хүүхдийн үнэ" value={tripDraft.child_price} disabled={childFree} placeholder={childFree ? "Үнэгүй" : ""} missing={p.missing("child_price")} onChange={(v) => setTripDraft((d) => ({ ...d, child_price: v }))} />
               <div className="mt-1.5"><Checkbox label="Үнэгүй" checked={childFree} onChange={(free) => setTripDraft((d) => ({ ...d, child_price_free: free ? "true" : "", child_price: free ? "" : d.child_price }))} /></div>
             </Field>
-            <Field label="Нярай" required missing={p.missing("infant_price")} anchor="infant_price">
+            <Field label="Нярай" missing={p.missing("infant_price")} anchor="infant_price">
               <MoneyField ariaLabel="Нярайн үнэ" value={tripDraft.infant_price} disabled={infantFree} placeholder={infantFree ? "Үнэгүй" : ""} missing={p.missing("infant_price")} onChange={(v) => setTripDraft((d) => ({ ...d, infant_price: v }))} />
               <div className="mt-1.5"><Checkbox label="Үнэгүй" checked={infantFree} onChange={(free) => setTripDraft((d) => ({ ...d, infant_price_free: free ? "true" : "", infant_price: free ? "" : d.infant_price }))} /></div>
             </Field>

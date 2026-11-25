@@ -1,4 +1,5 @@
 import { asksClockTime, scheduleTimeSection } from "./scheduleTimes";
+import { dealDateNote } from "./departureDeals";
 import type { TravelTrip } from "./travelTypes";
 import type { FastPathRoute } from "./fastPathRouting";
 import { buildTripRequest, mergeTripSelection, type TripRequest, type TripSelection, type TripTopic } from "./tripRequest";
@@ -92,7 +93,7 @@ const records = (value: unknown): Record<string, unknown>[] => Array.isArray(val
 const today = (now: Date) => new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
 const TRANSPORT = { direct_flight: "Шууд нислэгтэй аялал.", land: "Газрын аялал.", land_flight: "Газар + нислэг хосолсон аялал.", cruise: "Усан онгоцны аялал." };
 
-function selectionQuestion(result: TripOfferResult, text: string, quote?: (option: string) => string | null): string | null {
+function selectionQuestion(result: TripOfferResult, text: string, quote?: (option: string) => string | null, dateMark?: (date: string) => string): string | null {
   if (result.status !== "needs_selection") return null;
   const field = result.fields[0];
   const question = field === "date" ? "Аль гарах өдрөөр аялах вэ?"
@@ -100,9 +101,10 @@ function selectionQuestion(result: TripOfferResult, text: string, quote?: (optio
       : field === "package" ? "Аль багцыг сонгох вэ?"
         : field === "passengers" ? "Хүүхэд тус бүрийн насыг хэлнэ үү."
           : "Хямдралын нөхцөл танд тохирох эсэхийг тодруулна уу.";
-  return [question, ...compactReplyOptions(result.options, text).map((option) => {
+  return [question, ...(field === "date" ? listedDates(result.options, text) : compactReplyOptions(result.options, text)).map((option) => {
     const price = result.options.includes(option) ? quote?.(option) : null;
-    return `• ${field === "date" ? mnDate(option) : option}${price ? `\n${price}` : ""}`;
+    const mark = field === "date" && result.options.includes(option) ? dateMark?.(option) : "";
+    return `• ${field === "date" ? mnDate(option) : option}${mark ? ` — ${mark}` : ""}${price ? `\n${price}` : ""}`;
   })].join("\n");
 }
 
@@ -184,6 +186,9 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
 
 /** At most this many groups of departures with their own fares; more is a menu, not an answer. */
 const MAX_FARE_DATE_GROUPS = 4;
+/** One trip's dates listed whole up to this many (they are one short line each). */
+const MAX_LISTED_DATES = 6;
+const listedDates = (dates: string[], text: string) => dates.length <= MAX_LISTED_DATES ? dates : compactReplyOptions(dates, text);
 
 /**
  * "хүүхдийн үнэ" for a trip whose fare differs by departure: the asked fare for each departure,
@@ -204,6 +209,18 @@ function faresByDate(trip: TravelTrip, cards: TripOfferResult[], fareKinds: read
   }
   if (groups.size < 2 || groups.size > MAX_FARE_DATE_GROUPS) return null;
   return [...groups.values()].map((group) => `${group.dates.map((date) => mnDate(date)).join(", ")}\n${group.body}`).join("\n\n");
+}
+
+/**
+ * A price question on a trip priced per date asks which date (the date decides the fare). Each date of that question
+ * carries its adult fare: the question went out with no price at all (2026-11-23). "" when the date has no single
+ * adult fare.
+ */
+function dateAdultFare(trip: TravelTrip, selection: TripSelection, date: string, now: Date): string {
+  const card = resolveTripOfferFareCard(trip, { date, hotel: selection.hotel, packageId: selection.package }, now);
+  if (card.status !== "ready" || card.offer.currency !== "MNT") return "";
+  const adult = card.offer.fares.filter((fare) => fare.kind === "adult");
+  return adult.length === 1 && adult[0].fare.kind === "exact" ? `Том хүн ${adult[0].fare.amount.toLocaleString("en-US")}₮` : "";
 }
 
 /**
@@ -263,7 +280,7 @@ function dateIndependentHotelPreview(trip: TravelTrip, selection: TripSelection,
     return hotelFarePreview(trip, { ...selection, date }, card, now, text)?.split("\n").slice(1).join("\n").trim() || null;
   });
   if (!previews.length || previews.some((preview) => !preview || preview !== previews[0])) return null;
-  return [previews[0], "Аль гарах өдрөөр аялах вэ?", ...compactReplyOptions(result.options, text).map((option) => `• ${result.options.includes(option) ? mnDate(option) : option}`)].join("\n");
+  return [previews[0], "Аль гарах өдрөөр аялах вэ?", ...listedDates(result.options, text).map((option) => `• ${result.options.includes(option) ? mnDate(option) : option}`)].join("\n");
 }
 
 /** All factual sections are built from the same ID and offer selection. */
@@ -367,6 +384,11 @@ export function buildTripAnswerPlan(input: {
     && (!dateScope.range || (date >= dateScope.range[0] && date <= dateScope.range[1]))
     && (!dateScope.dates || dateScope.dates.includes(date)));
   const websiteAvailability = departureAvailability(trip);
+  // Few seats, closed or on sale: the same mark beside a date wherever the date is listed (2026-11-23).
+  const dateMark = (date: string) => {
+    const row = websiteAvailability.find((entry) => entry.date === date);
+    return row && departureIsClosed(row) ? "захиалга хаалттай" : [row && departureIsLow(row) ? "цөөн суудал" : "", dealDateNote(trip, date)].filter(Boolean).join(", ");
+  };
   const recurring = dates.length ? [] : recurringScheduleTexts(trip);
   const sections: Partial<Record<TripTopic, string>> = {};
   const incomplete = new Map<TripTopic, string[]>();
@@ -487,7 +509,10 @@ export function buildTripAnswerPlan(input: {
         if (request.topics.includes("availability")) answered.add("availability");
       }
       const question = selectionQuestion(result, intentText, request.topics.includes("price")
-        ? selectionFareQuote(trip, selection, result, now, intentText) : undefined);
+        ? selectionFareQuote(trip, selection, result, now, intentText) : undefined,
+      // Only a plain price question: a child or infant fare asked is never answered with the adult one.
+      request.topics.includes("price") && !pricePassengers.length && !replyPreferences(intentText).requiredFareKinds.length
+        ? (date) => [dateAdultFare(trip, selection, date, now), dateMark(date)].filter(Boolean).join(", ") : dateMark);
       // A seats question with no date ("суудал байна уу") gets the fare and the bookable dates to
       // pick from; it used to get the preview dropped and nothing else, so the bot handed off.
       const availabilityOnly = !request.topics.includes("price");
@@ -504,10 +529,15 @@ export function buildTripAnswerPlan(input: {
       }
     }
   }
-  const datesSection = (list: string[]) => `Гарах өдрүүд:\n${compactReplyOptions(list.map((date) => {
-    const row = websiteAvailability.find((entry) => entry.date === date);
-    return `• ${mnDate(date)}${row && departureIsClosed(row) ? " — захиалга хаалттай" : row && departureIsLow(row) ? " — цөөн суудал" : ""}`;
-  }), intentText).join("\n")}`;
+  // Up to six dates of one trip are listed whole: "хэзээ гарах вэ" got three and "Өөр 2 сонголт бий.", and the
+  // customer had to ask again for the dates staff would simply have listed (2026-11-23).
+  const datesSection = (list: string[]) => {
+    const lines = list.map((date) => {
+      const note = dateMark(date);
+      return `• ${mnDate(date)}${note ? ` — ${note}` : ""}`;
+    });
+    return `Гарах өдрүүд:\n${(lines.length <= MAX_LISTED_DATES ? lines : compactReplyOptions(lines, intentText)).join("\n")}`;
+  };
   if (request.topics.includes("dates") && !answered.has("dates")) {
     if (needsSelection && result?.status === "needs_selection" && result.fields[0] === "date") answered.add("dates");
     // A weekly schedule is the trip's own text ("Баасан гараг бүр"): it went out as silence when

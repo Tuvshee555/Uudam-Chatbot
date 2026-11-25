@@ -118,6 +118,11 @@ export function stripTripNamesForIntent(text: string, trips: TravelTrip[]): stri
     return shortName !== name && shortName.split(/\s+/).length >= 2 ? [shortName] : [];
   }))];
   const looseNames = names.map(looseNorm);
+  const namePrefixesWithNumbers = [...new Set(names.flatMap((name) => {
+    const words = name.split(/\s+/);
+    return words.slice(0, -1).map((_, index) => words.slice(0, words.length - 1 - index).join(" "))
+      .filter((prefix) => prefix.split(/\s+/).length >= 3 && /\d/.test(prefix));
+  }))].sort((a, b) => b.length - a.length);
   return websiteTripLinksInText(text).textWithoutUrls
     .split("\n")
     .map((line) => {
@@ -134,6 +139,13 @@ export function stripTripNamesForIntent(text: string, trips: TravelTrip[]): stri
       for (const shortName of shortNames) {
         const pattern = tripNamePattern(shortName);
         if (pattern) stripped = stripped.replace(pattern, (match: string, offset: number, whole: string) => /^\s*(?:\d|$)/u.test(whole.slice(offset + match.length)) ? " " : match);
+      }
+      // The start of a name with a number in it, typed with another ending: "УБ-<хот> хотын 1,2,3-р сарын аялал" for
+      // "… 1,2,3-р сарын аяллын хөтөлбөр". Left in, its "3-р сарын" read as the customer asking for March, and only
+      // the March date was listed (2026-11-23). Only a start of three words or more, and only one holding a number.
+      for (const prefix of namePrefixesWithNumbers) {
+        const pattern = tripNamePattern(prefix);
+        if (pattern && stripped.search(pattern) >= 0) { stripped = stripped.replace(pattern, " "); break; }
       }
       return stripLatinTripNames(stripped, names, shortNames).replace(/[ \t]{2,}/g, " ").trim();
     })

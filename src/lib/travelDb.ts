@@ -1155,6 +1155,13 @@ export async function patchTrip(id: string, fields: TripMutationFields, syncPost
   }
   if (!Object.keys(cleaned).length) return mapTripRow(previous);
   const previousExtra = (previous.extra || {}) as Record<string, unknown>;
+  // Archiving hides the trip from customers (archiveTrip). Setting it back to «Идэвхтэй» left it hidden: no website
+  // page, no bot answer, and nothing said why (2026-11-23). A restore shows it again unless the same save hides it.
+  if (previous.status === "archived" && typeof cleaned.status === "string" && ["active", "sold_out", "paused"].includes(cleaned.status)
+    && previousExtra.customer_visible === false && !(fields.extra && "customer_visible" in fields.extra)) {
+    cleaned.extra = { ...((cleaned.extra as Record<string, unknown> | undefined) || {}), customer_visible: true };
+    fields = { ...fields, extra: { ...(fields.extra || {}), customer_visible: true } };
+  }
   const incomingExtra = fields.extra || {};
   if (incomingExtra.website_details_patch) applyWebsiteDetailsPatch((incomingExtra.website_details_patch as Record<string, unknown>).base, incomingExtra.website_details_patch);
   const rawExtra = { ...previousExtra, ...incomingExtra };

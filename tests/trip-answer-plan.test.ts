@@ -194,9 +194,16 @@ test("a program link does not dump an itinerary, but an explicit full program ke
 
 test("date menus stay within the asked month and disclose other dates rather than flooding", () => {
   const departure_dates = ["2026-10-08", "2026-10-15", "2026-10-22", "2026-10-29", "2026-11-05"];
+  // Expectation changed 2026-11-23: up to six dates of one trip are listed whole. Three and «Өөр 1 сонголт бий.»
+  // held back a date the customer had just asked for, and nothing said which (staff-action check, 2026-11-23).
   const compact = buildTripAnswerPlan({ text: "10 сард гарах өдрүүд", trips: [trip({ departure_dates })], route: route(), now });
-  assert.doesNotMatch(compact!.reply, /11 сарын 5|10 сарын 29/);
-  assert.match(compact!.reply, /Өөр 1 сонголт/);
+  assert.doesNotMatch(compact!.reply, /11 сарын 5/);
+  assert.match(compact!.reply, /10 сарын 29/);
+  assert.doesNotMatch(compact!.reply, /Өөр \d+ сонголт/);
+  // More dates than one list holds still go out as three and how many more.
+  const many = ["2026-10-01", "2026-10-04", "2026-10-08", "2026-10-11", "2026-10-15", "2026-10-18", "2026-10-22", "2026-10-29"];
+  const flood = buildTripAnswerPlan({ text: "10 сард гарах өдрүүд", trips: [trip({ departure_dates: many })], route: route(), now });
+  assert.match(flood!.reply, /Өөр \d+ сонголт/);
   const full = buildTripAnswerPlan({ text: "10 сард гарах бүх өдрүүд", trips: [trip({ departure_dates })], route: route(), now });
   assert.match(full!.reply, /10 сарын 29/);
   assert.doesNotMatch(full!.reply, /11 сарын 5/);

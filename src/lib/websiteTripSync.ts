@@ -21,6 +21,7 @@ import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
 import { newWebsiteTripSlug } from "./websiteTripSlug";
 import { logWarn } from "./observability";
+import { waitUntil } from "@vercel/functions";
 import { installBrandWriteGuard } from "./brandWriteGuard";
 import { isSecondaryBrand } from "./brand";
 import { inBrandAdminMode, storedPosterPdfUrl } from "./brandAdminMode";
@@ -703,7 +704,25 @@ export async function changeDepartureState(sourceTripId: string, date: string, s
     id: String(row.id), status: String(row.status), seatsLeft: row.seats_left ?? null,
     after_status: String(row.after_status), after_seats_left: row.after_seats_left ?? null,
   }));
+  if (rows.length) await resendTripPriceRows([sourceTripId]);
   return { slug: result.rows[0]?.slug ? String(result.rows[0].slug) : null, rows };
+}
+
+/**
+ * The website keeps a copy of each date's seat state inside the trip's price rows, written when the trip is sent.
+ * A seat change made on the date row alone left that copy behind: 1/28 set back to «Нээлттэй» still read
+ * «Дүүрсэн» and «Үнэ лавлах» in the page's price table (2026-11-23). The trip is sent again after every change.
+ */
+async function resendTripPriceRows(sourceTripIds: string[]): Promise<void> {
+  const ids = [...new Set(sourceTripIds.filter(Boolean))];
+  if (!ids.length) return;
+  try {
+    await queryNeon(`UPDATE trip_website_sync SET revision=revision+1, updated_at=NOW(), last_error=NULL WHERE trip_id=ANY($1::text[])`, [ids]);
+    const work = Promise.all(ids.map((id) => flushWebsiteSync(id, 1))).then(() => undefined, () => undefined);
+    try { waitUntil(work); } catch { void work; }
+  } catch (error) {
+    logWarn("website_seat_resend_failed", { error: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
+  }
 }
 
 /** One date's sale fares and «Онцлох», as a departure row holds them (null = none). */
@@ -871,7 +890,9 @@ export async function restoreDepartureRows(rows: DepartureStateRow[]): Promise<{
     for (const row of rows) {
       await client.query(`UPDATE "Departure" SET status=$2::"DepartureStatus","seatsLeft"=$3 WHERE id=$1`, [row.id, row.status, row.seatsLeft]);
     }
+    const trips = await client.query<{ source: string | null }>(`SELECT DISTINCT t."sourceTripId" AS source FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id WHERE d.id=ANY($1::text[])`, [rows.map((row) => row.id)]);
     await client.query("COMMIT");
+    await resendTripPriceRows(trips.rows.map((row) => String(row.source || "")));
     return { restored: rows.length, changedSince: [] };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);

@@ -915,6 +915,21 @@ function sharedDestinationAliases(trips: TravelTrip[]): Map<string, Set<string>>
   return shared;
 }
 
+/**
+ * The message holds the start of the trip's name through its numbers and one word more: "УБ-<хот> хотын 1,2,3-р
+ * сарын аялал" for "… 1,2,3-р сарын аяллын хөтөлбөр". The digits are no keywords, so the three trips that share
+ * "<хот> хотын" scored alike and the customer got a list of three (2026-11-23). "<хот> хотын 1 сарын" stops before
+ * the name's numbers end and names no trip this way.
+ */
+function namesNumberedStart(query: string, routeNorm: string): boolean {
+  const words = routeNorm.split(" ").filter(Boolean);
+  let lastDigit = -1;
+  words.forEach((word, index) => { if (/\d/.test(word)) lastDigit = index; });
+  if (lastDigit < 0 || lastDigit + 2 > words.length - 1) return false;
+  const prefix = words.slice(0, lastDigit + 2).join(" ");
+  return prefix.split(" ").length >= 4 && ` ${query} `.includes(` ${prefix} `);
+}
+
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   // The understanding step already decided this message names no trip.
   if (isNoTripText(text)) return [];
@@ -1012,10 +1027,11 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     const routeTokenPool = unique([...routeKeywords, ...routePhoneticKeywords]);
     const coverage = matchedWords.length / routeTokenPool.length;
     const exactRouteHit = query.includes(routeNorm) || (routePhonetic.length > 0 && queryPhonetic.includes(routePhonetic)) ? 1 : 0;
+    const numberedStartHit = !exactRouteHit && namesNumberedStart(query, routeNorm) ? 1 : 0;
     const minMatchCount = routeTokenPool.length === 1 ? 1 : 2;
     const strongTokenHit = matchedWords.some((word) => word.length >= 4);
 
-    if (matchedWords.length < minMatchCount && exactRouteHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
+    if (matchedWords.length < minMatchCount && exactRouteHit === 0 && numberedStartHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
     if (coverage < 0.5 && exactRouteHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
 
     // Discount boost: when user asks about discounts, rank trips with discounts higher
@@ -1058,6 +1074,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
 
     const score =
       exactRouteHit * 100 +
+      numberedStartHit * 90 +
       aliasHit * 80 +
       matchedWords.length * 20 +
       coverage * 10 -
@@ -1174,14 +1191,23 @@ export function resolveTripFromUserMessage(
   if (inOrderMentions.length === 1) {
     return { status: "verified", trip: inOrderMentions[0].trip, candidates: [] };
   }
+  // The start of one trip's name through its numbers ("УБ-<хот> хотын 1,2,3-р сарын аялал"): that trip.
+  const numberedStartMentions = matches.filter((match) => namesNumberedStart(normalizedQuery, normText(tripIdentityName(match.trip.route_name))));
+  if (numberedStartMentions.length === 1) {
+    return { status: "verified", trip: numberedStartMentions[0].trip, candidates: [] };
+  }
 
   // A requested departure narrows a destination's variants only after an
   // explicit trip identity has had its say. A sibling leaving on that date
   // cannot replace the fully named trip whose schedule the customer asked.
   const requestedMonthDays = extractQueryMonthDays(text);
   if (requestedMonthDays.length > 0) {
+    // Only among the trips the words point to: "12.20 хавьцаа <хот> + <уул> ХААЛГА + АВАТАРЫН ЕРТӨНЦ аялал" matched
+    // its trip by seven words, and the date handed it to a trip that matched one word ("аватар") but left on 12/20
+    // (replay gate, 2026-11-23). A variant of the same destination shares at least half of the best match's words.
+    const credible = Math.ceil(best.matchedWords.length / 2);
     const datedMatches = matches.filter((match) =>
-      requestedMonthDays.some((date) => tripHasMonthDay(match.trip, date)),
+      match.matchedWords.length >= credible && requestedMonthDays.some((date) => tripHasMonthDay(match.trip, date)),
     );
     if (datedMatches.length === 1) {
       return { status: "verified", trip: datedMatches[0].trip, candidates: [] };

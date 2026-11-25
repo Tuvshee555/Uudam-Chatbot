@@ -44,6 +44,11 @@ export type NormalizedPassengerFare = {
   /** Passenger rows > child rules > derived scalar summaries. */
   priority: number;
   issues: string[];
+  /**
+   * A date sale's fare: the regular fare it replaces (departureDeals.ts). Of several regular fares of this kind on
+   * that date (two child tiers by height) only the one at this amount goes on sale; the others stay as they are.
+   */
+  replaces?: number;
 };
 export type OfferAvailability = {
   status: "open" | "unknown" | "sold_out" | "paused" | "cancelled" | "departed" | "unavailable" | "conflict";
@@ -330,10 +335,17 @@ function fares(raw: Row, trip: TravelTrip, id: string, now: Date, base: boolean)
     // A label with no age ("Хүүхэд 1,2–1,4 м өндөр") still names who the fare is for, and so does
     // what a label says beside its age ("Хүүхэд 6-11 нас оргүй": the no-bed fare, not every 6-11).
     const condition = !scalar && kind ? passengerLabelCondition(age ? labelWithoutAge(str(data.label)) : str(data.label), kind) : null;
-    result.push({ kind: kind || "child", ageRange: age || null, condition, ageBand: band, fare, currency: (str(data.currency) || currency).toUpperCase(), sourceOfferId: id, priority, issues });
+    const replaces = scalar && kind && typeof data[`${kind}_replaces`] === "number" ? data[`${kind}_replaces`] as number : undefined;
+    result.push({ kind: kind || "child", ageRange: age || null, condition, ageBand: band, fare, currency: (str(data.currency) || currency).toUpperCase(), sourceOfferId: id, priority, issues, ...(replaces ? { replaces } : {}) });
   };
   for (const kind of KINDS) {
-    const age = str(raw[`${kind}_age`]) || str(savedBands[kind]);
+    // The trip's saved category is used as the age only when it IS one. "1,2м-1,4м өндөртэй хүүхэд" names who the
+    // fare is for (by height); read as an age it was "invalid_age_band", and a date sale on such a trip (its row
+    // carries only fares) made that date a contradiction: the bot would not quote the sale (2026-11-23).
+    const saved = str(savedBands[kind]);
+    // An age written wrong ("24-20 нас") is still read, and stays the contradiction it is.
+    const savedIsAge = Boolean(saved) && (Boolean(ageBand(saved)) || /\d\s*(?:нас|сар|настай|сартай|years?|months?|nas|sar)(?![\p{L}])/iu.test(saved));
+    const age = str(raw[`${kind}_age`]) || (savedIsAge ? saved : "");
     if (raw[`${kind}_price`] !== undefined || raw[`${kind}_price_range`] != null || age) add(raw, kind, age, 0, true);
   }
   for (const entry of rows(raw.passenger_prices)) {
@@ -590,7 +602,16 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
     const usable = entries.filter((f) => f.fare.kind !== "unknown" || f.priority > 0 || f.issues.length > 0);
     if (!usable.length) continue;
     const max = Math.max(...usable.map(rank));
-    effective.push(...usable.filter((f) => rank(f) === max));
+    const top = usable.filter((f) => rank(f) === max);
+    // One date-sale fare over several regular fares of the kind: only the tier it replaces is on sale.
+    const sale = top.length === 1 && top[0].replaces ? top[0] : null;
+    const lower = sale ? usable.filter((f) => rank(f) < max) : [];
+    const regular = lower.length ? lower.filter((f) => rank(f) === Math.max(...lower.map(rank))) : [];
+    if (sale && regular.length > 1 && regular.some((f) => f.fare.kind === "exact" && f.fare.amount === sale.replaces)) {
+      effective.push(...regular.map((f) => (f.fare.kind === "exact" && f.fare.amount === sale.replaces ? { ...f, fare: sale.fare, sourceOfferId: sale.sourceOfferId } : f)));
+      continue;
+    }
+    effective.push(...top);
   }
   if (effective.some((f) => f.issues.length)) return conflict(effective.flatMap((f) => f.issues));
   const prices: ResolvedTripOffer["prices"] = {};

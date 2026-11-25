@@ -126,6 +126,9 @@ export function dealDiscountRows(trip: Pick<TravelTrip, "extra">): Row[] {
     date_keys: [deal.date],
     ...(deal.sale_adult_price !== null ? { adult_price: deal.sale_adult_price } : {}),
     ...(deal.sale_child_price !== null ? { child_price: deal.sale_child_price } : {}),
+    // Which regular fare each sale replaces: of two child tiers on the date, only that one is on sale (tripOffers.ts).
+    ...(deal.sale_adult_price !== null && deal.regular_adult_price ? { adult_replaces: deal.regular_adult_price } : {}),
+    ...(deal.sale_child_price !== null && deal.regular_child_price ? { child_replaces: deal.regular_child_price } : {}),
     source_kind: "date_sale",
   }));
 }

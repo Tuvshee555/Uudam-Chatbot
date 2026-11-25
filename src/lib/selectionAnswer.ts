@@ -16,6 +16,8 @@ export function selectionOptions(reply: string): string[] {
   return reply.slice(question.index + question[0].length)
     .split(/(?:^|\n|\s)•\s+/u).slice(1)
     .map((option) => (option.split("\n")[0] || "").trim())
+    // A date's own note ("1 сарын 21 — Том хүн 3,491,000₮, цөөн суудал") is not part of the choice.
+    .map((option) => /^\d{1,2}\s*сарын\s*\d{1,2}\s+—\s/u.test(option) ? option.replace(/\s+—\s.*$/u, "") : option)
     .filter((option) => option && !/^Өөр\s+\d+\s+сонголт/iu.test(option));
 }
 

@@ -174,8 +174,12 @@ export function TripDatePriceEditor({ groups, onChange }: { groups: PriceGroup[]
     }));
     setSelection(`${selected.date}|${nextIndex}`);
   };
+  // A new departure starts with the open one's fares (adult, every child and infant band, hotel), only without
+  // dates: it opened empty, staff typed the adult price and saved, and the new date had no child fare (2026-11-23).
   const addDeparture = () => {
-    onChange((current) => [...current, emptyPriceGroup()]);
+    const source = group ? Object.fromEntries(Object.entries({ ...group, passenger_prices: bands })
+      .filter(([field]) => !/date|seat|availab|sale|featured/i.test(field))) : null;
+    onChange((current) => [...current, source ? { ...emptyPriceGroup(), ...source, dates: [], display_dates: [], date_keys: [] } as PriceGroup : emptyPriceGroup()]);
     setSelection(`|${groups.length}`);
     setSearch("");
   };

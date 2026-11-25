@@ -14,6 +14,7 @@ import { verifyTripReply } from "./tripReplyVerification";
 import { customerDate } from "./customerDate";
 import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
 import { holidayWindowOf } from "./askedWindow";
+import { stripTripNamesForIntent } from "./customerTurn";
 import { holidayDatesFor, holidayDatesToShow, type ResolvedHoliday } from "./holidayDepartures";
 import type { TravelTrip } from "./travelOps";
 import {
@@ -1669,8 +1670,11 @@ export function buildAmbiguousTripReply(
   options: { askToChoose?: boolean; customerText?: string } = {},
   now = new Date(),
 ) {
-  const scope = options.customerText ? requestedDepartureScope(options.customerText, now) : null;
-  const holiday = options.customerText ? holidayWindowOf(options.customerText, now) : null;
+  // The asked time is read without the trips' own names: "… 1,2,3-р сарын аялал хэзээ" is no question about March
+  // (2026-11-23: the list showed only the March date).
+  const askedTime = options.customerText ? stripTripNamesForIntent(options.customerText, trips) : "";
+  const scope = askedTime ? requestedDepartureScope(askedTime, now) : null;
+  const holiday = askedTime ? holidayWindowOf(askedTime, now) : null;
   if (scope?.kind === "unsupported") return "REFER";
   const candidates = scope ? trips.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, scope))) : trips;
   const text = options.customerText || "";
