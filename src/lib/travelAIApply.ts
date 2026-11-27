@@ -27,6 +27,7 @@ import { instructionForbidsTripCreation, validateAIChangeProposal } from "./trav
 import { attachPersistedPhotoSources, changeRequestId } from "./travelAI";
 import { PUBLISH_PRICE_TEXT, publishPriceGap, withoutReviewOnly } from "./tripReview";
 import { validateTripDataChange } from "./tripDataValidation";
+import { MAX_DATE_SEATS, parseDateSeats } from "./departureSeats";
 import { DATE_STATE_WORDS, WEBSITE_STATUS_WORDS, dateStateProblem, dateStatusOf, isDepartureDateState, isTripEditVerb, partnerSourceUrl, planTripEdit, ulaanbaatarToday } from "./tripActionPlan";
 import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
 import { mismatchedRowsText, syncPosterPriceTable } from "./poster/priceTableWrite";
@@ -59,7 +60,7 @@ export type AIApplyDeps = {
   upsertTrip: (input: { id?: string; fields: TripMutationFields }) => Promise<TravelTrip | null>;
   resolveTripIdByMatch: (match: AITripAction["match"]) => Promise<{ id?: string | null; conflict?: string | null }>;
   getPoster: (id: string) => Promise<PosterRow | null>;
-  changeDepartureState: (tripId: string, date: string, state: DepartureDateState) => Promise<DepartureStateChange>;
+  changeDepartureState: (tripId: string, date: string, state: DepartureDateState | null, seats?: number | null) => Promise<DepartureStateChange>;
   restoreDepartureRows: (rows: DepartureStateRow[]) => Promise<{ restored: number; changedSince: string[] }>;
   /** Only for rolling back a snapshot saved before raw rows were recorded. */
   setDepartureSeatState: (tripId: string, date: string, state: DateSeatState) => Promise<boolean>;
@@ -84,7 +85,7 @@ const defaultDeps: AIApplyDeps = {
   upsertTrip: (input) => upsertTrip(input),
   resolveTripIdByMatch: (match) => resolveTripIdByMatch(match),
   getPoster: async (id) => (await import("./poster/db")).getPosterTrip(id),
-  changeDepartureState: async (tripId, date, state) => (await import("./websiteTripSync")).changeDepartureState(tripId, date, state),
+  changeDepartureState: async (tripId, date, state, seats) => (await import("./websiteTripSync")).changeDepartureState(tripId, date, state, seats),
   restoreDepartureRows: async (rows) => (await import("./websiteTripSync")).restoreDepartureRows(rows),
   setDepartureSeatState: async (tripId, date, state) => (await import("./websiteTripSync")).setDepartureSeatState(tripId, date, state),
   readDepartureRows: async (tripId) => (await import("./websiteTripSync")).readDepartureRows(tripId),
@@ -332,14 +333,17 @@ function snapshotOf(action: AITripAction, before: TravelTrip, after: TravelTrip,
 
 async function applyDateState(action: AITripAction, targetId: string): Promise<ActionResult> {
   const date = String(action.date || "").trim();
-  const state = action.state;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isDepartureDateState(state)) {
+  // A day's state, its own seat count, or both (a count alone decides the state: none left = full).
+  const state = action.state == null ? null : action.state;
+  const seats = action.seats === undefined ? undefined : parseDateSeats(action.seats);
+  if (action.seats !== undefined && seats === undefined) return { ok: false, message: `Үлдсэн суудлын тоо: 0–${MAX_DATE_SEATS} хүртэлх бүхэл тоо байна.` };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || (state === null ? seats === undefined : !isDepartureDateState(state))) {
     return { ok: false, message: "Огноо эсвэл төлөв буруу байна." };
   }
   const before = await deps.getTripById(targetId);
   if (!before) return { ok: false, message: "Target trip not found." };
   if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
-  const problem = dateStateProblem(before, date, state, deps.now());
+  const problem = dateStateProblem(before, date, state, deps.now(), action.seats);
   if (problem) return { ok: false, message: problem };
   // A seat button changes a day on the website without moving the trip's version: the day must
   // still show what the proposal saw, or that later change would be overwritten.
@@ -351,7 +355,7 @@ async function applyDateState(action: AITripAction, targetId: string): Promise<A
   }
   let change: DepartureStateChange;
   try {
-    change = await deps.changeDepartureState(targetId, date, state);
+    change = await deps.changeDepartureState(targetId, date, state, seats);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, message: /not configured/i.test(message)
@@ -365,9 +369,12 @@ async function applyDateState(action: AITripAction, targetId: string): Promise<A
   // The trip page is cached for a day; its static parts would show the old state until then.
   if (slug) await deps.notifyWebsite([slug]).catch(() => undefined);
   const was = WEBSITE_STATUS_WORDS[change.rows[0].status] || change.rows[0].status;
+  const first = change.rows[0];
+  const statusNow = WEBSITE_STATUS_WORDS[first.after_status] || first.after_status;
+  const seatsWords = seats === undefined ? "" : seats === null ? ", суудлын тоо арилав" : `, үлдсэн суудал ${first.after_seats_left ?? seats}`;
   return {
     ok: true,
-    message: `"${before.route_name}" — ${date}: ${was} → ${DATE_STATE_WORDS[state]}`,
+    message: `"${before.route_name}" — ${date}: ${was} → ${state ? DATE_STATE_WORDS[state] : statusNow}${seatsWords}`,
     snapshot: { action, trip_id: targetId, before: null, after: null, departure_rows: change.rows, website_slug: slug },
   };
 }

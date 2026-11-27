@@ -334,7 +334,7 @@ export function validateAIChangeProposal(
       delete action.match;
       if (verb === "set_date_state") {
         action.date = normalizeDateText(String(rawAction.date || ""));
-        const problem = dateStateProblem(trip, action.date, rawAction.state, now);
+        const problem = dateStateProblem(trip, action.date, rawAction.state, now, rawAction.seats);
         if (problem) {
           blockingConflicts.push(problem);
           continue;

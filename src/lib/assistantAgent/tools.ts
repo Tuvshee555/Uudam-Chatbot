@@ -49,7 +49,8 @@ const ACTION_ITEM = {
     trip_id: { type: "string", description: "The exact trip_id from get_trip / search_trips / the resolved link. Required except fare_change_all with all_active and append_notes with trip_ids." },
     summary: { type: "string", description: "One short Mongolian line for the review card, e.g. «12/2: Дүүрсэн», «Сайтаас нуух»." },
     date: { type: "string", description: "set_date_state / set_date_price / set_date_sale: the departure day, YYYY-MM-DD, one of the trip's departures." },
-    state: { type: "string", enum: ["open", "low", "full", "paused"], description: "set_date_state: open = нээлттэй, low = цөөн суудал, full = дүүрсэн, paused = түр хаасан." },
+    state: { type: "string", enum: ["open", "low", "full", "paused"], description: "set_date_state: open = нээлттэй, low = цөөн суудал, full = дүүрсэн, paused = түр хаасан. Leave it out when only a seat count is given." },
+    seats: { type: "integer", minimum: 0, description: "set_date_state: how many seats are LEFT on that ONE date («5 суудал үлдсэн», «12/2-нд 8 суудал байгаа», «үлдсэн суудал 3»). 0 = the date is full; seats on a full date reopen it. A few-seats flag stays as it is: set state low only when he says «цөөн суудал»." },
     fares: {
       type: "object",
       description: "set_date_price: the fares of that ONE date to change.",

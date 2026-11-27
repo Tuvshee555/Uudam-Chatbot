@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { departureSeatsAfterTripEdit } from "../src/lib/departureSeats";
+import { MAX_DATE_SEATS, departureSeatsAfterTripEdit, parseDateSeats } from "../src/lib/departureSeats";
 import { lowSeatDates, openDateWording } from "../src/lib/departureAvailability";
 import { resolveTripOffer } from "../src/lib/tripOffers";
 import { websiteTripPayload } from "../src/lib/websiteTripPayload";
@@ -95,4 +95,29 @@ test("the admin control lists each upcoming date with its own state", () => {
   assert.doesNotMatch(html, /3-р сарын 3/, "a cancelled date is not offered");
   assert.doesNotMatch(html, /1-р сарын 1 /, "a past date is not offered");
   assert.match(html, /1 өдөр «Цөөн суудал» гэж харагдаж байна/);
+});
+
+test("a typed seat count is a whole number 0..200, empty clears it, anything else is not a count (2026-11-27)", () => {
+  assert.equal(parseDateSeats(5), 5);
+  assert.equal(parseDateSeats("12"), 12);
+  assert.equal(parseDateSeats(" 7 "), 7);
+  assert.equal(parseDateSeats(0), 0);
+  assert.equal(parseDateSeats(MAX_DATE_SEATS), MAX_DATE_SEATS);
+  assert.equal(parseDateSeats(null), null);
+  assert.equal(parseDateSeats(""), null);
+  for (const bad of [-1, 2.5, MAX_DATE_SEATS + 1, "abc", "1e3", "12 хүн", {}, [], true, NaN, undefined]) assert.equal(parseDateSeats(bad), undefined, String(bad));
+});
+
+test("the admin control has a seat-count box on every date, filled from the website's own count (2026-11-27)", () => {
+  const admin = trip([
+    { date: "2099-02-10", status: "OPEN", seatsLeft: 12 }, { date: "2099-02-17", status: "ALMOST_FULL", seatsLeft: null },
+    { date: "2099-02-24", status: "SOLD_OUT", seatsLeft: 0 },
+  ].map((entry) => ({ ...entry }))) as unknown as AdminTrip;
+  const html = renderToStaticMarkup(createElement(ToastProvider, null, createElement(DateSeatsEditor, { trip: admin, apiFetch: async () => new Response("{}") })));
+  const boxes = [...html.matchAll(/aria-label="([^"]*үлдсэн суудлын тоо)"[^>]*value="([^"]*)"/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(boxes, [
+    ["2-р сарын 10 · Мягмар үлдсэн суудлын тоо", "12"],
+    ["2-р сарын 17 · Мягмар үлдсэн суудлын тоо", ""],
+    ["2-р сарын 24 · Мягмар үлдсэн суудлын тоо", "0"],
+  ]);
 });

@@ -11,6 +11,7 @@ import { inBrandAdminMode } from "./brandAdminMode";
 import { connectedTripMutation, type PosterWrite } from "./connectedTripStore";
 import { flushWebsiteSync, withWebsiteDepartureAvailability } from "./websiteTripSync";
 import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
+import { parseDateSeats } from "./departureSeats";
 import { applyWebsiteDetailsPatch } from "./websiteTripDetails";
 import { sharedMap } from "./processState";
 import { ensureTravelSchema } from "./travelSchema";
@@ -1768,7 +1769,9 @@ export function isCompleteCleanAction(action: AITripAction): boolean {
   const fields = action.fields || {};
   const hasTarget = Boolean(action.trip_id || action.match?.route_name || action.match?.operator_name);
   if (verb === "patch") return hasTarget && Object.keys(fields).length > 0;
-  if (verb === "set_date_state") return hasTarget && isIsoDate(action.date) && (isDateSeatState(action.state) || action.state === "paused");
+  if (verb === "set_date_state") {
+    return hasTarget && isIsoDate(action.date) && (isDateSeatState(action.state) || action.state === "paused" || (action.state == null && parseDateSeats(action.seats) !== undefined && action.seats !== undefined));
+  }
   if (verb === "set_date_sale") {
     const sale = action.sale && typeof action.sale === "object" ? action.sale : {};
     return hasTarget && isIsoDate(action.date) && (typeof sale.adult === "number" || typeof sale.child === "number" || action.clear_sale === true || typeof action.featured === "boolean");

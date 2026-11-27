@@ -331,7 +331,8 @@ export function describeAction(action: AIAction): {
   const changes: string[] = [];
   const targetNorm = String(target).trim().toLowerCase();
   if (verbRaw === "set_date_state" && action.date) {
-    changes.push(`${formatDateMn(action.date)}: ${DATE_STATE_LABELS[String(action.state)] || String(action.state || "")}`);
+    const seatsNow = typeof (action as { seats?: unknown }).seats === "number" ? `үлдсэн суудал ${(action as { seats?: number }).seats}` : "";
+    changes.push(`${formatDateMn(action.date)}: ${[DATE_STATE_LABELS[String(action.state)] || (action.state ? String(action.state) : ""), seatsNow].filter(Boolean).join(", ")}`);
   }
   if (verbRaw === "set_date_sale" && action.date) changes.push(...dateSaleLines(action as unknown as AITripAction));
   for (const [key, value] of Object.entries(fields)) {

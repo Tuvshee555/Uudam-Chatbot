@@ -27,6 +27,7 @@ import { itineraryDayPatchOf, planItineraryDay } from "./tripItineraryDayEdit";
 import { planPhotoEdit } from "./tripPhotoEdit";
 import { notesHeadingOf, notesSectionText, planAppendNotes } from "./tripNotesAppend";
 import { planHotelPhotos } from "./tripHotelPhotos";
+import { MAX_DATE_SEATS, parseDateSeats } from "./departureSeats";
 import { TRIP_EDIT_VERBS, type AITripAction, type DepartureDateState, type TravelTrip, type TripEditVerb, type TripMutationFields } from "./travelTypes";
 
 export { partnerSourceUrl, PARTNER_EDIT_REASON } from "./tripDatePrice";
@@ -152,9 +153,18 @@ export function tripDepartureDays(trip: TravelTrip, now: Date = new Date()): str
  * not have yet used to be promised "it will apply once published" and then failed at save).
  * The agent calls this before proposing; validation and apply call it again.
  */
-export function dateStateProblem(trip: TravelTrip, date: string, state: unknown, now: Date = new Date()): string | null {
+export function dateStateProblem(trip: TravelTrip, date: string, state: unknown, now: Date = new Date(), seats?: unknown): string | null {
   if (!ISO.test(String(date || ""))) return "Огноог YYYY-MM-DD хэлбэрээр заана уу.";
-  if (!isDepartureDateState(state)) return "Огнооны төлөв: нээлттэй, цөөн суудал, дүүрсэн эсвэл түр хаасан гэсний нэг байна.";
+  const stated = state !== undefined && state !== null && state !== "";
+  const counted = seats !== undefined;
+  const count = counted ? parseDateSeats(seats) : undefined;
+  if (counted && count === undefined) return `Үлдсэн суудлын тоо: 0–${MAX_DATE_SEATS} хүртэлх бүхэл тоо байна.`;
+  if (stated ? !isDepartureDateState(state) : !counted) return "Огнооны төлөв: нээлттэй, цөөн суудал, дүүрсэн эсвэл түр хаасан гэсний нэг байна.";
+  // A date cannot be full with seats left, nor open with none: say so instead of saving one of the two.
+  if (stated && typeof count === "number") {
+    if (state === "full" && count > 0) return `${shortDay(date)}: ${count} суудал үлдсэн бол «Дүүрсэн» биш. Дүүрсэн бол үлдсэн суудал 0 байна.`;
+    if (state !== "full" && count === 0) return `${shortDay(date)}: 0 суудал үлдсэн бол огноо «Дүүрсэн» байна.`;
+  }
   if (partnerSourceUrl(trip)) return `«${trip.route_name}» ${PARTNER_EDIT_REASON}`;
   const day = shortDay(date);
   if (date < ulaanbaatarToday(now)) return `${day} өнгөрсөн өдөр тул төлвийг нь өөрчлөхгүй.`;
@@ -321,6 +331,7 @@ const BASE_KEYS = ["action", "trip_id", "match", "expected_updated_at", "summary
 const VERB_KEYS: Record<string, (action: Row) => Row> = {
   set_date_state: (action) => {
     const kept = KEEP([...BASE_KEYS, "date", "state"])(action);
+    if (action.seats !== undefined && parseDateSeats(action.seats) !== undefined) kept.seats = parseDateSeats(action.seats);
     // Only the shape dateStatusOf writes ("OPEN", "OPEN|SOLD_OUT").
     if (typeof action.observed_status === "string" && /^[A-Z_]+(?:\|[A-Z_]+)*$/.test(action.observed_status.trim())) kept.observed_status = action.observed_status.trim();
     return kept;

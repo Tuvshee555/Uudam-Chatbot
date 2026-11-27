@@ -87,10 +87,17 @@ export function describeChange(action: AITripAction, trip?: TravelTrip | null, n
 
   if (verb === "set_date_state") {
     const date = text(action.date);
-    const state = isDepartureDateState(action.state) ? DATE_STATE_WORDS[action.state] : shown(action.state);
+    const seats = typeof action.seats === "number" ? action.seats : null;
+    // A count alone decides the state: none left = full, seats on a full day = open.
     const row = trip ? (Array.isArray(trip.extra?.website_departure_availability) ? trip.extra.website_departure_availability as unknown[] : []).map(record).find((entry) => entry.date === date) : undefined;
-    const was = row ? WEBSITE_STATUS_WORDS[text(row.status).toUpperCase()] || text(row.status) : "";
-    return { title, lines: [`${shortDay(date)}: ${was ? `${was} → ` : ""}${state}`] };
+    const wasStatus = row ? text(row.status).toUpperCase() : "";
+    const stated = isDepartureDateState(action.state) ? action.state : null;
+    const stateWords = stated ? DATE_STATE_WORDS[stated] : seats === 0 ? DATE_STATE_WORDS.full : seats !== null && wasStatus === "SOLD_OUT" ? DATE_STATE_WORDS.open : "";
+    const was = row ? WEBSITE_STATUS_WORDS[wasStatus] || text(row.status) : "";
+    const seatsWas = row && typeof row.seatsLeft === "number" ? `${row.seatsLeft}` : "—";
+    const seatsText = seats === null ? "" : `үлдсэн суудал ${seatsWas} → ${seats}`;
+    const stateText = stateWords ? `${was ? `${was} → ` : ""}${stateWords}` : "";
+    return { title, lines: [`${shortDay(date)}: ${[stateText, seatsText].filter(Boolean).join(", ") || shown(action.state)}`] };
   }
   // A date's sale / «Онцлох»: from the action's own recorded fares, the same before and after the save.
   if (verb === "set_date_sale") return { title, lines: dateSaleLines(action, trip, now) };

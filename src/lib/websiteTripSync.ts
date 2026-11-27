@@ -14,7 +14,7 @@ import { sameDatabase, websiteProjectionTransaction } from "./websiteSyncTransac
 import { websiteEndedProgramme } from "./endedTrip";
 import { applyWebsiteDetailsPatch, fillWebsiteFields, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
 import { sameParityValue } from "./tripWebsiteParityValue";
-import { departureSeatsAfterTripEdit } from "./departureSeats";
+import { MAX_DATE_SEATS, departureSeatsAfterTripEdit } from "./departureSeats";
 import type { WebsiteSyncRow } from "./websiteSyncStatus";
 import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
@@ -678,9 +678,17 @@ export async function websiteSyncPending(tripId: string): Promise<boolean> {
  * rollback can put back exactly what was there (PAUSED included, which the availability
  * overlay used to read as "open"). Reopening clears a stale zero seat count, as before.
  */
-export async function changeDepartureState(sourceTripId: string, date: string, state: DepartureDateState): Promise<DepartureStateChange> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(state in DEPARTURE_STATUS_OF)) return { slug: null, rows: [] };
-  const status = DEPARTURE_STATUS_OF[state];
+export async function changeDepartureState(
+  sourceTripId: string,
+  date: string,
+  state: DepartureDateState | null,
+  /** The day's own seat count (2026-11-27): a number sets it, null clears it, undefined leaves it. */
+  seats?: number | null,
+): Promise<DepartureStateChange> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { slug: null, rows: [] };
+  if (state === null ? seats === undefined : !(state in DEPARTURE_STATUS_OF)) return { slug: null, rows: [] };
+  if (typeof seats === "number" && (!Number.isInteger(seats) || seats < 0 || seats > MAX_DATE_SEATS)) return { slug: null, rows: [] };
+  const status = state === null ? null : DEPARTURE_STATUS_OF[state];
   const result = await bookingPool().query<{ id: string; status: string; seats_left: number | null; slug: string | null; after_status: string; after_seats_left: number | null }>(
     `WITH target AS (
        SELECT d.id, d.status::text AS status, d."seatsLeft" AS seats_left, t.slug
@@ -690,15 +698,23 @@ export async function changeDepartureState(sourceTripId: string, date: string, s
           AND d.status NOT IN ('CANCELLED','DEPARTED')
         FOR UPDATE OF d
      ), changed AS (
-       UPDATE "Departure" d SET status=$3::"DepartureStatus",
+       UPDATE "Departure" d SET
+         -- a state is set as asked; a count alone decides it: none left = sold out, seats on a sold-out date reopen it
+         -- (a few-seats flag and a pause stay as staff set them)
+         status=CASE WHEN $3::text IS NOT NULL THEN $3::"DepartureStatus"
+                     WHEN $4::int = 0 THEN 'SOLD_OUT'::"DepartureStatus"
+                     WHEN $4::int > 0 AND d.status='SOLD_OUT' THEN 'OPEN'::"DepartureStatus"
+                     ELSE d.status END,
          -- a stale zero count would keep a reopened date sold out
-         "seatsLeft"=CASE WHEN $4::text IN ('OPEN','ALMOST_FULL') AND d."seatsLeft"=0 THEN NULL ELSE d."seatsLeft" END
+         "seatsLeft"=CASE WHEN $5::boolean THEN $4::int
+                          WHEN $3::text IN ('OPEN','ALMOST_FULL') AND d."seatsLeft"=0 THEN NULL
+                          ELSE d."seatsLeft" END
          FROM target WHERE d.id=target.id
        RETURNING d.id, d.status::text AS after_status, d."seatsLeft" AS after_seats_left
      )
      SELECT target.id, target.status, target.seats_left, target.slug, changed.after_status, changed.after_seats_left
        FROM target JOIN changed ON changed.id=target.id`,
-    [sourceTripId, date, status, status],
+    [sourceTripId, date, status, seats === undefined ? null : seats, seats !== undefined],
   );
   const rows = result.rows.map((row) => ({
     id: String(row.id), status: String(row.status), seatsLeft: row.seats_left ?? null,

@@ -72,13 +72,18 @@ async function harness(options: { trip?: TravelTrip; departures?: Departure[]; p
     },
     readDepartureRows: async (id) => ({ slug: "velmor-lake", rows: id === stored.id ? departures.map((row) => ({ ...row })) : [] }),
     websiteSyncPending: async () => website.pending,
-    changeDepartureState: async (tripId, date, state) => {
-      const status = { open: "OPEN", low: "ALMOST_FULL", full: "SOLD_OUT", paused: "PAUSED" }[state];
+    // As websiteTripSync.changeDepartureState's SQL: a state is set as asked, a count alone decides it
+    // (0 = sold out, seats on a sold-out date = open), a count is written as given.
+    changeDepartureState: async (tripId, date, state, seats) => {
+      const status = state === null ? null : { open: "OPEN", low: "ALMOST_FULL", full: "SOLD_OUT", paused: "PAUSED" }[state];
       const rows = departures.filter((row) => tripId === stored.id && row.date === date && !["CANCELLED", "DEPARTED"].includes(row.status));
       const changed = rows.map((row) => {
         const was = { status: row.status, seatsLeft: row.seatsLeft };
-        row.status = status;
-        if ((status === "OPEN" || status === "ALMOST_FULL") && row.seatsLeft === 0) row.seatsLeft = null;
+        if (status) row.status = status;
+        else if (seats === 0) row.status = "SOLD_OUT";
+        else if (typeof seats === "number" && row.status === "SOLD_OUT") row.status = "OPEN";
+        if (seats !== undefined) row.seatsLeft = seats;
+        else if ((status === "OPEN" || status === "ALMOST_FULL") && row.seatsLeft === 0) row.seatsLeft = null;
         return { id: row.id, status: was.status, seatsLeft: was.seatsLeft, after_status: row.status, after_seats_left: row.seatsLeft };
       });
       return { slug: changed.length ? "velmor-lake" : null, rows: changed };
@@ -172,6 +177,71 @@ test("a date state is refused on a moved version, a partner trip, an unpublished
     assert.equal(refused.ok, false);
     assert.match(refused.message, /хамтрагчийн сайтаас/);
   } finally { p.done(); }
+});
+
+test("set_date_state with a seat count sets that date's count, the count decides the state, and rollback puts both back (2026-11-27)", async () => {
+  const h = await harness({ departures: [
+    { id: "dep-10", date: "2099-02-10", status: "OPEN", seatsLeft: null },
+    { id: "dep-17", date: "2099-02-17", status: "SOLD_OUT", seatsLeft: 0 },
+    { id: "dep-24", date: "2099-02-24", status: "ALMOST_FULL", seatsLeft: 3 },
+  ] });
+  try {
+    // A count alone on an open date: written, still open, the count shown on the card line.
+    const five = await h.run({ action: "set_date_state", ...base, date: "2099-02-10", seats: 5 });
+    assert.equal(five.ok, true, five.message);
+    assert.equal(h.departures[0].seatsLeft, 5);
+    assert.equal(h.departures[0].status, "OPEN");
+    assert.match(five.message, /үлдсэн суудал 5/);
+    assert.equal((await five.rollback()).failed, false);
+    assert.equal(h.departures[0].seatsLeft, null, "the earlier (empty) count is back");
+
+    // None left closes the date by itself.
+    const none = await h.run({ action: "set_date_state", ...base, date: "2099-02-10", seats: 0 });
+    assert.equal(none.ok, true, none.message);
+    assert.equal(h.departures[0].status, "SOLD_OUT");
+    assert.equal(h.departures[0].seatsLeft, 0);
+    assert.match(none.message, /Дүүрсэн/);
+    assert.equal((await none.rollback()).failed, false);
+    assert.equal(h.departures[0].status, "OPEN");
+
+    // Seats on a sold-out date reopen it; rollback closes it again with its 0.
+    const reopened = await h.run({ action: "set_date_state", ...base, date: "2099-02-17", seats: 8 });
+    assert.equal(reopened.ok, true, reopened.message);
+    assert.deepEqual([h.departures[1].status, h.departures[1].seatsLeft], ["OPEN", 8]);
+    assert.equal((await reopened.rollback()).failed, false);
+    assert.deepEqual([h.departures[1].status, h.departures[1].seatsLeft], ["SOLD_OUT", 0]);
+
+    // A few-seats flag stays when only the count changes; «цөөн суудал» is set only by a state.
+    const flagged = await h.run({ action: "set_date_state", ...base, date: "2099-02-24", seats: 12 });
+    assert.equal(flagged.ok, true, flagged.message);
+    assert.deepEqual([h.departures[2].status, h.departures[2].seatsLeft], ["ALMOST_FULL", 12]);
+    const both = await h.run({ action: "set_date_state", ...base, date: "2099-02-10", state: "low", seats: 2 });
+    assert.equal(both.ok, true, both.message);
+    assert.deepEqual([h.departures[0].status, h.departures[0].seatsLeft], ["ALMOST_FULL", 2]);
+    assert.equal(h.calls.patches.length, 0, "the trip row itself is never rewritten");
+  } finally { h.done(); }
+});
+
+test("a seat count that contradicts the state, or is not a count, is refused and nothing is written (2026-11-27)", async () => {
+  const h = await harness();
+  try {
+    for (const [change, reason] of [
+      [{ state: "full", seats: 4 }, /суудал үлдсэн бол/],
+      [{ state: "open", seats: 0 }, /0 суудал үлдсэн бол/],
+      [{ seats: 500 }, /0–200/],
+      [{ seats: -2 }, /0–200/],
+      [{ seats: 2.5 }, /0–200/],
+      [{ seats: "хэд хэдэн" }, /0–200/],
+    ] as const) {
+      const result = await h.run({ action: "set_date_state", ...base, date: "2099-02-10", ...change } as unknown as AITripAction);
+      assert.equal(result.ok, false, JSON.stringify(change));
+      assert.match(result.message, reason, JSON.stringify(change));
+    }
+    assert.deepEqual([h.departures[0].status, h.departures[0].seatsLeft], ["OPEN", null]);
+    // Neither a state nor a count: nothing to do.
+    const empty = await h.run({ action: "set_date_state", ...base, date: "2099-02-10" } as AITripAction);
+    assert.equal(empty.ok, false);
+  } finally { h.done(); }
 });
 
 test("an old date-state snapshot with no recorded state is reported as not rolled back (B10)", async () => {

@@ -116,7 +116,7 @@ const AFTER_WEB_WORDS: Record<string, RegExp | ((admin: string) => boolean)> = {
   add_hotel_photos: /зураг|зургийг|зургаа|zurag|photo|image|picture/iu,
   patch_itinerary_day: /өдөр|хөтөлбөр|odor|udur|hutulbur|khutulbur|program|(?<!\p{L})day(?!\p{L})/iu,
   set_date_price: asksPrice,
-  set_date_state: /дүүр|цөөн|нээ|хаа|зогсоо|суудал|duur|tsoon|nee|haa|full|open|low|pause|seat/iu,
+  set_date_state: /дүүр|цөөн|нээ|хаа|зогсоо|суудал|суудл|duur|tsoon|nee|haa|full|open|low|pause|seat|suudal|suudl|uldsen/iu,
   set_date_sale: DATE_SALE_WORDS,
   change_dates: /гаралт|огноо|өдөр|garalt|ognoo|date|departure/iu,
   set_age_bands: /нас|сар|(?<!\p{L})(?:nas|age)(?!\p{L})/iu,

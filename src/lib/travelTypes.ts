@@ -148,8 +148,13 @@ export type AITripAction = {
   regular_adult?: number | null;
   regular_child?: number | null;
   observed_deal?: { sale_adult: number | null; sale_child: number | null; featured: boolean };
-  /** set_date_state: what that day becomes. */
+  /** set_date_state: what that day becomes. Optional when `seats` is given (the count decides it). */
   state?: DepartureDateState;
+  /**
+   * set_date_state: that day's own seat count (2026-11-27), a whole number; null clears it. 0 = the day is full,
+   * seats on a full day reopen it; a few-seats flag or a pause stays as it is unless `state` says otherwise.
+   */
+  seats?: number | null;
   /**
    * set_date_state: the day's raw website status when the proposal was built (dateStatusOf in
    * tripActionPlan.ts, e.g. "OPEN"). Apply refuses the change once the day shows another status:

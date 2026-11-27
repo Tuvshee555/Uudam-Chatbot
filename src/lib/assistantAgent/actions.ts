@@ -30,6 +30,7 @@ import { addDepartureDates, removeDepartureDates } from "../tripScheduleChange";
 import { prunePastDepartureDates, type ResolvedDepartureDate } from "../travelDates";
 import type { AIChangeProposal, AITripAction, ConflictItem, TravelTrip, TripMutationFields } from "../travelTypes";
 import { tripDepartures, ubToday } from "./readTools";
+import { parseDateSeats } from "../departureSeats";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => (value && typeof value === "object" && !Array.isArray(value) ? (value as Row) : {});
@@ -102,14 +103,20 @@ function cardLine(action: StoredAction, trip: TravelTrip, ctx: ProposalContext, 
 function buildDateState(raw: Row, trip: TravelTrip, ctx: ProposalContext): Built {
   const date = text(raw.date);
   const state = text(raw.state);
-  const problem = dateStateProblem(trip, date, state, ctx.now);
+  // The day's own seat count («12/2-нд 5 суудал үлдсэн»); a count alone also decides the state (0 = full).
+  const counted = raw.seats !== undefined && raw.seats !== null && raw.seats !== "";
+  const problem = dateStateProblem(trip, date, state, ctx.now, counted ? raw.seats : undefined);
   // A day the trip really has (not yet on the website, cancelled, past) is explained; a wrong day is asked again.
   if (problem) return { refuse: problem, final: ISO.test(date) && tripDepartureDays(trip, ctx.now).includes(date) };
-  const current = tripDepartures(trip, ctx.now).find((entry) => entry.date === date)?.state;
-  if (current === state) return { already: `${shortDate(date)} аль хэдийн ийм төлөвтэй байна` };
+  const seats = counted ? parseDateSeats(raw.seats) : undefined;
+  const day = tripDepartures(trip, ctx.now).find((entry) => entry.date === date);
+  const sameSeats = seats === undefined || day?.seats_left === seats;
+  // With a count and no state, the state follows the count: 0 = full, seats on a full day = open.
+  const stateAfter = state || (seats === 0 ? "full" : seats !== undefined && day?.state === "full" ? "open" : day?.state);
+  if (day?.state === stateAfter && sameSeats) return { already: `${shortDate(date)} аль хэдийн ийм төлөвтэй байна` };
   // The date's status as the admin saw it: apply refuses if a seat button changed it since.
-  const action = { ...base("set_date_state", trip, ctx), date, state, observed_status: dateStatusOf(trip, date) };
-  return { action: { ...action, summary: cardLine(action, trip, ctx, `${shortDate(date)}: ${state}`) } };
+  const action = { ...base("set_date_state", trip, ctx), date, ...(state ? { state } : {}), ...(seats !== undefined ? { seats } : {}), observed_status: dateStatusOf(trip, date) };
+  return { action: { ...action, summary: cardLine(action, trip, ctx, `${shortDate(date)}: ${state || `${seats} суудал`}`) } };
 }
 
 /**

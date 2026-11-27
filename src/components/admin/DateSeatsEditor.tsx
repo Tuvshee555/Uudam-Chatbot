@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cx, useToast } from "@/components/ui";
 import type { TravelTrip } from "@/lib/adminTypes";
 import { salePercent } from "@/lib/departureDeals";
+import { MAX_DATE_SEATS } from "@/lib/departureSeats";
 
 type SeatState = "open" | "low" | "full";
-type Row = { date: string; state: SeatState | "paused" };
+type Row = { date: string; state: SeatState | "paused"; seats: number | null };
 /** One date's regular fares and its sale/«Онцлох», as the website's departure row holds them. */
 type Deal = { regularAdult: number | null; regularChild: number | null; salePrice: number | null; saleChildPrice: number | null; featured: boolean };
 
@@ -42,7 +43,7 @@ function rowsOf(trip: TravelTrip): Row[] {
     const state: Row["state"] = status === "ALMOST_FULL" ? "low"
       : status === "SOLD_OUT" || row.seatsLeft === 0 ? "full"
         : status === "PAUSED" ? "paused" : "open";
-    return [{ date: row.date, state }];
+    return [{ date: row.date, state, seats: typeof row.seatsLeft === "number" ? row.seatsLeft : null }];
   }).sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -74,11 +75,15 @@ export function DateSeatsEditor({
   const toast = useToast();
   const initial = useMemo(() => rowsOf(trip), [trip]);
   const [states, setStates] = useState<Record<string, Row["state"]>>({});
+  /** Each date's saved seat count after an edit here, and the text being typed in its box. */
+  const [counts, setCounts] = useState<Record<string, number | null>>({});
+  const [typed, setTyped] = useState<Record<string, string>>({});
   const [deals, setDeals] = useState<Record<string, Deal>>({});
   const [drafts, setDrafts] = useState<Record<string, { adult: string; child: string }>>({});
   const [openSale, setOpenSale] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const rows = initial.map((row) => ({ ...row, state: states[row.date] ?? row.state }));
+  const saving = useRef(false);
+  const rows = initial.map((row) => ({ ...row, state: states[row.date] ?? row.state, seats: row.date in counts ? counts[row.date] : row.seats }));
   const lowCount = rows.filter((row) => row.state === "low").length;
   const saleCount = rows.filter((row) => deals[row.date]?.salePrice != null || deals[row.date]?.saleChildPrice != null).length;
   const featuredCount = rows.filter((row) => deals[row.date]?.featured).length;
@@ -107,11 +112,59 @@ export function DateSeatsEditor({
         body: JSON.stringify({ tripId: trip.id, date, state }),
       });
       if (!response.ok) throw new Error("save failed");
+      const body = await response.json().catch(() => ({})) as { seats?: unknown };
+      // Reopening a date clears a stale zero count: the box follows what was saved.
+      if (body.seats === null || typeof body.seats === "number") {
+        const saved = body.seats;
+        setCounts((current) => ({ ...current, [date]: saved }));
+        setTyped((current) => { const { [date]: _gone, ...rest } = current; return rest; });
+      }
       toast.success(`${label(date)} — ${OPTIONS.find((option) => option.value === state)?.label}`);
     } catch {
       setStates((current) => ({ ...current, [date]: before ?? "open" }));
       toast.error("Хадгалахад алдаа гарлаа.");
     } finally {
+      setBusy(null);
+    }
+  }
+
+  /** The seat count typed for one date: a whole number (0 = full), or empty to clear it. Saved on Enter / leaving the box. */
+  async function saveSeats(date: string, current: number | null) {
+    const text = (typed[date] ?? "").trim();
+    if (typed[date] === undefined || busy) return;
+    const next = text === "" ? null : /^\d{1,3}$/.test(text) ? Number(text) : NaN;
+    const reset = () => setTyped((all) => { const { [date]: _gone, ...rest } = all; return rest; });
+    if (next === current) { reset(); return; }
+    if (typeof next === "number" && (Number.isNaN(next) || next > MAX_DATE_SEATS)) {
+      toast.error(`Суудлын тоог 0–${MAX_DATE_SEATS} хооронд тоогоор бичнэ үү.`);
+      reset();
+      return;
+    }
+    // Enter and the blur that follows it must not save twice.
+    if (saving.current) return;
+    saving.current = true;
+    setBusy(date);
+    try {
+      const response = await apiFetch("/api/admin/departure-seats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tripId: trip.id, date, seats: next }),
+      });
+      const body = await response.json().catch(() => ({})) as { state?: unknown; seats?: unknown };
+      if (!response.ok) throw new Error("save failed");
+      const saved = typeof body.seats === "number" ? body.seats : null;
+      setCounts((all) => ({ ...all, [date]: saved }));
+      if (body.state === "open" || body.state === "low" || body.state === "full" || body.state === "paused") {
+        const state = body.state;
+        setStates((all) => ({ ...all, [date]: state }));
+      }
+      reset();
+      toast.success(`${label(date)} — ${saved === null ? "суудлын тоо арилгалаа" : saved === 0 ? "суудал дүүрсэн" : `${saved} суудал үлдсэн`}`);
+    } catch {
+      reset();
+      toast.error("Хадгалахад алдаа гарлаа.");
+    } finally {
+      saving.current = false;
       setBusy(null);
     }
   }
@@ -189,6 +242,20 @@ export function DateSeatsEditor({
                     {deal.featured && <span className="ml-2 rounded bg-brand-soft px-1.5 py-0.5 text-[11px] font-semibold text-brand">Онцлох</span>}
                   </span>
                   <span className="flex flex-wrap items-center gap-1.5">
+                    <label className="inline-flex items-center gap-1.5 text-xs text-ink-muted">
+                      <span>Үлдсэн суудал</span>
+                      <input
+                        inputMode="numeric"
+                        aria-label={`${label(row.date)} үлдсэн суудлын тоо`}
+                        value={typed[row.date] ?? (row.seats === null ? "" : String(row.seats))}
+                        placeholder="—"
+                        disabled={busy === row.date}
+                        onChange={(event) => { const value = event.target.value.replace(/[^\d]/g, "").slice(0, 3); setTyped((current) => ({ ...current, [row.date]: value })); }}
+                        onBlur={() => void saveSeats(row.date, row.seats)}
+                        onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveSeats(row.date, row.seats); } }}
+                        className="w-14 rounded-lg border border-line-strong bg-surface px-2 py-1.5 text-center text-sm tabular-nums text-ink outline-none focus:border-brand disabled:opacity-60"
+                      />
+                    </label>
                     <span role="radiogroup" aria-label={`${label(row.date)} суудлын төлөв`} className="inline-flex overflow-hidden rounded-lg border border-line-strong">
                       {OPTIONS.map((option) => {
                         const active = row.state === option.value;
