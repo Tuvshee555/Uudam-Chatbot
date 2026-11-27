@@ -47,9 +47,10 @@ test("photos with an explicit photo edit go to the agent; documents and bare pho
     assert.equal(attachmentRoute(words, [photoA]).kind, "files", words);
   }
 
-  const many = Array.from({ length: 8 }, (_, index) => file(`p${index}.jpg`, "image/jpeg"));
+  // Expectation changed 2026-11-27: up to 24 photos per instruction (hotel photos come in tens); six cut ten of them.
+  const many = Array.from({ length: 28 }, (_, index) => file(`p${index}.jpg`, "image/jpeg"));
   const capped = attachmentRoute("зургуудыг соль", many);
-  assert.ok(capped.kind === "agent_images" && capped.images.length === 6 && capped.skipped === 2, "at most six photos per instruction");
+  assert.ok(capped.kind === "agent_images" && capped.images.length === 24 && capped.skipped === 4, "at most 24 photos per instruction");
 });
 
 test("one request: a typed answer carries its question; attachments travel as hosted image links", () => {

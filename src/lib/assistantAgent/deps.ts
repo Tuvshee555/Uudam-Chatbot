@@ -81,6 +81,7 @@ export function defaultAgentDeps(): AgentDeps {
     posterPhotos,
     budget,
     now: () => Date.now(),
+    describePhotos: async (urls) => (await import("./describePhotos")).describeHostedPhotos(urls),
     findPhotos: async (trip, catalogue, options) => {
       const [{ photosForSavedTrip }, { buildPhotoLibrary }] = await Promise.all([import("../tripProposalFinalize"), import("../tripPhotoLibrary")]);
       return photosForSavedTrip(trip, { library: buildPhotoLibrary(catalogue), web: options.web, photos: options.web ? { budgetMs: 50_000 } : undefined });

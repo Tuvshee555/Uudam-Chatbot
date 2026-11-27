@@ -14,7 +14,7 @@ import { askOpenAIChatParts } from "./openaiFallback";
 import { logWarn } from "./observability";
 import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
 import { describeImageBuffer, isSameImage, type ImageMarks } from "./tripPhotoImport/dedupePhotos";
-import { withSuggestedHotelProfiles } from "./tripHotelNames";
+import { withSuggestedHotelProfiles, withoutPlaceOnlyHotels } from "./tripHotelNames";
 import { MIN_TRIP_PRICE_MNT, PARTNER_PRICE, PRICE_MISSING, PRICE_QUESTION_MARK, mentionsPartnerPrice, parseMntPrices, withoutPartnerPrices } from "./tripPriceRules";
 import {
   collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, photosWantedFor, rankPhotos, withoutSamePictures, type FoundPhoto,
@@ -25,6 +25,8 @@ import {
 } from "./tripTransitDays";
 import { DEPARTURE_CONFLICT, DEPARTURE_SHIFT, applyTransport, checkDeparture, dayMeals, departureDays, deriveHasFood, formatYmd } from "./tripReview";
 import { liftDayStates, withPricedDaysOnCalendar } from "./tripDayStates";
+import { pricingDates } from "./adminDatePricing";
+import { sourceFileBase } from "./fileProposalGuards";
 
 export { DEPARTURE_CONFLICT, DEPARTURE_SHIFT };
 
@@ -177,6 +179,70 @@ function scrubPriceRow(entry: unknown): Row | null {
   return fares > 0 ? row : null;
 }
 
+/** Words of a trip title that say nothing about which trip it is. */
+const TITLE_FILLER = /^(?:аялал|аяллын|аялалын|хөтөлбөр|хөтөлбөрийн|тур|tour|trip|хот|хотын|\d+.*|[a-zа-яөү]?\d.*)$/iu;
+const titleWords = (title: string) => title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word && !TITLE_FILLER.test(word));
+
+/**
+ * The document's own title is only "<place> аялал" ("Шанхай аялал /5ш6ө/") while the file is named more
+ * precisely ("№УБ-Шанхай хямдралтай аялал.pdf"): the file's name. A trip named just "Шанхай аялал" is the
+ * whole of what a customer types about every Shanghai trip, and it took those questions (2026-11-25).
+ * Null when the title already says more than its place, or the file name adds nothing.
+ */
+export function specificFileTitle(fields: Row): string | null {
+  const title = text(fields.route_name);
+  const extra = record(fields.extra);
+  const own = titleWords(title);
+  if (!title || own.length > 1) return null;
+  const file = sourceFileBase(extra.source_file_name).replace(/\.(?:pdf|docx?|xlsx?|txt|jpe?g|png)$/i, "").replace(/^[\s№#]+/u, "").trim();
+  const words = titleWords(file);
+  if (words.length <= own.length || !own.every((word) => words.includes(word))) return null;
+  return file;
+}
+
+/** "Жилийг бичээгүй", "Аль жилийн аялал вэ?": a note that the file gives no year. */
+const YEAR_NOTE = /жил(?:ийг|ийн|ээ)?\s+(?:бичээгүй|дурдаагүй|заагаагүй|тодорхойгүй)|аль\s+жилийн/iu;
+/** YYYY-MM-DD in Mongolia (UTC+8). */
+const mongoliaYmd = (at: Date) => new Date(at.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
+
+/**
+ * The file names its days without a year («12сар5/10/12») and every day falls within the coming year: the coming
+ * date is the only reading. The reader's «the year is not written — which year?» became a blocking question whose
+ * answers did not even name a year (2026-11-25). Such a note goes; a day further off keeps it.
+ */
+export function dropYearOnlyNotes(proposal: AIChangeProposal, fields: Row, route: string, now: Date): void {
+  const days = departureDays(fields.departure_dates, now).days;
+  const today = mongoliaYmd(now);
+  const yearOut = mongoliaYmd(new Date(now.getTime() + 365 * 86_400_000));
+  if (!days.length || !days.every((day) => day >= today && day <= yearOut)) return;
+  const about = (value: string) => !route || value.includes(route) || !/[«"].+[»"]/u.test(value);
+  proposal.conflict_items = (proposal.conflict_items || []).filter((item) => !(YEAR_NOTE.test(item.text) && about(item.text) && (!item.type || item.type === "date_based_pricing")));
+  proposal.conflicts = (proposal.conflicts || []).filter((item) => !(YEAR_NOTE.test(item) && about(item)));
+}
+
+/** "12сар5/10/12", "12 сарын 5, 10, 12", "12-р сар 5/10": one month and the days listed after it. */
+const MONTH_DAY_LIST = /(?<!\d)(1[0-2]|0?[1-9])\s*(?:-?\s*р)?\s*сар(?:ын|д)?\s*((?:[0-3]?\d\s*[/,]\s*)*[0-3]?\d)(?!\d)/giu;
+
+/**
+ * A new trip the reader left without departures, while the departure line it quoted from the file
+ * (source_evidence.departure, found in the file's text) lists them in a short form the reader skipped
+ * ("12сар5/10/12" = 12/5, 12/10, 12/12; 2026-11-25). Only that verified line is read; [] otherwise.
+ */
+export function daysFromDepartureLine(fields: Row, sourceText: string | undefined, now: Date): string[] {
+  if (Array.isArray(fields.departure_dates) && fields.departure_dates.some((date) => text(date))) return [];
+  const line = text(record(record(fields.extra).source_evidence).departure);
+  if (!line || !sourceText) return [];
+  const squashed = sourceText.replace(/\s+/g, " ");
+  const at = squashed.indexOf(line.replace(/\s+/g, " "));
+  if (at < 0) return [];
+  // The quoted line is the table's header («№ Гарах сар/өдөр Тээш Үнэ/том…»): the dates are on the row under it.
+  const header = /гарах|огноо|хөдлөх/iu.test(line) && !MONTH_DAY_LIST.test(line);
+  MONTH_DAY_LIST.lastIndex = 0;
+  const read = header ? squashed.slice(at + line.length, at + line.length + 160) : line;
+  const written = [...read.matchAll(MONTH_DAY_LIST)].flatMap((match) => match[2].split(/\s*[/,]\s*/).map((day) => `${Number(match[1])} сарын ${Number(day)}`));
+  return departureDays(written, now).days;
+}
+
 /**
  * Owner's rule (tripPriceRules.ts): no yuan or land price on a new trip — not as its fare,
  * not in its notes, summary or price table, not in the proposal's one-line summary. A fare
@@ -207,8 +273,19 @@ export function scrubPartnerPrices(proposal: AIChangeProposal): void {
       for (const key of ["important_notes", "included_items", "excluded_items"]) {
         if (Array.isArray(next[key])) next[key] = (next[key] as unknown[]).filter((line) => !mentionsPartnerPrice(line));
       }
+      // A row priced only in yuan goes, but its departure days stay: «12сар5/10/12 | 3450юань» lost its dates
+      // with its price and the new trip came with no departure at all (2026-11-25).
+      const rowDays: string[] = [];
       for (const key of ["price_groups", "departure_date_groups"]) {
-        if (Array.isArray(next[key])) next[key] = (next[key] as unknown[]).flatMap((group) => { const kept = scrubPriceRow(group); return kept ? [kept] : []; });
+        if (Array.isArray(next[key])) next[key] = (next[key] as unknown[]).flatMap((group) => {
+          const kept = scrubPriceRow(group);
+          if (!kept) rowDays.push(...departureDays(pricingDates(record(group))).days);
+          return kept ? [kept] : [];
+        });
+      }
+      if (rowDays.length) {
+        const listed = Array.isArray(fields.departure_dates) ? fields.departure_dates.map((date) => text(date)).filter(Boolean) : [];
+        fields.departure_dates = [...new Set([...listed, ...rowDays])];
       }
       // The reader writes per-date fares under the older key, which is saved without its child
       // bands (tripExtraSchema.ts). Under the canonical key every column of the row survives.
@@ -262,10 +339,17 @@ function setConflictItem(proposal: AIChangeProposal, item: ConflictItem, route: 
  * (the model never sees photo data, so a revision comes back without them).
  */
 export function carryOverPhotoExtras(previous: AIChangeProposal, revised: AIChangeProposal): void {
-  for (const action of newTripActions(revised)) {
-    const before = newTripActions(previous).find((candidate) => sameRoute(routeName(candidate), routeName(action)));
+  const previousTrips = newTripActions(previous);
+  const revisedTrips = newTripActions(revised);
+  for (const action of revisedTrips) {
+    // A rename ("нэрийг … болго") is still the same card: one new trip before and after is that trip.
+    const before = previousTrips.find((candidate) => sameRoute(routeName(candidate), routeName(action)))
+      ?? (previousTrips.length === 1 && revisedTrips.length === 1 ? previousTrips[0] : undefined);
     if (!before) continue;
     const fields = action.fields as Row;
+    // The card's photos: a revision came back without them and the trip was saved with an empty gallery (2026-11-25).
+    const previousPhotos = Array.isArray(before.fields?.photo_urls) ? (before.fields.photo_urls as unknown[]).filter((url) => text(url)) : [];
+    if (!(Array.isArray(fields.photo_urls) && fields.photo_urls.some((url) => text(url))) && previousPhotos.length) fields.photo_urls = previousPhotos;
     const extra = { ...record(fields.extra) };
     const previousExtra = record(before.fields?.extra);
     if (!Object.keys(record(extra.photo_credits)).length && Object.keys(record(previousExtra.photo_credits)).length) {
@@ -448,22 +532,30 @@ export function keptEvidence(raw: unknown, sourceText?: string): { source_eviden
 const MEAL_NAMES: Record<MealKey, string> = { breakfast: "өглөөний цай", lunch: "өдрийн хоол", dinner: "оройн хоол" };
 
 export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace; sourceText?: string; now?: Date; /** The admin's note sent with the file. */ note?: string;
+  /** A revision of a card already read (no file text here). */ revision?: boolean;
   /** The agency's own day photos by place (tripPhotoLibrary.ts), read only when a trip needs photos. */ loadLibrary?: () => Promise<LibraryPhoto[]> } = {}): Promise<void> {
   let library: LibraryPhoto[] | undefined;
   scrubPartnerPrices(proposal);
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Row;
+    const specific = specificFileTitle(fields);
+    if (specific) fields.route_name = specific;
     const route = routeName(action);
     // The hotels the file names are the trip's hotels from the start (name only): until
     // 2026-11-06 each was a «+» suggestion the admin had to click, or it was never saved.
     const withHotels = withSuggestedHotelProfiles(fields);
     if (withHotels !== fields) fields.extra = withHotels.extra;
+    const withoutCityHotels = withoutPlaceOnlyHotels(fields);
+    if (withoutCityHotels !== fields) Object.assign(fields, { hotel: withoutCityHotels.hotel, extra: withoutCityHotels.extra });
     const withoutEcho = withoutEchoedBedRows(fields, [text(options.sourceText), text(options.note)].filter(Boolean).join("\n"));
     if (withoutEcho !== fields) fields.extra = withoutEcho.extra;
     // Every priced row's day is on the calendar, and each day's seat state (full / few seats)
     // moves off the rows so the review shows it per day (tripDayStates.ts; put back on save).
     const scheduled = liftDayStates(withPricedDaysOnCalendar(fields, options.now ?? new Date()), options.now ?? new Date());
     if (scheduled !== fields) Object.assign(fields, { departure_dates: scheduled.departure_dates, extra: scheduled.extra });
+    const evidenceDays = daysFromDepartureLine(fields, options.sourceText, options.now ?? new Date());
+    if (evidenceDays.length) fields.departure_dates = evidenceDays;
+    dropYearOnlyNotes(proposal, fields, route, options.now ?? new Date());
     const extra = record(fields.extra);
     const days = (Array.isArray(extra.itinerary_days) ? extra.itinerary_days : []).map((entry) => record(entry) as ItineraryDay);
     if (!days.length || !route) continue;
@@ -483,8 +575,10 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
       // said it came back with "Өдрийн хоол өөрсдөө" (dry runs 2026-11-20). The admin is asked to look.
       const ownCost = text(options.sourceText) ? [] : built.days.flatMap((day, index) =>
         (["breakfast", "lunch", "dinner"] as const).filter((meal) => day.meals?.[meal] === false).map((meal) => `${index + 1}-р өдөр ${MEAL_NAMES[meal]}`));
-      dropConflictItem(proposal, "meals_check", route);
-      if (ownCost.length) setConflictItem(proposal, { text: `«${route}»: зурагнаас «өөрсдөө төлнө» гэж уншсан: ${ownCost.join(", ")}. Зурагт ингэж бичсэн эсэхийг шалгаад, бичээгүй бол хоосон үлдээнэ үү.`,
+      // A revision is finalised without the file's text: its meals were checked on the first reading, and a
+      // PDF's «Өглөө Орой» came back as «read from a picture» (2026-11-25). The first reading's note stays as it is.
+      if (!options.revision) dropConflictItem(proposal, "meals_check", route);
+      if (!options.revision && ownCost.length) setConflictItem(proposal, { text: `«${route}»: зурагнаас «өөрсдөө төлнө» гэж уншсан: ${ownCost.join(", ")}. Зурагт ингэж бичсэн эсэхийг шалгаад, бичээгүй бол хоосон үлдээнэ үү.`,
         severity: "warning", type: "meals_check", data: { route_name: route } }, route);
       const { source_evidence: _unverified, ...withoutEvidence } = record(fields.extra);
       void _unverified;

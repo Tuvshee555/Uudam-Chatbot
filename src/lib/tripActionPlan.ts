@@ -7,6 +7,7 @@
  *   patch_itinerary_day  one program day (tripItineraryDayEdit.ts)
  *   set_age_bands    extra.age_rules (+ default-form tier and poster column labels)
  *   replace_photo    an exact photo swap / removal (tripPhotoEdit.ts)
+ *   add_hotel_photos photos added to one hotel of the trip (tripHotelPhotos.ts)
  *   append_notes     one named section added to the description (tripNotesAppend.ts)
  *   fare_change_all  a fare rule over many trips, expanded into one patch per trip
  *   (set_date_sale   one day's sale fare / «Онцлох» on the website — planned in dateSale.ts)
@@ -25,6 +26,7 @@ import { planDatePrice, fareAmountOf, partnerSourceUrl, PARTNER_EDIT_REASON, sho
 import { itineraryDayPatchOf, planItineraryDay } from "./tripItineraryDayEdit";
 import { planPhotoEdit } from "./tripPhotoEdit";
 import { notesHeadingOf, notesSectionText, planAppendNotes } from "./tripNotesAppend";
+import { planHotelPhotos } from "./tripHotelPhotos";
 import { TRIP_EDIT_VERBS, type AITripAction, type DepartureDateState, type TravelTrip, type TripEditVerb, type TripMutationFields } from "./travelTypes";
 
 export { partnerSourceUrl, PARTNER_EDIT_REASON } from "./tripDatePrice";
@@ -306,6 +308,10 @@ function planTripEditUnchecked(trip: TravelTrip, action: AITripAction, posterDat
     const planned = planPhotoEdit(trip, action, posterData);
     return planned.ok ? { ok: true, plan: planned.plan } : planned;
   }
+  if (verb === "add_hotel_photos") {
+    const planned = planHotelPhotos(trip, { hotel: action.hotel_name, new_urls: action.new_urls });
+    return planned.ok ? { ok: true, plan: planned.plan } : planned;
+  }
   if (verb === "append_notes") return planAppendNotes(trip, { heading: action.heading, text: action.text });
   return { ok: false, reason: `«${verb}» гэсэн өөрчлөлтийг энд төлөвлөхгүй.` };
 }
@@ -345,6 +351,12 @@ const VERB_KEYS: Record<string, (action: Row) => Row> = {
     // A credit line is a small record of plain strings (title, author, license, page, provider).
     const credit = action.credit && typeof action.credit === "object" && !Array.isArray(action.credit) ? Object.fromEntries(Object.entries(action.credit as Row).filter(([, value]) => typeof value === "string").map(([key, value]) => [key.slice(0, 40), (value as string).slice(0, 300)]).slice(0, 8)) : null;
     if (credit && Object.keys(credit).length && kept.remove !== true) kept.credit = credit;
+    return kept;
+  },
+  add_hotel_photos: (action) => {
+    const kept = KEEP(BASE_KEYS)(action);
+    if (text(action.hotel_name)) kept.hotel_name = text(action.hotel_name);
+    if (Array.isArray(action.new_urls)) kept.new_urls = [...new Set(action.new_urls.map((url) => text(url)).filter(Boolean))].slice(0, 24);
     return kept;
   },
   append_notes: (action) => {

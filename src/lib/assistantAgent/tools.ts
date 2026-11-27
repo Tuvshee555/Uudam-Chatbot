@@ -9,7 +9,7 @@
  */
 import type { ToolDefinition } from "./types";
 
-export const READ_TOOLS = ["search_trips", "get_trip", "resolve_link", "read_web_page", "host_image", "compare_program", "find_photos", "take_stock"] as const;
+export const READ_TOOLS = ["search_trips", "get_trip", "resolve_link", "read_web_page", "host_image", "describe_photos", "compare_program", "find_photos", "take_stock"] as const;
 export const TERMINAL_TOOLS = ["propose_changes", "ask_user", "reply", "read_trip_source"] as const;
 export type ReadToolName = (typeof READ_TOOLS)[number];
 export type TerminalToolName = (typeof TERMINAL_TOOLS)[number];
@@ -44,7 +44,7 @@ const ACTION_ITEM = {
   properties: {
     action: {
       type: "string",
-      enum: ["set_date_state", "set_date_price", "set_date_sale", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "fare_change_all", "change_dates", "append_notes", "patch", "cancel", "delete"],
+      enum: ["set_date_state", "set_date_price", "set_date_sale", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "add_hotel_photos", "fare_change_all", "change_dates", "append_notes", "patch", "cancel", "delete"],
     },
     trip_id: { type: "string", description: "The exact trip_id from get_trip / search_trips / the resolved link. Required except fare_change_all with all_active and append_notes with trip_ids." },
     summary: { type: "string", description: "One short Mongolian line for the review card, e.g. «12/2: Дүүрсэн», «Сайтаас нуух»." },
@@ -83,6 +83,8 @@ const ACTION_ITEM = {
     },
     old_url: { type: "string", description: "replace_photo: the photo to replace or remove (one of the trip's photo URLs)." },
     position: { type: "integer", description: "replace_photo: 1-based position in the trip's photos list." },
+    hotel_name: { type: "string", description: "add_hotel_photos: the hotel the photos show, as the trip names it (one of get_trip hotels, e.g. its program days' hotel)." },
+    new_urls: { type: "array", items: { type: "string" }, description: "add_hotel_photos: the photos of that ONE hotel, URLs returned by host_image (never a raw outside link)." },
     new_url: { type: "string", description: "replace_photo: the new photo, a URL returned by host_image (never a raw outside link)." },
     remove: { type: "boolean", description: "replace_photo: true removes the photo instead of replacing it." },
     change: {
@@ -133,6 +135,8 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     { url: { type: "string" } }, ["url"]),
   fn("host_image", "Copy an image (an attachment URL or an https image link) to our Cloudinary. Use the returned url as replace_photo.new_url.",
     { url: { type: "string" } }, ["url"]),
+  fn("describe_photos", "Look at attached photos (up to 24) and get, per photo, what it shows (room, lobby, entrance, pool, restaurant, bathroom), any sign or text that names a hotel, its look (wall colours, floor, chandeliers), and which photos look like the SAME hotel. Use it when photos must be told apart (hotel photos of one or more hotels). Pass the attachment urls as they are.",
+    { urls: { type: "array", items: { type: "string" } } }, ["urls"]),
   fn("compare_program", "With an attached file that is an UPDATED PROGRAM of a saved trip: pass the file's days as you read them and get back exactly what differs from the saved program (hotel per day, meals, sentences one side has and the other lacks). Call get_trip first. Build the proposal from its result only.",
     {
       trip_id: { type: "string" },

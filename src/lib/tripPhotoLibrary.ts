@@ -75,7 +75,8 @@ export function buildPhotoLibrary(trips: TravelTrip[]): LibraryPhoto[] {
       seen.add(key);
       const credit = (trip.extra?.photo_credits as Record<string, unknown> | undefined)?.[url];
       out.push({ url, trip_id: trip.id, trip_name: trip.route_name, day_title: text(day.title), places, live: trip.status === "active",
-        ...(transit ? { transit, trip_places: tripPlaces } : {}),
+        trip_places: tripPlaces,
+        ...(transit ? { transit } : {}),
         ...(credit && typeof credit === "object" ? { credit: credit as Record<string, unknown> } : {}) });
     }
   }
@@ -96,6 +97,11 @@ export function pickLibraryPhotos(library: LibraryPhoto[], days: DayLike[], opti
   // of exactly a day's places goes to that day before an earlier day that merely passes one of them
   // can take it.
   const pairs: Array<{ index: number; order: number; photo: LibraryPhoto; score: number; shared: string[] }> = [];
+  // A photo from a trip that goes only where this trip goes comes first. A two-destination trip's day photos are
+  // less sure: «УБ - ШАНХАЙ» of a Shanghai + mountain trip showed a mountain, and a Shanghai-only trip got it
+  // (2026-11-25).
+  const ownPlaces = placesOfDays(days);
+  const sameTrip = (photo: LibraryPhoto) => Boolean(photo.trip_places?.length) && photo.trip_places!.every((place) => ownPlaces.includes(place));
   days.forEach((day, index) => {
     if (text(day.photo)) return;
     const wanted = dayPlaces(day.title);
@@ -105,7 +111,7 @@ export function pickLibraryPhotos(library: LibraryPhoto[], days: DayLike[], opti
       const shared = photo.places.filter((place) => wanted.includes(place));
       if (!shared.length) return;
       // Shared places count most; a photo whose day also names other places is a weaker witness.
-      const score = shared.length * 10 - (photo.places.length - shared.length) * 2 - (wanted.length - shared.length) + (photo.live ? 1 : 0);
+      const score = shared.length * 10 - (photo.places.length - shared.length) * 2 - (wanted.length - shared.length) + (photo.live ? 1 : 0) + (sameTrip(photo) ? 5 : 0);
       pairs.push({ index, order, photo, score, shared });
     });
   });

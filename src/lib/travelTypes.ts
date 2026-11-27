@@ -108,7 +108,7 @@ export type FareAmount = { set: number } | { delta: number };
 export type DayMealsPatch = { breakfast?: boolean | null; lunch?: boolean | null; dinner?: boolean | null };
 
 /** Verbs that change one part of one existing trip, planned in code from the trip itself. */
-export const TRIP_EDIT_VERBS = ["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "append_notes"] as const;
+export const TRIP_EDIT_VERBS = ["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "add_hotel_photos", "append_notes"] as const;
 export type TripEditVerb = (typeof TRIP_EDIT_VERBS)[number];
 
 export type AITripAction = {
@@ -203,6 +203,9 @@ export type AITripAction = {
   remove?: boolean;
   /** replace_photo: the new photo's credit line (title, author, license, page), kept under extra.photo_credits. */
   credit?: Record<string, unknown>;
+  /** add_hotel_photos: the hotel (as the trip names it) and the photos added to it, already on our Cloudinary (hostImage). */
+  hotel_name?: string;
+  new_urls?: string[];
   /** append_notes: the heading of the section added to the trip's description, and its lines (tripNotesAppend.ts). */
   heading?: string;
   text?: string;

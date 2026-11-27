@@ -90,6 +90,11 @@ export type AgentDeps = {
    * places, and with `web` the Wikimedia search (slow). Every url returned is on our Cloudinary.
    */
   findPhotos: (trip: TravelTrip, catalogue: TravelTrip[], options: { web: boolean }) => Promise<FoundDayPhoto[]>;
+  /**
+   * One vision look at hosted photos (our Cloudinary urls): what each shows, any sign naming the hotel, and which
+   * photos look like the same place. Text only; reads nothing else and writes nothing.
+   */
+  describePhotos?: (urls: string[]) => Promise<string>;
   /** The model this chat runs when the caller names none (the Claude adapter: ASSISTANT_ANTHROPIC_MODEL). */
   defaultModel?: string;
   /**

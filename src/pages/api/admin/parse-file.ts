@@ -174,8 +174,14 @@ function isZipUpload(upload: UploadPayload): boolean {
   );
 }
 
+/** A PDF page drawn as a picture so the reader can see it ("X.pdf.visual-page-001.jpg", "X.pdf.part-001.page-002.jpg"). */
+const RENDERED_PDF_PAGE = /\.pdf\.(?:visual-page-\d{1,4}|part-\d{1,4}\.page-\d{1,4})\.(?:jpe?g|png)$/i;
+
 async function collectPhotoAssets(upload: UploadPayload): Promise<PhotoUploadAsset[]> {
   if (upload.evidenceOnly) return [];
+  // A page of the program file is never a trip photo: the first page of a partner PDF (its price table
+  // and day 2 text) became the new trip's cover picture (2026-11-25).
+  if (RENDERED_PDF_PAGE.test(upload.filename.trim())) return [];
   const buffer = decodeUploadBuffer(upload.dataBase64);
   if (isImageUpload(upload)) {
     return [{

@@ -23,6 +23,7 @@ import { dateSaleActionFields, planDateSale } from "../dateSale";
 import { dateStateProblem, dateStatusOf, expandFareChangeAll, fareChangeOf, partnerEditProblem, planTripEdit, sanitizeTripEditAction, tripDepartureDays } from "../tripActionPlan";
 import { PARTNER_EDIT_REASON, partnerSourceUrl } from "../tripDatePrice";
 import { isHostedPhotoUrl } from "../tripPhotoEdit";
+import { MAX_HOTEL_PHOTOS } from "../tripHotelPhotos";
 import { notesHeadingOf, notesSectionText, numbersNotInSources } from "../tripNotesAppend";
 import { rewritesSavedDay } from "./programCompare";
 import { addDepartureDates, removeDepartureDates } from "../tripScheduleChange";
@@ -68,7 +69,7 @@ export type ProposalContext = {
 type StoredAction = Row & { action: string; trip_id: string; summary: string; expected_updated_at?: string };
 
 const PARTNER_VERBS = new Set(["set_date_state", "set_date_price", "change_dates"]);
-const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "append_notes"]);
+const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "add_hotel_photos", "append_notes"]);
 const PATCH_FIELDS = new Set(["route_name", "duration_text", "hotel", "has_food", "seats_total", "seats_left", "status", "notes"]);
 const PATCH_STATUSES = new Set(["active", "paused", "sold_out", "draft"]);
 const ALREADY = /аль хэдийн/u;
@@ -197,6 +198,16 @@ function photoAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAc
   };
 }
 
+/** Photos for ONE hotel of the trip: every photo must already be hosted by us (host_image or a hosted attachment). */
+function hotelPhotosAction(raw: Row, trip: TravelTrip, ctx: ProposalContext): StoredAction | string {
+  const hotel = text(raw.hotel_name) || text(raw.hotel);
+  const urls = [...new Set((Array.isArray(raw.new_urls) ? raw.new_urls : []).map(text).filter(Boolean))].slice(0, MAX_HOTEL_PHOTOS);
+  if (!hotel) return "аль буудлын зураг болохыг (hotel_name) заана";
+  if (!urls.length) return "нэмэх зураг алга (new_urls)";
+  if (urls.some((url) => !isHostedPhotoUrl(url) || !ctx.hosted.has(url))) return "зураг манай сервер дээр байршаагүй (эхлээд host_image)";
+  return { ...base("add_hotel_photos", trip, ctx), hotel_name: hotel, new_urls: urls };
+}
+
 /**
  * A section for the trip's description. Every number in it (a price, a count) must stand in the admin's
  * message or in a file he attached: a list re-typed by the model is checked digit by digit, never trusted.
@@ -215,6 +226,7 @@ function buildPlanned(verb: string, raw: Row, trip: TravelTrip, ctx: ProposalCon
   let action: StoredAction | string;
   if (verb === "set_date_price") action = datePriceAction(raw, trip, ctx);
   else if (verb === "append_notes") action = notesAction(raw, trip, ctx);
+  else if (verb === "add_hotel_photos") action = hotelPhotosAction(raw, trip, ctx);
   else if (verb === "set_visibility") action = typeof raw.visible === "boolean" ? { ...base(verb, trip, ctx), visible: raw.visible } : "харуулах эсвэл нуухыг заагаагүй";
   else if (verb === "patch_itinerary_day") action = itineraryDayAction(raw, trip, ctx);
   else if (verb === "set_age_bands") action = ageBandsAction(raw, trip, ctx);

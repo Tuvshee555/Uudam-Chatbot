@@ -14,8 +14,8 @@ import type {
 /* Attachments: the agent (photos) or the file → trip pipeline      */
 /* ---------------------------------------------------------------- */
 
-/** The most images one instruction hands the agent (the route keeps six). */
-export const MAX_AGENT_IMAGES = 6;
+/** The most images one instruction hands the agent (hotel photos come in tens; the route and the agent keep the same number). */
+export const MAX_AGENT_IMAGES = 24;
 
 // The agent sees an attachment only as a link: it can swap or remove a trip's photo with it, but
 // cannot read a poster or a price list in it. So photos go to the agent only for an explicit photo
@@ -51,8 +51,14 @@ const READ_WORDS = new RegExp([
  * ("3-р өдрийн зургийг соль", "нүүр зураг солих", "2-р зургийг хас"), and nothing about reading
  * the attachment ("энэ зургаас шинэ аялал үүсгэ", "энэ зурган дээрх үнээр шинэчил" → false).
  */
+// Photos OF A HOTEL ("буудлын зураг", "буудлын зургууд", "hotel photos"): added to the trip's hotel, never read as a program.
+// "Буудлын зураг болгож нэм" carries no price, date or program word, but "нэм" beside "аялал" must not turn it into a new trip.
+const HOTEL_PHOTO = /(?:буудл\p{L}*|hotel|buudl\p{L}*)\s+(?:\p{L}+\s+){0,2}(?:зура?г\p{L}*|фото|photos?|pictures?|images?|zura?g\p{L}*)/iu;
+const NEW_TRIP_OR_READ = /шинэ\s+аял|shine\s+ay?al|постер|хөтөлбөр|үнэ|прайс/iu;
+
 export function isPhotoInstruction(text: string): boolean {
   const words = String(text || "");
+  if (HOTEL_PHOTO.test(words) && !NEW_TRIP_OR_READ.test(words)) return true;
   if (!PHOTO_WORD.test(words) || READ_WORDS.test(words)) return false;
   return PHOTO_EDIT_VERB.test(words) || PHOTO_TARGET.test(words);
 }
@@ -85,7 +91,9 @@ const UPDATE_WORDS = /шинэчил|шинэчлэ|(?:^|[^a-z])(?:update|shinec
 const PROGRAM_WORDS = /хөтөлбөр|(?:^|[^a-z])(?:hutulbur|khutulbur|hotolbor|program(?:me)?)/iu;
 const PRICE_LIST_WORDS = /үн[эи]|прайс|ханш|(?:^|[^a-z])(?:un(?:e|ii|iig|eer)|prices?|rates?)(?![a-z])/iu;
 // "Шинэ аялал болгон нэм", "шинээр нэм", "манай аяллуудад нэм": a new trip, whatever else is said.
-const NEW_TRIP_WORDS = /шинэ\s+аял\p{L}*\s+(?:болгон\s+)?(?:нэм|үүсг|оруул)|шинээр\s+(?:нэм|үүсг|оруул)|манай\s+аял\p{L}*\s+(?:нэм|оруул)|shine\s+ay?al[a-z]*\s+(?:bolgon\s+)?(?:nem|uusg)|shineer\s+(?:nem|uusg)/iu;
+// "болгон", "болгож", "болгоод", "болгоно" all say "as a new trip" (only «болгон» was read: «шинэ аялал болгож нэм» sent a
+// file that looks like a saved trip to the assistant's «update or new?» question, 2026-11-25).
+const NEW_TRIP_WORDS = /шинэ\s+аял\p{L}*\s+(?:болго\p{L}*\s+)?(?:нэм|үүсг|оруул)|шинээр\s+(?:нэм|үүсг|оруул)|манай\s+аял\p{L}*\s+(?:нэм|оруул)|shine\s+ay?al[a-z]*\s+(?:bolgo[a-z]*\s+)?(?:nem|uusg)|shineer\s+(?:nem|uusg)/iu;
 
 /**
  * True when the words sent with files are about trips already saved: a restore, added

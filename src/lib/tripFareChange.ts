@@ -154,9 +154,12 @@ export function applyFareChange(trip: TravelTrip, change: FareChange): FareChang
     next.passenger_prices = tiers;
     return withDerivedSummaryFields(next as unknown as PriceGroup) as unknown as Record<string, unknown>;
   });
-  if (groupsChanged) {
+  // A base child/infant fare set or cleared (2026-11-27: «нярай үнэгүй» on a trip whose rows hold no infant tier saved a
+  // bare 0, which the bot reads as "unknown", asking the customer to check): the documented-free rule follows it too.
+  const freeStateMoved = (["child", "infant"] as const).some((kind) => kind in targets && (trip[`${kind}_price`] === 0) !== (fields[`${kind}_price`] === 0));
+  if (groupsChanged || freeStateMoved) {
     fields.extra = {
-      price_groups: nextGroups,
+      ...(groupsChanged ? { price_groups: nextGroups } : {}),
       child_rules: deriveChildRules(nextGroups as unknown as PriceGroup[], {
         child: (fields.child_price ?? trip.child_price) === 0,
         infant: (fields.infant_price ?? trip.infant_price) === 0,

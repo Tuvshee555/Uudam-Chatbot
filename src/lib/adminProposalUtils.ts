@@ -291,6 +291,7 @@ function actionVerb(action: AIAction): string {
     case "patch_itinerary_day": return "Хөтөлбөрийн өдөр";
     case "set_age_bands": return "Насны ангилал";
     case "replace_photo": return row.remove === true ? "Зураг хасах" : "Зураг солих";
+    case "add_hotel_photos": return "Буудлын зураг нэмэх";
     case "append_notes": return "Тайлбарт нэмэх";
     case "fare_change_all": return "Олон аяллын үнэ";
     case "upsert": return action.trip_id ? "Шинэчлэх" : "Шинэ аялал нэмэх";
@@ -997,7 +998,7 @@ export type ActionView = {
   preview?: { title: string; lines: string[] };
 };
 
-const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "append_notes"]);
+const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo", "add_hotel_photos", "append_notes"]);
 
 /** The section an append_notes action writes: its heading and its lines. */
 function notesPreviewOf(action: AIAction): ActionView["preview"] {

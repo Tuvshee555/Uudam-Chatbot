@@ -35,7 +35,7 @@ const ADMIN_AI_CHANGE_RATE_WINDOW_MS = 10 * 60 * 1000;
 // an absurd multi-MB paste from exhausting memory. Clarifications stay short.
 const MAX_AI_CHANGE_INSTRUCTION_CHARS = 500_000;
 const MAX_AI_CHANGE_CLARIFICATION_CHARS = 4_000;
-const MAX_ATTACHMENTS = 6;
+const MAX_ATTACHMENTS = 24;
 
 /** `attachments: [{url, kind:"image"}]`: images the page already hosted; anything else is dropped. */
 function parseAttachments(value: unknown): AgentAttachment[] {

@@ -43,7 +43,8 @@ test("the request carries the tools, temperature 0 and the model; tool calls and
   assert.equal(bodies[0].temperature, 0);
   assert.equal(bodies[0].tool_choice, "required");
   // Ten since 2026-11-21: compare_program (a file's program against the saved days) joined the read tools.
-  assert.equal((bodies[0].tools as unknown[]).length, 12); // + find_photos, take_stock (2026-11-21)
+  // Expectation changed 2026-11-27: 13 with describe_photos (one vision look at attached photos, hotel photos).
+  assert.equal((bodies[0].tools as unknown[]).length, 13); // + find_photos, take_stock (2026-11-21), describe_photos (2026-11-27)
 });
 
 test("a fast 5xx is retried once; a rejected key is not retried and says so", async (context) => {

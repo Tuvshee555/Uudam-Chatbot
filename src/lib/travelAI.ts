@@ -1937,7 +1937,7 @@ export async function reviseAIRequest(
   // The tugrug price the admin typed into the price question wins over the model's reading.
   applyPriceAnswer(clarification, revisedProposal);
   carryOverPhotoExtras(currentProposal, revisedProposal);
-  await finalizeNewTripActions(revisedProposal);
+  await finalizeNewTripActions(revisedProposal, { revision: true });
   // A revised proposal is checked like a new one (B9): names bound to real trips, versions
   // stamped, validated — never stored as the model wrote it.
   bindActionTargets(revisedProposal, trips);

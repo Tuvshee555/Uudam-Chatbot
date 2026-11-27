@@ -117,7 +117,9 @@ export type TurnState = {
   preloaded: TravelTrip[];
 };
 
-const TOOL_LIMITS: Record<string, number> = { search_trips: 6, get_trip: 6, resolve_link: 6, read_web_page: 2, host_image: 4, compare_program: 3, find_photos: 2, take_stock: 3 };
+/** The most photos one instruction hands the agent (hotel photos come in tens). */
+export const MAX_AGENT_PHOTOS = 24;
+const TOOL_LIMITS: Record<string, number> = { search_trips: 6, get_trip: 6, resolve_link: 6, read_web_page: 2, host_image: 4, describe_photos: 2, compare_program: 3, find_photos: 2, take_stock: 3 };
 const TOOL_RESULT_MAX_CHARS = 16_000;
 export const MAX_DOCUMENTS = 6;
 export const DOCUMENT_MAX_CHARS = 24_000;
@@ -181,7 +183,7 @@ export async function openTurn(input: AgentInput, deps: AgentDeps, now: Date): P
   const intake = answering ? unpackIntake(input.answerTo?.intake, documents, byId) : null;
   const state: TurnState = {
     trips: input.trips, byId, now, deps, adminText, instruction, answerToInstruction: String(input.answerTo?.instruction || ""),
-    attachments: (input.attachments || []).filter((item) => item && typeof item.url === "string" && /^https:\/\//.test(item.url)).slice(0, 6),
+    attachments: (input.attachments || []).filter((item) => item && typeof item.url === "string" && /^https:\/\//.test(item.url)).slice(0, MAX_AGENT_PHOTOS),
     documents,
     comparedFileDays: new Map(), photoCredits: new Map(), slow: false,
     answers, answering,
@@ -332,6 +334,20 @@ async function hostImageTool(state: TurnState, args: Args): Promise<string> {
   }
 }
 
+/** One look at the attached photos: what they show and which belong together (a hotel's, another hotel's). */
+async function describePhotosTool(state: TurnState, args: Args): Promise<string> {
+  const asked = (Array.isArray(args.urls) ? args.urls : []).map(str).filter(Boolean);
+  const urls = [...new Set(asked.length ? asked : state.attachments.map((item) => item.url))]
+    .filter((url) => state.attachments.some((item) => item.url === url) || state.hosted.has(url)).slice(0, MAX_AGENT_PHOTOS);
+  if (!urls.length) return json({ ok: false, error: "Харах зураг алга: зөвхөн хавсаргасан зургийг харна." });
+  if (!state.deps.describePhotos) return json({ ok: false, error: "Зураг харах боломжгүй байна." });
+  try {
+    return json({ ok: true, photos: urls.map((url, index) => ({ n: index + 1, url })), look: await state.deps.describePhotos(urls) });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error && error.message ? error.message : "Зургийг харж чадсангүй." });
+  }
+}
+
 /** What the intake rules see of this turn (intake.ts). */
 export function intakeContext(state: TurnState): IntakeContext {
   return { documents: state.documents, byId: state.byId, adminWords: withoutOptionTags(state.adminText), answered: state.answering, named: state.named };
@@ -368,6 +384,7 @@ const READ_TOOL_RUNNERS: Record<string, (state: TurnState, args: Args) => Promis
   resolve_link: resolveLinkTool,
   read_web_page: readWebPageTool,
   host_image: hostImageTool,
+  describe_photos: describePhotosTool,
   compare_program: compareProgramTool,
   find_photos: findPhotosTool,
   take_stock: takeStockTool,

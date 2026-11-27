@@ -109,6 +109,10 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
   // The files themselves, kept while that conversation runs: one the assistant calls a whole new
   // trip is handed to the new-trip reader as the file it is.
   const askFiles = useRef<AttachedFile[] | null>(null);
+  // The photos of the last message that went to the assistant as photos: an answer to its question (hotel photos:
+  // «which hotel is this?») carries them again. Without them the answer arrived with no photos and the assistant said
+  // it could not see any (2026-11-25).
+  const askAttachments = useRef<AssistantAttachment[] | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { tripsRef.current = trips; }, [trips]);
   useEffect(() => { detailsRef.current = tripDetails; }, [tripDetails]);
@@ -372,6 +376,11 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
         if (route.skipped > 0) toast.error(`Нэг удаад ${route.images.length} хүртэл зураг илгээнэ — үлдсэн ${route.skipped}-г алгаслаа.`);
         patchMessage(adminId, { imageUrls: urls });
         attachments = urls.map((url) => ({ url, kind: "image" as const }));
+        askAttachments.current = attachments;
+      } else if (askAttachments.current && (override?.answers || (ask && !override))) {
+        attachments = askAttachments.current;
+      } else {
+        askAttachments.current = null;
       }
       let documents: Array<{ name: string; text: string }> = [];
       let intake = false;
@@ -538,6 +547,7 @@ export function useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll,
     setAttachedFiles([]);
     askDocuments.current = null;
     askFiles.current = null;
+    askAttachments.current = null;
   }
 
   return {
