@@ -6,7 +6,7 @@ import { buildTripRequest, mergeTripSelection, type TripRequest, type TripSelect
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type TripOfferResult } from "./tripOffers";
 import { evaluateTripRequirement, tripTransport, type TripRequirement } from "./tripFacts";
 import { tripDurationDays, getTripBrochureAsset, getTripWebsiteLink } from "./travelFastPathsSearch";
-import { departureAvailability, departureIsClosed, departureIsLow, openDateWording } from "./departureAvailability";
+import { dateSeatNote, departureAvailability, departureIsClosed, openDateWording } from "./departureAvailability";
 import { compactReplyOptions, presentAssistantReply, replyPreferences } from "./chatbotReplyPolicy";
 import { stripTripNamesForIntent } from "./customerTurn";
 import { isOptionalExtrasQuestion } from "./tripExtrasReply";
@@ -387,7 +387,7 @@ export function buildTripAnswerPlan(input: {
   // Few seats, closed or on sale: the same mark beside a date wherever the date is listed (2026-11-23).
   const dateMark = (date: string) => {
     const row = websiteAvailability.find((entry) => entry.date === date);
-    return row && departureIsClosed(row) ? "захиалга хаалттай" : [row && departureIsLow(row) ? "цөөн суудал" : "", dealDateNote(trip, date)].filter(Boolean).join(", ");
+    return row && departureIsClosed(row) ? "захиалга хаалттай" : [row ? dateSeatNote(trip, date) : "", dealDateNote(trip, date)].filter(Boolean).join(", ");
   };
   const recurring = dates.length ? [] : recurringScheduleTexts(trip);
   const sections: Partial<Record<TripTopic, string>> = {};

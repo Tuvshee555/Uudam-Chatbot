@@ -220,6 +220,11 @@ export function DateSeatsEditor({
           {featuredCount > 0 && <span className="text-brand">{featuredCount} өдөр «Онцлох»</span>}
         </p>
       )}
+      {rows.length > 0 && (
+        <p className="mb-2 text-xs text-ink-muted">
+          «Үлдсэн суудал» 10 ба түүнээс цөөн бол сайт, ботод «N суудал үлдсэн» гэж харагдана; 11-ээс дээш бол зөвхөн админд. Тоо бичихгүйгээр «Цөөн суудал»-ыг сонгож болно; 0 бол дүүрнэ.
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-sm text-ink-muted">
           Вэбсайтад нийтлэгдсэн гарах өдөр алга. Огноогоо хадгалж, аяллаа идэвхтэй болгосны дараа энд сонгоно.

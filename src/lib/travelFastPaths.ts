@@ -14,7 +14,7 @@
 import { hasInfantFareAsk, withInfantAskButton } from "./infantFareAsk";
 import { buildPassengerTotalReply } from "./passengerTotalReply";
 import { websiteTripLinksInText } from "./bookingWebsite";
-import { departureAvailability, departureIsClosed } from "./departureAvailability";
+import { dateSeatNote, departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
 import { buildFareSection, dateIsOnSale, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice, upcomingDepartures } from "./tripFareBlock";
@@ -491,7 +491,7 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date(), intentText = 
         const low = hasSeatsIntent(intentText) ? new Set(onSaleLowDates(rawTrip, now)) : new Set<string>();
         lines.push(question, ...compactReplyOptions(offer.options, intentText).map((option) => {
           const date = field === "date" && /^\d{4}-\d{2}-\d{2}$/.test(option);
-          return `• ${date ? shortDate(option, now) + (low.has(option) ? " (цөөн суудал)" : "") : option}`;
+          return `• ${date ? shortDate(option, now) + (low.has(option) ? ` (${dateSeatNote(rawTrip, option)})` : "") : option}`;
         }));
         return lines.join("\n");
       }

@@ -27,7 +27,7 @@ import { passengerLabelCondition } from "./passengerCondition";
 import { ageRulesFromExtra } from "./ageRules";
 import { INFANT_FARE_ASK } from "./infantFareAsk";
 import { tripSupportsDate } from "./tripFacts";
-import { lowSeatDates } from "./departureAvailability";
+import { dateSeatNote, lowSeatDates } from "./departureAvailability";
 import { dealDateNote } from "./departureDeals";
 import { normalizeTripOffers, renderTripOfferReply, resolveTripOffer, resolveTripOfferFareCard, resolveUndatedFareCard, type CanonicalTripOffer, type NormalizedPassengerFare, type OfferFare, type PassengerKind, type ResolvedTripOffer, type TripOfferResult, type TripOfferSelection } from "./tripOffers";
 
@@ -279,7 +279,7 @@ export function onSaleDepartureText(trip: TravelTrip, now = new Date(), limit = 
 function dateList(dates: string[], trip: TravelTrip, now: Date): string {
   const low = lowSeatDates(trip, todayInUb(now));
   return dates.map((date) => {
-    const notes = [low.has(date) ? "цөөн суудал" : "", dealDateNote(trip, date)].filter(Boolean);
+    const notes = [low.has(date) ? dateSeatNote(trip, date) : "", dealDateNote(trip, date)].filter(Boolean);
     return shortDate(date, now) + (notes.length ? ` (${notes.join(", ")})` : "");
   }).join(", ");
 }
