@@ -165,6 +165,24 @@ test("the agency's own photos by place: a day takes the photo of the same place,
   assert.deepEqual(pickLibraryPhotos(library, source.extra!.itinerary_days as never, { ownTripId: "t-src" }), [], "a trip is never its own source");
 });
 
+// Live 2026-11-25: a saved trip's train day had been given a mountain photo; the library then offered that mountain as
+// the «УБ – Замын-Үүд» house photo of the next new trip, and so on (the library fed on its own wrong picks).
+test("a place photo that ended up on a train or border day is never offered as a train-day photo", () => {
+  const sister = trip({ id: "t-sis", route_name: "НОРВЕЛ – ЛУМИА ХОТЫН АЯЛАЛ", extra: { itinerary_days: [
+    day(1, "Улаанбаатар – Замын-Үүд", `${CLOUD}/lumia-peak.jpg`), day(2, "Норвел – Лумиа"), day(3, "Лумиа уул", `${CLOUD}/lumia-peak.jpg`),
+    day(4, "Эрээн – Замын-Үүд", `${CLOUD}/border-gate.jpg`),
+  ] } });
+  const library = buildPhotoLibrary([sister]);
+  // The new trip goes to the same towns but has no mountain day of its own.
+  const fresh = [day(1, "УЛААНБААТАР – ЗАМЫН ҮҮД"), day(2, "НОРВЕЛ ХОТ"), day(3, "ЭРЭЭН – ЗАМЫН-ҮҮД")];
+  const picks = pickLibraryPhotos(library, fresh);
+  assert.ok(!picks.some((pick) => pick.day === 1), `the mountain is not a train-day photo: ${JSON.stringify(picks)}`);
+  assert.deepEqual(picks.filter((pick) => pick.day === 3).map((pick) => pick.url.split("/").pop()), ["border-gate.jpg"], "a real border photo is still shared");
+  // The mountain day of a trip that has one still gets it.
+  const withPeak = pickLibraryPhotos(library, [day(1, "ЛУМИА УУЛ")]);
+  assert.deepEqual(withPeak.map((pick) => pick.url.split("/").pop()), ["lumia-peak.jpg"]);
+});
+
 test("«өдөр бүрт зураг ол»: the assistant proposes a hosted photo for each empty day, with its credit, and says which days stay empty", async () => {
   const { runAgent } = await import("../src/lib/assistantAgent/agent");
   const bare = trip({ id: "t-bare", route_name: "ТУРШИЛТ – ЗУРАГГҮЙ АЯЛАЛ", departure_dates: ["2098-12-02"], extra: { itinerary_days: [day(1, "Улаанбаатар – Замын-Үүд"), day(2, "Норвел хот"), day(3, "Лумиа хот"), day(4, "Тарвис гол")] } });

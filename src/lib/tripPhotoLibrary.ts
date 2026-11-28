@@ -126,6 +126,10 @@ export function pickLibraryPhotos(library: LibraryPhoto[], days: DayLike[], opti
   // Train and border days: what a trip to the same places shows on that same train day.
   const tripPlaces = placesOfDays(days);
   const needed = Math.min(SIBLING_PLACES, tripPlaces.length);
+  // A photo some trip shows on a day about a place is a picture of that place. Where it also sits on a train day (an
+  // earlier wrong pick, saved), it is not that train day's photo: offered again, the library fed on its own mistakes
+  // (a mountain as «УБ – Замын-Үүд», live 2026-11-25).
+  const placePhotos = new Set(library.filter((photo) => photo.places.length).map((photo) => photo.url));
   if (needed > 0) {
     days.forEach((day, index) => {
       if (text(day.photo) || taken.has(index) || dayPlaces(day.title).length) return;
@@ -133,7 +137,7 @@ export function pickLibraryPhotos(library: LibraryPhoto[], days: DayLike[], opti
       if (!key) return;
       let best: { photo: LibraryPhoto; score: number } | null = null;
       for (const photo of library) {
-        if (photo.transit !== key || !usable(photo)) continue;
+        if (photo.transit !== key || !usable(photo) || placePhotos.has(photo.url)) continue;
         const shared = (photo.trip_places || []).filter((place) => tripPlaces.includes(place)).length;
         if (shared < needed) continue;
         const score = shared * 10 + (photo.live ? 1 : 0);
