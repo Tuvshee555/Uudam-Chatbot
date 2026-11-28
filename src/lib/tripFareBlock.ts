@@ -275,11 +275,10 @@ export function onSaleDepartureText(trip: TravelTrip, now = new Date(), limit = 
   return dateList(open.slice(0, limit), trip, now) + (open.length > limit ? " …" : "");
 }
 
-/** "10/13, 10/15 (цөөн суудал), 10/20 (хямдрал −9%)": only a date staff flagged carries the note. */
+/** "10/13, 10/15 (цөөн суудал, 19 суудал үлдсэн), 10/20 (хямдрал −9%)": a date carries its own seat state and count. */
 function dateList(dates: string[], trip: TravelTrip, now: Date): string {
-  const low = lowSeatDates(trip, todayInUb(now));
   return dates.map((date) => {
-    const notes = [low.has(date) ? dateSeatNote(trip, date) : "", dealDateNote(trip, date)].filter(Boolean);
+    const notes = [dateSeatNote(trip, date), dealDateNote(trip, date)].filter(Boolean);
     return shortDate(date, now) + (notes.length ? ` (${notes.join(", ")})` : "");
   }).join(", ");
 }

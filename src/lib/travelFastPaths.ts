@@ -488,10 +488,10 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date(), intentText = 
         : field === "hotel" ? "Аль буудлын хувилбарыг сонгох вэ?"
           : field === "package" ? "Аль багцыг сонгох вэ?" : null;
       if (question) {
-        const low = hasSeatsIntent(intentText) ? new Set(onSaleLowDates(rawTrip, now)) : new Set<string>();
+        const seatNotes = hasSeatsIntent(intentText);
         lines.push(question, ...compactReplyOptions(offer.options, intentText).map((option) => {
           const date = field === "date" && /^\d{4}-\d{2}-\d{2}$/.test(option);
-          return `• ${date ? shortDate(option, now) + (low.has(option) ? ` (${dateSeatNote(rawTrip, option)})` : "") : option}`;
+          return `• ${date ? shortDate(option, now) + (seatNotes && dateSeatNote(rawTrip, option) ? ` (${dateSeatNote(rawTrip, option)})` : "") : option}`;
         }));
         return lines.join("\n");
       }

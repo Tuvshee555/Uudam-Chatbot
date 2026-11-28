@@ -170,6 +170,26 @@ test("asked about seats on an open date with no count, the bot leaves the count 
   }
 });
 
+// Owner, 2026-11-28: a seat count staff typed for a date is said to the customer, whatever its size, with «цөөн суудал»
+// beside it when staff picked that state; a date with no count still leaves the count to the consultant.
+test("asked about seats on a date with a typed count, the bot says the count and the picked state", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog([trip("open", "ВЕЛМОРА АРЛЫН АЯЛАЛ", ["2098-03-09", "2098-03-16"], [3_980_000, 3_580_000, null],
+    { seats_left: null, extra: { ...kind("direct_flight").extra, website_departure_availability: [
+      { date: "2098-03-09", status: "ALMOST_FULL", seatsLeft: 19 }, { date: "2098-03-16", status: "OPEN", seatsLeft: 27 }] } })]);
+  try {
+    const low = textOf((await harness.turn("seats-low", "Велмора арлын аялал 3/9 suudal bga yu", { unavailable: true })).sends);
+    assert.match(low, /19 суудал үлдсэн/u, low);
+    assert.match(low, /цөөн суудал/u, low);
+    assert.doesNotMatch(low, /зөвлөх баталгаажуулна/u, low);
+    const open = textOf((await harness.turn("seats-open", "Велмора арлын аялал 3/16 suudal bga yu", { unavailable: true })).sends);
+    assert.match(open, /27 суудал үлдсэн/u, open);
+    assert.doesNotMatch(open, /цөөн суудал/u, open);
+  } finally {
+    await harness.close();
+  }
+});
+
 // Live 2026-11-15: the bot suggested "НА ТРАНГ" and the customer answered "Натранг үнэ хөтөлбөр авья", then "Натранг":
 // two name words typed as one matched nothing and both messages got silence.
 test("two words of a trip's name typed as one name that trip", async (context: TestContext) => {

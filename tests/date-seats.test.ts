@@ -38,13 +38,15 @@ test("a trip-wide seat edit can only close every date; it never marks dates as f
   assert.equal(departureSeatsAfterTripEdit({ tripChanged: false, previousTripSeatsLeft: 5, tripSeatsLeft: 5, rowSeatsLeft: 4 }), 4);
 });
 
-test("few seats is the flag on one date, or a count of 10 or fewer there; 11+ is the admin's only (owner, 2026-11-28)", () => {
+test("every typed count is shown beside its date, and «Цөөн суудал» is the state staff pick, shown next to it (owner, 2026-11-28)", () => {
   assert.deepEqual([...lowSeatDates(flagged, "2099-01-05")], ["2099-02-17"]);
-  const counted = trip([row("2099-02-10", "OPEN", 2), row("2099-02-17", "OPEN", 10), row("2099-02-24", "OPEN", 11)]);
-  assert.deepEqual([...lowSeatDates(counted, "2099-01-05")], ["2099-02-10", "2099-02-17"], "10 or fewer typed = few seats on that date");
+  const counted = trip([row("2099-02-10", "OPEN", 2), row("2099-02-17", "ALMOST_FULL", 19), row("2099-02-24", "OPEN", 40), row("2099-03-03", "OPEN")]);
+  assert.deepEqual([...lowSeatDates(counted, "2099-01-05")], ["2099-02-17"], "a count never sets «Цөөн суудал» by itself");
   assert.equal(dateSeatNote(counted, "2099-02-10"), "2 суудал үлдсэн");
-  assert.equal(dateSeatNote(counted, "2099-02-24"), "", "11 seats left is never shown");
-  assert.equal(dateSeatNote(flagged, "2099-02-17"), "цөөн суудал", "the flag picked with no number");
+  assert.equal(dateSeatNote(counted, "2099-02-17"), "цөөн суудал, 19 суудал үлдсэн", "state and count side by side");
+  assert.equal(dateSeatNote(counted, "2099-02-24"), "40 суудал үлдсэн", "any count is shown");
+  assert.equal(dateSeatNote(counted, "2099-03-03"), "", "no count, no state: nothing");
+  assert.equal(dateSeatNote(flagged, "2099-02-17"), "цөөн суудал", "the state picked with no number");
   const result = resolveTripOffer(flagged, { date: "2099-02-17" }, NOW);
   assert.equal(result.status, "ready");
   if (result.status === "ready") assert.equal(result.offer.availability.low, true);
@@ -80,17 +82,19 @@ test("the requested full trip card marks only the flagged date and still passes 
   assert.equal(openDateWording({ seatsLeft: null }), "захиалга нээлттэй");
 });
 
-test("the card shows the seat count beside a date with 10 or fewer left, never a bigger one (owner, 2026-11-28)", () => {
-  const counted = trip([row("2099-02-10", "OPEN", 4), row("2099-02-17", "ALMOST_FULL"), row("2099-02-24", "OPEN", 30)]);
+test("the card shows each date's own count and state; a date with no count shows none (owner, 2026-11-28)", () => {
+  const counted = trip([row("2099-02-10", "OPEN", 4), row("2099-02-17", "ALMOST_FULL", 19), row("2099-02-24", "OPEN", 30)]);
   const card = buildStructuredTripReply("ЗАНДАН ДАЛАЙН АЯЛАЛ дэлгэрэнгүй", [counted], NOW)!;
   assert.match(card, /2\/10 \(4 суудал үлдсэн\)/);
-  assert.match(card, /2\/17 \(цөөн суудал\)/);
-  assert.doesNotMatch(card, /30 суудал|2\/24 \(/);
+  assert.match(card, /2\/17 \(цөөн суудал, 19 суудал үлдсэн\)/);
+  assert.match(card, /2\/24 \(30 суудал үлдсэн\)/);
   assert.deepEqual(checkSelfConsistency([counted], NOW).failures, []);
+  const plain = buildStructuredTripReply("ЗАНДАН ДАЛАЙН АЯЛАЛ дэлгэрэнгүй", [flagged], NOW)!;
+  assert.doesNotMatch(plain, /\d+ суудал үлдсэн/, "no count typed: no number");
   assert.equal(openDateWording({ seatsLeft: 4 }), "захиалга нээлттэй, 4 суудал үлдсэн");
-  assert.equal(openDateWording({ seatsLeft: 4, low: true }), "захиалга нээлттэй, 4 суудал үлдсэн");
-  assert.equal(openDateWording({ seatsLeft: 30 }), "захиалга нээлттэй", "a big count stays the admin's");
-  assert.equal(openDateWording({ seatsLeft: 30, low: true }), "захиалга нээлттэй, цөөн суудал үлдсэн");
+  assert.equal(openDateWording({ seatsLeft: 19, low: true }), "захиалга нээлттэй, цөөн суудал үлдсэн, 19 суудал үлдсэн");
+  assert.equal(openDateWording({ seatsLeft: 30 }), "захиалга нээлттэй, 30 суудал үлдсэн");
+  assert.equal(openDateWording({ seatsLeft: null, low: true }), "захиалга нээлттэй, цөөн суудал үлдсэн");
 });
 
 test("a trip with no flagged date says nothing about few seats", () => {

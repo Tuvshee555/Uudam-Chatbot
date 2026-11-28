@@ -39,38 +39,34 @@ export function withBookableDepartureDates(trip: TravelTrip, now = new Date()): 
 }
 
 /**
- * A date shows its seat count to customers only at this many seats left or fewer (owner, 2026-11-28); a bigger
- * count is the admin's own tally. Same number as the website's SHOW_SEATS_AT_MOST (uudam-booking-web/src/lib/departures.ts).
+ * Owner, 2026-11-28 (second rule that day): every seat count staff type for a date is shown to customers, on the
+ * website and by the bot. A date with no count shows none, and a seat question about it goes to the consultant.
+ * The state staff pick («Цөөн суудал») is shown next to the number, independently of it.
  */
-export const SHOW_SEATS_AT_MOST = 10;
-
-/** The seat count a customer may see (1..SHOW_SEATS_AT_MOST), or null. */
 export function shownSeatsLeft(seatsLeft: number | null | undefined): number | null {
-  return typeof seatsLeft === "number" && Number.isInteger(seatsLeft) && seatsLeft > 0 && seatsLeft <= SHOW_SEATS_AT_MOST ? seatsLeft : null;
+  return typeof seatsLeft === "number" && Number.isInteger(seatsLeft) && seatsLeft > 0 ? seatsLeft : null;
 }
 
-/** Few seats on this one date and still bookable: staff picked «Цөөн суудал», or typed 10 or fewer seats left. */
+/** Staff picked «Цөөн суудал» for this one date and it is still bookable. A count alone never sets it. */
 export function departureIsLow(row: DepartureAvailability): boolean {
-  return !departureIsClosed(row) && (row.status === "ALMOST_FULL" || shownSeatsLeft(row.seatsLeft) !== null);
+  return !departureIsClosed(row) && row.status === "ALMOST_FULL";
 }
 
-/** Upcoming dates with few seats (the flag, or a count of 10 or fewer). */
+/** Upcoming dates staff marked «Цөөн суудал». */
 export function lowSeatDates(trip: TravelTrip, today = new Date().toISOString().slice(0, 10)): Set<string> {
   return new Set(departureAvailability(trip).filter((row) => row.date >= today && departureIsLow(row)).map((row) => row.date));
 }
 
-/** The note beside one date: "4 суудал үлдсэн" (10 or fewer typed), "цөөн суудал" (the flag alone), or "". */
+/** The seat note beside one bookable date: "цөөн суудал", "19 суудал үлдсэн", both ("цөөн суудал, 19 суудал үлдсэн"), or "". */
 export function dateSeatNote(trip: TravelTrip, date: string): string {
   const row = departureAvailability(trip).find((entry) => entry.date === date);
-  if (!row || !departureIsLow(row)) return "";
+  if (!row || departureIsClosed(row)) return "";
   const shown = shownSeatsLeft(row.seatsLeft);
-  return shown !== null ? `${shown} суудал үлдсэн` : "цөөн суудал";
+  return [departureIsLow(row) ? "цөөн суудал" : "", shown !== null ? `${shown} суудал үлдсэн` : ""].filter(Boolean).join(", ");
 }
 
-/** How a bookable date's availability reads in a reply: open, "N суудал үлдсэн" (10 or fewer), or few seats. */
+/** How a bookable date's availability reads in a reply: open, plus «цөөн суудал» when picked, plus the count when typed. */
 export function openDateWording(availability: { seatsLeft: number | null; low?: boolean }): string {
   const shown = shownSeatsLeft(availability.seatsLeft);
-  if (shown !== null) return `захиалга нээлттэй, ${shown} суудал үлдсэн`;
-  if (availability.low) return "захиалга нээлттэй, цөөн суудал үлдсэн";
-  return "захиалга нээлттэй";
+  return ["захиалга нээлттэй", availability.low ? "цөөн суудал үлдсэн" : "", shown !== null ? `${shown} суудал үлдсэн` : ""].filter(Boolean).join(", ");
 }
