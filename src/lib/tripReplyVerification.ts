@@ -19,7 +19,9 @@ const AMOUNT = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(?:₮|төгрөг|MNT)(?![\p{L}]
 function bandKey(text: string): string {
   const match = /(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(нас|сар|years?|months?)?/i.exec(text);
   if (match) return `${match[1]}-${match[2]}${/сар|month/i.test(match[3] || "") ? "сар" : "нас"}`;
-  const open = /(\d{1,2})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(нас|сар)?\s*(хүртэл|доош|дээш)|(\d{1,2})\s*\+/i.exec(text);
+  // «11-ээс доош», «11 нас хүртэл», and the ablative written on the unit: «11 наснаас доош», «6 сараас дээш»
+  // (2026-11-28: unread, the child fare under that band was refused and the price card became a hand-off).
+  const open = /(\d{1,2})\s*(?:-?\s*(?:оос|ээс|аас|өөс|с)\s+)?(нас|сар)?(?:наас|аас)?\s*(хүртэл|доош|дээш)|(\d{1,2})\s*\+/i.exec(text);
   if (!open) return "";
   return open[4] ? `${open[4]}нас:дээш` : `${open[1]}${/сар/i.test(open[2] || "") ? "сар" : "нас"}:${open[3].toLowerCase()}`;
 }
